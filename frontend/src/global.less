@@ -1,0 +1,87 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+    'Noto Color Emoji';
+}
+
+.colorWeak {
+  filter: invert(80%);
+}
+
+.ant-layout {
+  min-height: 100vh;
+}
+.ant-menu-item-selected .ant-pro-base-menu-inline-item-text{
+  color: #f08300;
+  font-weight: bold;
+}
+.ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed {
+  left: unset;
+}
+//.ant-pro-base-menu-inline-group-item-title
+.ant-menu-item-group-title{
+  background-color:   paleturquoise; // palegoldenrod;  //darkseagreen; //blanchedalmond;
+  font-size: larger;
+  font-weight: bold;
+  font-family: "微软雅黑", serif;
+  padding: 15px 30px;
+}
+.ant-layout-sider-children{
+  background-color:   aliceblue;
+}
+//对pageContainer上的格式改动
+.ant-collapse-header-text{
+  width:28vh
+}
+
+
+//对pro-chat的一些格式进行改动
+.ant-pro-chat-list-item-message-content article{
+  width:40vw;
+}
+.ant-pro-chat-list-item-message-content pre code span{
+  font-size: medium !important;
+}
+.ant-pro-chat-list-item-message-content pre code{
+  font-size: medium !important;
+}
+.ant-pro-chat-list-item-message-content textarea{
+  font-size: medium !important;
+}
+
+canvas {
+  display: block;
+}
+
+body {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+@media (max-width: 768px) {
+  .ant-table {
+    width: 100%;
+    overflow-x: auto;
+    &-thead > tr,
+    &-tbody > tr {
+      > th,
+      > td {
+        white-space: pre;
+        > span {
+          display: block;
+        }
+      }
+    }
+  }
+}

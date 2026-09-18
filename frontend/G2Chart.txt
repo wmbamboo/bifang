@@ -1,0 +1,56 @@
+#import React, { useEffect } from 'react';
+#import { Chart } from '@antv/g2';
+#import DataSet from '@antv/data-set';
+
+const G2Chart = () => {
+  useEffect(() => {
+    // 假设你有一个用于图表的 DOM 容器
+    const chartDOM = document.getElementById('chart');
+    const data = [
+      { year: '1951 年', value: 38 },
+      { year: '1952 年', value: 52 },
+      // ... 更多数据
+    ];
+
+    const ds = new DataSet();
+    const dv = ds.createView().source(data);
+    dv.transform({
+      type: 'map',
+      callback(row: { value: number; }) {
+        row.value = Number(row.value);
+        return row;
+      },
+    });
+
+    const chart = new Chart({
+      container: chartDOM,
+      autoFit: true,
+      height: 500,
+    });
+
+    chart.data(dv.rows);
+    chart.scale('value', {
+      nice: true,
+    });
+    /*chart.tooltip({
+      crosshairs: {
+        type: 'line',
+      },
+    });
+    chart.line().position('year*value').color('l(90) 0:#1890ff 1:#70cdd0');
+    chart.point().position('year*value').color('value').style({
+      stroke: '#fff',
+      lineWidth: 1,
+    });*/
+
+    chart.render();
+
+    return () => {
+      chart.destroy();
+    };
+  }, []);
+
+  return <div id="chart" style={{ width: '100%', height: '500px' }}></div>;
+};
+
+export default G2Chart;

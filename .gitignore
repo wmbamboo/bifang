@@ -1,0 +1,22 @@
+# 密钥
+**/.env
+!**/.env.example
+
+# 依赖与虚拟环境
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+
+# 本地知识库数据、备份
+backend/data
+frontend.bak.*
+
+# 构建产物
+frontend/dist
+frontend/.umi
+frontend/.umi-production
+frontend/.umi-test
+
+**/.DS_Store
+*.log

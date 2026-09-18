@@ -1,0 +1,13 @@
+/chat/completions', 'files': None,
+'json_data': {
+  'messages': [{'role': 'user', 'content': '24SS抖音男装的风格趋势有哪几种？它们各自有什么特征？'}],
+  'model': 'glm4:9b-chat-q8_0',
+  'stream': True},
+  'extra_json': {
+    'top_k': 4,
+    'score_threshold': 0.55,
+    'temperature': 0.75,
+    'prompt_name': 'default',
+    'return_direct': False
+  }
+}

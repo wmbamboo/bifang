@@ -1,0 +1,15 @@
+.ar-play-area {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+}
+
+.ar-player-wrapper {
+  width: 25vw;
+  height: 80vh;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+}

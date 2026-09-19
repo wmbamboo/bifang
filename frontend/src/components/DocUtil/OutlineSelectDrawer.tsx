@@ -23,6 +23,8 @@ interface OutlineSelectDrawerProps {
   selFn?:(id:string) => void,
   delFn:(id:string) => void,
   closeFn:() => void,
+  /** 保存后预览时，定位到这条大纲；不传则选中列表第一条 */
+  focusId?: string,
   cb4ImportOutline?:(title:string,content:string)=>void
 }
 
@@ -110,14 +112,16 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
   //
   // },[props.outlineRecs])
   useEffect(() => {
-    // message.info(`hezl,outlineRecs的属性更新了。其中有${props.outlineRecs.length}条记录。`)
     setOlRecs(props.outlineRecs)
-    if (props.outlineRecs.length > 0 && props.outlineRecs[0]?.outlineId) {
+    const focusHit = props.focusId && props.outlineRecs.some((r) => r.outlineId === props.focusId);
+    if (focusHit) {
+      setCurrentId(props.focusId || "");
+    } else if (props.outlineRecs.length > 0 && props.outlineRecs[0]?.outlineId) {
       setCurrentId(props.outlineRecs[0].outlineId);
     } else {
       setCurrentId("");
     }
-  }, [props.outlineRecs,props.outlineType,props.type]);
+  }, [props.outlineRecs, props.outlineType, props.type, props.focusId]);
 
   let extraUploadButton: React.JSX.Element =<></>
   if(props.cb4ImportOutline) {
@@ -162,9 +166,10 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
           {/*<OutlineSelectRadio type={props.type} outlineRecs={OutlineRec.listRecs(outlineTypePPT)} outlineSelectFn={onOutlineSelected} />*/}
           <Flex vertical={true}>
           <Col span={24}>
-            <Row style={{height:'570px'}}>
+            <Row style={{height:'570px', overflowY:'auto'}}>
             <OutlineSelectRadio outlineType={props.outlineType}
                                 outlineRecs={props.outlineRecs}
+                                focusId={props.focusId}
                                 outlineDeleteFn={deleteConfirm} outlineSelectFn={onOutlineSelected}/>
             </Row>
             <Row>

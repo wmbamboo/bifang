@@ -261,6 +261,8 @@ export class Slide{
   label:string; //used by Collapse ,it's label==slide's title
   prompt:string="";
   content:string="";
+  /** 本页生成失败且没有正文时的原因；有正文但解析失败不走这里 */
+  genError:string="";
   viewItems:Array<ViewItem4Ppt>=new Array<ViewItem4Ppt>();
 
   constructor(index:number, title:string,subTitle?:string) {
@@ -341,6 +343,7 @@ export class Slide{
    */
   setContent(content:string){
     this.content=content;
+    this.genError="";
     const viewItems=ViewItem4Ppt.genViewItemByRegex(content);
     if(!viewItems||viewItems.length===0){
       return false
@@ -663,6 +666,13 @@ export class Ppt{
       }
     }
     return chapters;
+  }
+
+  static markGenError(chapters: Chapter[], key: string, error: string) {
+    const slide = Ppt.getSlide(chapters, key);
+    if (slide !== undefined) {
+      slide.genError = error || "内容生成失败";
+    }
   }
 
   static setContent(chapters: Chapter[], key: string, content: string) {

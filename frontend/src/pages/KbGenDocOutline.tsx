@@ -11,7 +11,7 @@ import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Doc from "@/components/ChatUtil/ChatWithSpeech4Doc";
 import {DOC_OUTLINE_TEMPLATE} from "@/components/ChatUtil/OutlinePromptComposer";
-import {message, Tag} from "antd";
+import {message, Tag, Button} from "antd";
 import {ALL_KB_NAME, kbLabel, opKbTagStyle} from "@/components/DocUtil/kbSelectorModal";
 
 export const KbGenDocOutline: React.FC = () => {
@@ -28,6 +28,10 @@ export const KbGenDocOutline: React.FC = () => {
   };
   const showDrawer = () => {
       setOpen(true);
+  };
+  const openOutlineQuery = () => {
+    setTempOutlineRec(OutlineRec.listRecs(outlineTypeDOC, selectKbName));
+    showDrawer();
   };
   const onClose = () => {
     setOpen(false);
@@ -73,7 +77,7 @@ export const KbGenDocOutline: React.FC = () => {
   }
 
   return(
-    <PageContainer breadcrumb={{}}>
+    <PageContainer breadcrumb={{}} extra={<Button onClick={openOutlineQuery}>大纲查询</Button>}>
       <ProCard
         split="vertical"
         bodyStyle={{
@@ -107,7 +111,8 @@ export const KbGenDocOutline: React.FC = () => {
       </ProCard>
       <OutlineSelectDrawer type={"save"} open={open} outlineRecs={tempOutlineRecs} kbName={kbLabel(selectKbName)}
                            outlineType={outlineTypeDOC}
-                           delFn={onOutlineRecDelete} /*defaultId={defaultId}*/
+                           focusId={defaultId}
+                           delFn={onOutlineRecDelete}
                            closeFn={onClose} />
     </PageContainer>
   );

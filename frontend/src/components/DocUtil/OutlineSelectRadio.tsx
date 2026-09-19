@@ -8,6 +8,8 @@ interface OutlineRadioProps {
   outlineRecs: OutlineRec[];
   outlineSelectFn: (id:string)=>void;
   outlineDeleteFn?: (id:string)=>void;
+  /** 有值且在列表中时选中并滚到这一条，否则选中第一条 */
+  focusId?: string;
 }
 function downloadTextFile(type:outlineType,outlineContent: string, outlineName: string) {
   const blob = new Blob([outlineContent], { type: 'text/plain;charset=utf-8' });
@@ -58,20 +60,22 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
   }
 
   useEffect(() => {
-    // message.info(`recs更新了，共${props.outlineRecs.length}条。ID为： ${props.outlineRecs.map((o)=>o.outlineId)}`);
-    // message.info(`recs更新了,currentValue为： ${props.outlineRecs[0].outlineId}`);
-    // setOlRecs(props.outlineRecs);
-    if (props.outlineRecs.length > 0 && props.outlineRecs[0]?.outlineId) {
-      setValue(props.outlineRecs[0].outlineId);
-    } else {
-      setValue("");
-    }
-  }, [props.outlineRecs]);
+    const hit = props.focusId && props.outlineRecs.some((r) => r.outlineId === props.focusId);
+    const next = hit
+      ? props.focusId!
+      : (props.outlineRecs.length > 0 && props.outlineRecs[0]?.outlineId ? props.outlineRecs[0].outlineId : "");
+    setValue(next);
+    if (!next) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById(`outline-rec-${next}`)?.scrollIntoView({ block: 'center' });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [props.outlineRecs, props.focusId]);
 
     return (
       <Radio.Group onChange={onChange} value={value} style={{width:"98%"}}>
         {props.outlineRecs.map((item, i) => (
-          <Row style={{ borderBottom: '1px solid #000',paddingBottom:"5px"  }}>
+          <Row key={item.outlineId} id={`outline-rec-${item.outlineId}`} style={{ borderBottom: '1px solid #000',paddingBottom:"5px"  }}>
             <Col span={20}>
               <Radio key={item.outlineId} style={radioStyle} value={item.outlineId}>
                 <Tag color="blue">{i + 1}</Tag> <Tooltip title={`${item.outlineId}`}>{showName(item.outlineName)}</Tooltip>

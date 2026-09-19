@@ -539,15 +539,6 @@ def search_cross_kb_docs(
     return all_docs[:top_k]
 
 
-def _clean_ocr_for_prompt(text: str) -> str:
-    """切块常见错字。只改确定的误写，避免模型把错字抄进大纲。"""
-    return (
-        (text or "")
-        .replace("种拔", "种草")
-        .replace("收拔", "收割")
-    )
-
-
 def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
     contexts = []
     ref_docs = []
@@ -556,7 +547,7 @@ def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
         source = meta.get("source", "未知文档")
         kb_name = meta.get("kb_name", "")
         chunk_id = meta.get("chunk")
-        content = _clean_ocr_for_prompt(d.get("page_content", ""))
+        content = d.get("page_content", "")
         link = f"/knowledge_base/download_doc?knowledge_base_name={kb_name}&file_name={source}"
         snippet = " ".join((content or "").split())[:160]
         loc = f" 片段{chunk_id}" if chunk_id is not None else ""
@@ -598,6 +589,25 @@ def _add_name(names: list[str], term: str) -> None:
         names.append(term)
 
 
+def _take_short_name(names: list[str], part: str) -> None:
+    """取片段末尾 2～4 字专名。冒号前的名字也要，不能只留冒号后的解释。"""
+    part = re.sub(r"[^\u4e00-\u9fff：:]+$", "", (part or "").strip())
+    if not part:
+        return
+    if "：" in part or ":" in part:
+        head, tail = re.split(r"[：:]", part, maxsplit=1)
+        _take_short_name(names, head)
+        _take_short_name(names, tail)
+        return
+    matched = re.search(r"([\u4e00-\u9fff]{2,4})$", part)
+    if not matched:
+        return
+    prefix = re.sub(r"[^\u4e00-\u9fff]", "", part[: matched.start()])
+    if len(prefix) > 4:
+        return
+    _add_name(names, matched.group(1))
+
+
 def _quoted_and_enum_names(text: str) -> list[str]:
     """抽出引号专名，以及顿号、并列「和」两侧的短专名。"""
     names: list[str] = []
@@ -612,20 +622,34 @@ def _quoted_and_enum_names(text: str) -> list[str]:
             r"\1、\2",
             normalized,
         )
-    if "、" not in normalized:
+    if "、" not in normalized and "：" not in normalized and ":" not in normalized:
         return names
     for part in normalized.split("、"):
-        part = re.sub(r"[^\u4e00-\u9fff：:]+$", "", part.strip())
-        if "：" in part or ":" in part:
-            part = re.split(r"[：:]", part)[-1]
-        matched = re.search(r"([\u4e00-\u9fff]{2,4})$", part)
-        if not matched:
-            continue
-        prefix = re.sub(r"[^\u4e00-\u9fff]", "", part[: matched.start()])
-        if len(prefix) > 4:
-            continue
-        _add_name(names, matched.group(1))
+        _take_short_name(names, part)
     return names
+
+
+_GRASS_FORMS = ("种拔", "收拔", "种草", "拔草")
+
+
+def _grass_queries(term: str) -> list[str]:
+    """大纲写种草、拔草时，库里常是种拔、收拔。结巴把它们切成不同的词，只搜种草会错过。"""
+    if not term or not any(form in term for form in ("种草", "拔草", "种拔", "收拔")):
+        return [term] if term else []
+    queries = [term]
+    for form in ("种拔", "收拔"):
+        if form not in queries:
+            queries.append(form)
+    return queries
+
+
+def _contains_term(page: str, term: str) -> bool:
+    page = page or ""
+    if term and term in page:
+        return True
+    if term and any(form in term for form in ("种草", "拔草", "种拔", "收拔")):
+        return any(form in page for form in _GRASS_FORMS)
+    return False
 
 
 def plan_writing_retrieval(user_text: str) -> tuple[str, str, list[str]]:
@@ -654,8 +678,8 @@ def plan_writing_retrieval(user_text: str) -> tuple[str, str, list[str]]:
                 line = re.sub(r"^[\d\.\)）、\-\*\s]+", "", line.strip())
                 if not line or line.startswith("（"):
                     continue
-                points.append(_clean_query(line, 40))
-        extras = [p for p in points if p and p != title][:5]
+                points.append(_clean_query(line, 80))
+        extras = [p for p in points if p and p != title]
         return "slide", title or (extras[0] if extras else _clean_query(text)), extras
 
     if "文章标题是" in text and "撰写大约" in text:
@@ -785,24 +809,40 @@ def retrieve_for_writing(
     for name in _quoted_and_enum_names(user_text):
         if name not in quoted:
             _add_name(enums, name)
+    # 本页每条要点里的专名优先，不能被第一跳里的引号挤出名单，也不能只留前 5 条。
+    point_names: list[str] = []
     for extra in extras:
+        for name in _quoted_and_enum_names(extra):
+            _add_name(point_names, name)
+        if any(form in extra for form in ("种草", "拔草", "种拔", "收拔")):
+            _add_name(point_names, "种拔")
+            _add_name(point_names, "收拔")
         _add_name(enums, extra)
-    uniq = [term for term in quoted + enums if term and term != primary][:name_limit]
+    uniq = [term for term in point_names + quoted + enums if term and term != primary][:name_limit]
 
     hops: list[dict] = []
     neighbors: list[dict] = []
+    # 短专名走关键词，不走混合。混合分里向量占 0.7，短词余弦又低，专名片段排不上去。
+    # 结巴会把「聚流快打」拆开，所以关键词结果还要正文里出现完整专名。
+    # 本页标题单独加入：它常常过不了第一跳的 0.5。一个名字保留前若干条命中，避免只拿到总述、漏掉定义。
+    hop_terms: list[str] = []
+    if task in ("slide", "paragraph") and primary:
+        hop_terms.append(primary)
     for term in uniq:
-        for doc in _search(
-            term,
-            settings.writing_name_top_k,
-            threshold=settings.writing_name_score_threshold,
-            search_mode="vector",
-        ):
-            if term not in (doc.get("page_content") or ""):
-                continue
-            hops.append(doc)
-            neighbors.extend(_neighbor_docs(doc))
-            break
+        if term not in hop_terms:
+            hop_terms.append(term)
+    for term in hop_terms:
+        for query in _grass_queries(term):
+            for doc in _search(
+                query,
+                settings.writing_name_top_k,
+                threshold=settings.writing_name_score_threshold,
+                search_mode="bm25",
+            ):
+                if not _contains_term(doc.get("page_content") or "", term):
+                    continue
+                hops.append(doc)
+                neighbors.extend(_neighbor_docs(doc))
 
     merged: list[dict] = []
     seen: set[str] = set()
@@ -826,13 +866,13 @@ def retrieve_for_writing(
 _TASK_SUMMARY = {
     "outline": (
         "【大纲摘要】\n"
+        "每页要点必须且只能是 3～5 条。少于 3 条、多于 5 条都不合格。\n"
+        "有依据就必须写满 3～5 条。一句话里的多个做法、条件、结果要拆开，不要合并成 1 条，也不要编造检索里没有的事实，不要用空话凑条数。\n"
+        "一条要点可以合并多个专名。只有合并后仍不超过 5 条时，才把专名拆开；超过 5 个时，重新摘要进这 3～5 条，不要只保留原文前几条。\n"
+        "整页在检索结果中完全没有依据时，不要写这一页。\n"
         "每条要点必须是检索结果中的一条事实（做法、适用条件、数据或案例），"
         "不要写「有几种方法」「可据此判断」这类没有内容的句子。\n"
-        "检索结果用顿号或引号列出多个专名时，能放进 5 条就每个专名单独成条，并把其他片段里已有的解释合并进来；"
-        "条款超过 5 条时，重新摘要进这 3～5 条，不要另起第 6 条，也不要只截取原文前几条。没有解释就不要用空话凑条数。\n"
-        "每页要点必须且只能是 3～5 条，禁止第 6 条。\n"
         "本页标题必须窄于全文标题，写成这一页要回答的问题。\n"
-        "材料不够就少写几条，不要为了凑满条数编造。\n"
         "章节边界：一个章节只写报告里的一节。片段开头或结尾常常粘着上一节或下一节"
         "（另一个品牌案例、带编号的下一节标题）。这些内容不要并进当前章节；与本章标题无关的，另立章节或不要写。\n"
         "归属：出现「情境 / 打法 / 案例」时，打法下面的动作属于该情境中的品牌，写在该打法页里，"
@@ -844,7 +884,10 @@ _TASK_SUMMARY = {
         "【本页摘要】\n"
         "合并全部检索片段来写，不要只复述总述段。\n"
         "大纲要点里的专名，若其他片段有定义、做法或案例，必须写进对应小点。\n"
+        "专名已经出现时，必须把做法写进对应小点，禁止用套话代替。"
+        "只有该要点的专名在检索结果中完全没有出现时，才写「知识库未提供依据」。\n"
         "一条大纲要点只对应一个小点，不要拆开，也不要另起没有依据的小点。\n"
+        "小点标题用该条要点里的专名或做法，不要写成「打法适用情境」「情境」「打法」这类栏目名。\n"
     ),
     "paragraph": (
         "【段落摘要】\n"
@@ -870,8 +913,7 @@ def build_rag_system_prompt(
     tail = f"\n\n{summary}" if summary else ""
     return (
         "你是毕方智能知识管理助手。请严格依据下列知识库内容回答用户问题或完成撰写任务。\n"
-        "写作约束：只使用下列检索结果中的信息；不得用检索外的常识补全或编造数字/案例/结论；"
-        "检索不足以支撑时请明确写「知识库未提供依据」，不要臆造。\n"
+        "写作约束：只使用下列检索结果中的信息；不得用检索外的常识补全或编造数字/案例/结论。\n"
         "不同片段可能分别给出总述和定义，撰写时要合并使用，不要只复述第一条。\n"
         "输出要求：直接给出可用的正文/答案，不要以「根据知识库内容」「根据资料」「根据检索结果」"
         "「基于知识库」等套话或元说明开头；不要复述「我将根据知识库…」这类过程描述。\n"

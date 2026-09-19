@@ -29,9 +29,10 @@ const PptOutlineResult: React.FC <PptOutlineResultProps>= ({chapters, activeKey,
     const slides=chapter.slides;
     let flag=0
     for (let slide of slides) {
-      const contentLen = slide.content.length;
+      const contentLen = slide.content?.length || 0;
       const viewItemsLen = slide.viewItems?slide.viewItems.length:0;
-      if(viewItemsLen === 0 && contentLen>0){
+      const genFailed = !!(slide.genError && slide.genError.length > 0);
+      if(viewItemsLen === 0 && (contentLen>0 || genFailed)){
         flag=2
         break;
       }

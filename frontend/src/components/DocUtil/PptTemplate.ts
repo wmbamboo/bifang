@@ -611,13 +611,17 @@ export default class PptTemplate {
       await this.genNewPresentations(relationIds);
       await this.genNewContentTypes();
       // 将所有文件复制到新的zip实例中
-      for(let filename of Object.keys(zip.files)){
+      for (const filename of Object.keys(zip.files)) {
+        const entry = zip.files[filename];
+        // 新模板会带 ppt/、ppt/media/ 这类目录项。zip.file() 对目录返回 null。
+        if (!entry || entry.dir) {
+          continue;
+        }
         if (!this.templateSlides.includes(filename) &&  !this.templateSlideRelations.includes(filename)
             &&filename!=="ppt/presentation.xml" && filename!=="ppt/_rels/presentation.xml.rels"
             &&filename!=="[Content_Type].xml") {
-          //加入资源文件
           console.debug(`${filename}\n`)
-          newZip.file(filename, zip.file(filename)!.async("nodebuffer"));
+          newZip.file(filename, entry.async("nodebuffer"));
         }
       }
       /*Object.keys(zip.files).forEach((filename) => {

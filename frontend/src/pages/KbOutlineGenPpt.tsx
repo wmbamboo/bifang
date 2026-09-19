@@ -379,11 +379,13 @@ const KbOutlineGenPpt: React.FC = () => {
               Ppt.setContent(chapters, key, parsed.content);
               wordCnts += parsed.content.length;
             } else {
+              Ppt.markGenError(chapters, getKeyFromTArray(idx), parsed.error);
               console.warn("幻灯片生成失败:", parsed.error, value.data);
             }
             return value
           }).catch(error=>{
             const key=getKeyFromTArray(idx);
+            Ppt.markGenError(chapters, key, "内容生成请求失败");
             message.warning(`Key为${key}的幻灯片文本生成请求失败了。`)
           })
       )).then(results=>{
@@ -402,6 +404,7 @@ const KbOutlineGenPpt: React.FC = () => {
             message.warning("内容生成请求有"+errMsgs.length+"个幻灯片返回错误："+errMsgs[0]+"(...)");
           }
           if (errMsgs.length===completeCount) {
+            setChapters(chapters.slice());
             setLoading(false);
             setProgressHidden(true);
             setDownloadable(false);
@@ -431,11 +434,14 @@ const KbOutlineGenPpt: React.FC = () => {
               `有 ${badFormat.length} 张幻灯片内容生成了，但格式不正确，需要点击右侧【内容修改】按钮或点击大纲对应项目的【重新生成】（如：${names}${badFormat.length > 3 ? '…' : ''}）。`,
             );
             setDownloadable(false);
+          } else if (chapters.some((ch) => ch.slides?.some((s) => !!s.genError))) {
+            setDownloadable(false);
           } else {
             setDownloadable(true);
           }
         }else{
           message.warning("发生了一些错，完成个数："+completeCount+";少于请求幻灯片个数："+promiseArr.length)
+          setChapters(chapters.slice());
           setLoading(false);
           setProgressHidden(true);
         }

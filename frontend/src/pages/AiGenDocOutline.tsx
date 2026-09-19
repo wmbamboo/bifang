@@ -11,7 +11,7 @@ import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Doc from "@/components/ChatUtil/ChatWithSpeech4Doc";
 import {DOC_OUTLINE_TEMPLATE} from "@/components/ChatUtil/OutlinePromptComposer";
-import {message} from "antd";
+import {message, Button} from "antd";
 
 export const AiGenDocOutline: React.FC = () => {
   const theme = useTheme();
@@ -22,6 +22,10 @@ export const AiGenDocOutline: React.FC = () => {
   const [defaultId, setDefaultId] = useState<string>("");
   const showDrawer = () => {
       setOpen(true);
+  };
+  const openOutlineQuery = () => {
+    setTempOutlineRec(OutlineRec.listRecs(outlineTypeAiDOC));
+    showDrawer();
   };
   const onClose = () => {
     setOpen(false);
@@ -67,7 +71,7 @@ export const AiGenDocOutline: React.FC = () => {
   }
 
   return(
-    <PageContainer breadcrumb={{}}>
+    <PageContainer breadcrumb={{}} extra={<Button onClick={openOutlineQuery}>大纲查询</Button>}>
       <ProCard
         split="vertical"
         bodyStyle={{
@@ -87,6 +91,7 @@ export const AiGenDocOutline: React.FC = () => {
         </ProCard>
       </ProCard>
       <OutlineSelectDrawer type={"save"} open={open} outlineRecs={tempOutlineRecs}
+                           focusId={defaultId}
                            /*selFn={onSelectRec}*/ outlineType={outlineTypeAiDOC}
                            delFn={onOutlineRecDelete}
                            closeFn={onClose} />

@@ -27,10 +27,10 @@ const FORMAT_HINT =
 
 const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseEditableProps) => {
   const [messageApi, contextHolder] = message.useMessage();
-  const warnFormat = () => {
+  const warnFormat = (hint?: string) => {
     messageApi.open({
       type: 'error',
-      content: FORMAT_HINT,
+      content: hint || FORMAT_HINT,
       duration: 6,
     });
   };
@@ -60,6 +60,11 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
         <TextArea key={"ta-raw-" + slide.key} value={slide.content} autoSize contentEditable={false}/>
       </p>;
   }
+  const contentGenFailed=(slide:Slide) => {
+      return <p>
+        <Tag color="error">{slide.genError || FORMAT_HINT}</Tag>
+      </p>;
+  }
   const onChange=(e:string[])=>{
     props.fn(e[0])
   }
@@ -70,6 +75,7 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
   const getSlideExtra = (slide:Slide) => {
     const contentLen = slide.content?.length || 0;
     const viewItemsLen = slide.viewItems?slide.viewItems.length:0;
+    const genFailed = !!(slide.genError && slide.genError.length > 0);
     if (viewItemsLen > 0) {
       return (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
@@ -84,12 +90,12 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
           </Tooltip>
         </Space>
       );
-    } else if(viewItemsLen === 0 && contentLen>0){
+    } else if(viewItemsLen === 0 && (contentLen>0 || genFailed)){
       return (
         <Space size={4} onClick={(e) => e.stopPropagation()}>
           <CheckCircleTwoTone
             twoToneColor="red"
-            onClick={() => warnFormat()}
+            onClick={() => warnFormat(genFailed ? slide.genError : undefined)}
           />
           <Tooltip title="内容修改">
             <Button
@@ -98,7 +104,7 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
               danger
               icon={<FormOutlined />}
               onClick={(e) => {
-                warnFormat();
+                warnFormat(genFailed ? slide.genError : undefined);
                 openEdit(slide, e);
               }}
             />
@@ -115,12 +121,13 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
     for (let slide of slides) {
       const hasItems = slide.viewItems && slide.viewItems.length > 0;
       const hasRaw = !hasItems && slide.content && slide.content.length > 0;
+      const genFailed = !hasItems && !hasRaw && !!(slide.genError && slide.genError.length > 0);
       cItemsSubNew.push(
         {
           key: slide.key,
           label: slide.label,
           // eslint-disable-next-line react/no-unescaped-entities
-          children: hasItems ? contentShow(slide) : hasRaw ? contentRawUnparsed(slide) : contentEmpty(),
+          children: hasItems ? contentShow(slide) : hasRaw ? contentRawUnparsed(slide) : genFailed ? contentGenFailed(slide) : contentEmpty(),
           style: panelStyle,
           extra: getSlideExtra(slide)
         }

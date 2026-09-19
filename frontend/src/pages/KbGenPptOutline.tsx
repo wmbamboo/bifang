@@ -10,7 +10,7 @@ import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Ppt from "@/components/ChatUtil/ChatWithSpeech4Ppt";
 import {PPT_OUTLINE_TEMPLATE} from "@/components/ChatUtil/OutlinePromptComposer";
-import {message, Tag} from "antd";
+import {message, Tag, Button} from "antd";
 import {ALL_KB_NAME, kbLabel, opKbTagStyle} from "@/components/DocUtil/kbSelectorModal";
 
 const KbGenPptOutline: React.FC = () => {
@@ -26,7 +26,11 @@ const KbGenPptOutline: React.FC = () => {
     setSelectKbName(kb_name)
   };
   const showDrawer = () => {
-      setOpen(true);
+    setOpen(true);
+  };
+  const openOutlineQuery = () => {
+    setTempOutlineRec(OutlineRec.listRecs(outlineTypePPT, selectKbName));
+    showDrawer();
   };
   const onClose = () => {
     setOpen(false);
@@ -75,7 +79,7 @@ const KbGenPptOutline: React.FC = () => {
   }
 
   return (
-    <PageContainer breadcrumb={{}}>
+    <PageContainer breadcrumb={{}} extra={<Button onClick={openOutlineQuery}>大纲查询</Button>}>
       <ProCard
         split="vertical"
         bodyStyle={{
@@ -109,6 +113,7 @@ const KbGenPptOutline: React.FC = () => {
       </ProCard>
 
       <OutlineSelectDrawer type={"save"} open={open} outlineRecs={tempOutlineRecs} kbName={kbLabel(selectKbName)}
+                           focusId={defaultId}
                            /*selFn={onSelectRec} */ outlineType={outlineTypePPT}
                            delFn={onOutlineRecDelete}
                            closeFn={onClose} />

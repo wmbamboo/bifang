@@ -9,7 +9,7 @@ import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Ppt from "@/components/ChatUtil/ChatWithSpeech4Ppt";
 import {PPT_OUTLINE_TEMPLATE} from "@/components/ChatUtil/OutlinePromptComposer";
-import {message} from "antd";
+import {message, Button} from "antd";
 
 const AiGenPptOutline: React.FC = () => {
   const theme = useTheme();
@@ -20,6 +20,10 @@ const AiGenPptOutline: React.FC = () => {
   const [defaultId, setDefaultId] = useState<string>("");
   const showDrawer = () => {
       setOpen(true);
+  };
+  const openOutlineQuery = () => {
+    setTempOutlineRec(OutlineRec.listRecs(outlineTypeAiPPT));
+    showDrawer();
   };
   const onClose = () => {
     setOpen(false);
@@ -69,7 +73,7 @@ const AiGenPptOutline: React.FC = () => {
   }
 
   return (
-    <PageContainer breadcrumb={{}}>
+    <PageContainer breadcrumb={{}} extra={<Button onClick={openOutlineQuery}>大纲查询</Button>}>
       <ProCard
         split="vertical"
         bodyStyle={{
@@ -90,6 +94,7 @@ const AiGenPptOutline: React.FC = () => {
         </ProCard>
       </ProCard>
       <OutlineSelectDrawer type={"save"} open={open} outlineRecs={tempOutlineRecs}
+                           focusId={defaultId}
                            /*selFn={onSelectRec}*/ outlineType={outlineTypeAiPPT}
                            delFn={onOutlineRecDelete}
                            closeFn={onClose} />

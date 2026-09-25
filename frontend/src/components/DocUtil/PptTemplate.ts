@@ -1,6 +1,13 @@
 import * as cheerio from "cheerio";
 import JSZip from "jszip";
 import fs from "fs";
+import { resolveTemplatePage } from "@/components/DocUtil/templateManifest";
+import { mergeBrokenPlaceholderRunsInXml } from "@/components/DocUtil/pptPlaceholderRuns";
+import {
+  formatProductGateMessage,
+  scanFilledSlides,
+  type ProductGateReport,
+} from "@/components/DocUtil/PptProductGate";
 
 //**定义全局string.format
 interface StringFormat {
@@ -69,9 +76,25 @@ type PptPage={
   chapterCover: number,
   catalog: PptSegment,
   list: PptSegment,
-  // progressList: PptSegment,
-  // imageList: PptSegment,
+  /** metric：按卡数 2～5 → 页 24～27 */
+  metric: { start: number },
+  /** columns：按栏数 2～5 → 页 28～31 */
+  columns: { start: number },
+  /**
+   * metric_columns：
+   * 2～5 卡 + 2 栏 → 32～35；5 卡 + 3 栏 → 36
+   */
+  metricColumns2: { start: number },
+  metricColumns5x3: number,
+  /**
+   * metric_list：
+   * 2～5 卡 + 2 要点 → 37～40；5 卡 + 3 要点 → 41
+   */
+  metricList2: { start: number },
+  metricList5x3: number,
   tail:number,
+  /** 模板内幻灯片最大序号（含尾页） */
+  slideMax: number,
   restSlide:Array<number>  //暂时不用的页面
 }
 /**
@@ -82,15 +105,25 @@ const pptPage:PptPage={
   chapterCover: 2,
   catalog: {start:3,length:3,count:1},
   list: {start:6,length:3,count:6},
-  // progressList: {start:12,length:3,count:2},
-  // imageList: {start:18,length:3,count:2},
-  tail:31,
-  restSlide:[24,25,26,27,28,29,30]
+  metric: { start: 24 },       // 24=2卡 … 27=5卡
+  columns: { start: 28 },      // 28=2栏 … 31=5栏
+  metricColumns2: { start: 32 }, // 32=2卡+2栏 … 35=5卡+2栏
+  metricColumns5x3: 36,          // 5卡+3栏
+  metricList2: { start: 37 },    // 37=2卡+2要点 … 40=5卡+2要点
+  metricList5x3: 41,             // 5卡+3要点
+  tail: 47,
+  slideMax: 47,
+  restSlide: [44, 45, 46],
 }
 
-type slideType ="cover"|"chapterCover"|"catalog"|"list"|"tail";
+type slideType ="cover"|"chapterCover"|"catalog"|"list"|"metric"|"columns"|"metric_columns"|"metric_list"|"table"|"image_grid"|"tail";
 type fileType="localFile"|"urlFile";
 
+/** 将卡数/栏数限制在模板支持的 2～5 */
+const clampSlotCount = (n: number | undefined, fallback: number) => {
+  const v = n && n > 0 ? Math.round(n) : fallback;
+  return Math.max(2, Math.min(5, v));
+};
 export default class PptTemplate {
   fileType:fileType;
   templatePath: string="";
@@ -261,22 +294,49 @@ export default class PptTemplate {
    * @param sType
    * @param itemCounts
    */
-  static getTemplatePageNumber = (sType: slideType, itemCounts?: number) => {
-    if (sType === 'cover' || sType === 'chapterCover' || sType === 'tail') {
-      console.log(pptPage[sType])
-      return pptPage[sType]
-    } else { //for PptSegment
-      if(!itemCounts) {
-        console.error(`模板itemCounts设置错误：${sType},${itemCounts}。`)
-        return 0;
-      }
-      const startPage = pptPage[sType].start;
-      const offset = itemCounts - 3;  //3,4,5对应0,1,2
-      const rand= Math.floor(Math.random() * (pptPage[sType].count))
-      const pageNum = rand*3 + offset + startPage;
-      console.log(`rand:${rand},offset:${offset},startPage:${startPage},pageNum:${pageNum}`)
-      return pageNum;
+  /**
+   * 根据版式与槽位数取模板页码。
+   * - list：itemCounts = 小项数 3～5
+   * - metric：itemCounts = 数据卡数 2～5
+   * - columns：itemCounts = 栏数 2～5
+   * - metric_columns：itemCounts = 卡数 2～5；colCounts = 栏数（默认 2；仅 5 卡支持 3 栏 → 页 36）
+   * - metric_list：itemCounts = 卡数 2～5；colCounts = 要点数（默认 2；仅 5 卡支持 3 要点 → 页 41）
+   */
+  static getTemplatePageNumber = (sType: slideType, itemCounts?: number, colCounts?: number) => {
+    const { page, downgraded } = resolveTemplatePage(sType, itemCounts, colCounts);
+    if (downgraded) {
+      console.log(`template-manifest downgrade: ${sType}`, itemCounts, colCounts, '→', downgraded, 'page', page);
     }
+    if (page > 0) return page;
+    // manifest 未命中时的公式回退
+    if (sType === 'cover' || sType === 'chapterCover' || sType === 'tail') {
+      return pptPage[sType];
+    }
+    if (sType === 'metric') {
+      const n = clampSlotCount(itemCounts, 3);
+      return pptPage.metric.start + (n - 2);
+    }
+    if (sType === 'columns') {
+      const n = clampSlotCount(itemCounts, 2);
+      return pptPage.columns.start + (n - 2);
+    }
+    if (sType === 'metric_columns') {
+      const m = clampSlotCount(itemCounts, 4);
+      const c = colCounts && colCounts > 0 ? Math.round(colCounts) : 2;
+      if (c >= 3 && m >= 5) return pptPage.metricColumns5x3;
+      return pptPage.metricColumns2.start + (m - 2);
+    }
+    if (sType === 'metric_list') {
+      const m = clampSlotCount(itemCounts, 3);
+      const l = colCounts && colCounts >= 3 ? 3 : 2;
+      if (l >= 3 && m >= 5) return pptPage.metricList5x3;
+      return pptPage.metricList2.start + (m - 2);
+    }
+    if (!itemCounts) {
+      console.error(`模板itemCounts设置错误：${sType},${itemCounts}。`);
+      return 0;
+    }
+    return pptPage[sType].start + (itemCounts - 3);
   };
 
   /**
@@ -346,7 +406,7 @@ export default class PptTemplate {
     console.debug(`ppt/tableStyles.xml:--------------------\n ${result9}`);
     let result10 = await this.getTemplatePageContentByNameFromFile(filePath,`ppt/viewProps.xml`)
     console.debug(`ppt/viewProps.xml:--------------------\n ${result10}`);
-    for (let i=1;i<=31; i++ ){ //for (let i=1;i<=7; i++ ){
+    for (let i=1;i<=pptPage.slideMax; i++ ){ //for (let i=1;i<=7; i++ ){
       const result = await this.getTemplatePageContentByNameFromFile(filePath,`ppt/slides/_rels/slide${i}.xml.rels`)
       console.debug(`ppt/slides/_rels/slide${i}.xml.rels:--------------------\n ${result}`);
     }
@@ -383,6 +443,8 @@ export default class PptTemplate {
    * 模板里占位符常被拆成「{」「slideTitle」「}」三段 run，不能整段 replaceWith。
    */
   async genNewContentByXml(content:string, slideVarDict:SlideVarDict|object){
+    // 先合并被拆开的 {slot} run，再替换
+    content = mergeBrokenPlaceholderRunsInXml(content);
     const $ = cheerio.load(content, {xml: true});
     const flat: Record<string, string> = {};
     if (slideVarDict && typeof slideVarDict === 'object') {
@@ -425,7 +487,40 @@ export default class PptTemplate {
       }
     });
 
+    // 未提供变量的 {slot} / {a.b} 一律清空；并清 progress* 伪槽
+    const slotRe = /\{[A-Za-z_][\w.]*(?:\[[\w.]+\])?\}/g;
+    $('a\\:t').each((_, el) => {
+      let t = $(el).text();
+      if (!t) return;
+      let cleaned = t;
+      if (t.includes('{')) {
+        cleaned = cleaned.replace(slotRe, '');
+      }
+      if (/\bprogress\d*\b/i.test(cleaned)) {
+        cleaned = cleaned.replace(/\bprogress\d*\b/gi, '');
+      }
+      cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
+      if (cleaned !== t) {
+        $(el).text(cleaned);
+      }
+    });
+
     return $.xml();
+  }
+
+  /** 成品闸：扫描已灌模页 */
+  runProductGate(): ProductGateReport {
+    return scanFilledSlides(
+      (this.newSlideFileDicts || []).map((d) => ({
+        slideName: d.slideName,
+        fileContent: d.fileContent,
+      })),
+    );
+  }
+
+  /** 成品闸未通过时的提示文案 */
+  static formatGateMessage(report: ProductGateReport): string {
+    return formatProductGateMessage(report);
   }
 
 
@@ -482,8 +577,14 @@ export default class PptTemplate {
     this.usedSlidePages.push(slidePageNo);
     this.newSlidePages.push(newSlidePageNo);
   }
-  async genNewSlideFileDict_Random(pageType:slideType, slideVarDict:SlideVarDict[]|object, newSlidePageNo: number,counts?:number) {
-    const slidePageNo=PptTemplate.getTemplatePageNumber(pageType,counts);
+  async genNewSlideFileDict_Random(
+    pageType: slideType,
+    slideVarDict: SlideVarDict[] | object,
+    newSlidePageNo: number,
+    counts?: number,
+    colCounts?: number,
+  ) {
+    const slidePageNo = PptTemplate.getTemplatePageNumber(pageType, counts, colCounts);
     let slideFileName = `ppt/slides/slide${newSlidePageNo}.xml`
     let slideFileContent = await this.genNewSlideFromTplSlide(slidePageNo, slideVarDict);
     let slideFileDict:SlideFileDict =new SlideFileDict(slideFileName,slideFileContent);
@@ -497,101 +598,92 @@ export default class PptTemplate {
   }
 
   /**
-   *   ppt/_rels/presentation.xml.rels 特殊处理,
-   *   //将<Relationship Id="rId13" Target="slides/slide12.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"/>这样的记录去掉。
-   *   //1、构造字符串数组："slides/slide${i}.xml" 2、筛掉用到的页面（this.usedSlidePages）。3、记录rid，删掉该Relation删掉。
+   * 重建 ppt/_rels/presentation.xml.rels 中的幻灯片关系：
+   * 与模板页数解耦——删光旧 slide 关系后，按 newSlidePages（生成文档页序）重新挂上。
+   * @returns 按页序的 { page, rId }，供 presentation.xml 的 sldIdLst 使用
    */
-  async genNewPresentationRelation(){
-    const relationIds:Array<string>=[]
-    let filename="ppt/_rels/presentation.xml.rels";
-    await this.zip.loadAsync(this.templateBuffer).then(async (zip) => {
-        await zip.files[filename].async("string").then(async (slideContent) => {
-          const $ = cheerio.load(slideContent, {xml: true});
-
-          /**
-           * 以下循环的规则是：只要不是新页面，全删
-           * TODO hezl 当页面低于模板页时成立，高于时要重新写规则
-           * 1、删除所有 旧slide
-           * 2、计算max rId
-           * 3、插入所有 新slide
-           * 4、新slide模板为：let new_rel_str=`<Relationship Id="rId${maxId++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${index+1}.xml"/>`
-           * 5、有问题（可能的线索是rId有其他的关联）
-           */
-          for(let i=1;i<=31;i++){
-            if(!this.newSlidePages.includes(i)){
-              const slideName=`slides/slide${i}.xml`
-              let $relation=$('Relationship[Target="'+slideName+'"]');
-              let relationId=$relation.attr('Id');
-              if(relationId!==undefined) {
-                relationIds.push(relationId);
-                $relation.remove();
-              }
-            }
-          }
-          /*let rels_all=$("Relationship");
-          const Ids=new Array<number>();
-          for(let i=0;i<rels_all.length;i++){
-            Ids.push(parseInt(rels_all[i].attribs.Id.substring(3)));
-            console.log(rels_all[i].attribs.Id);
-          }
-          let maxId=Math.max(...Ids)
-          for(let slide of this.templateSlides){
-              const slideName=slide.substring(4);  // ppt/slides/slide1.xml  => slides/slide1.xml
-              let $relation=$('Relationship[Target="'+slideName+'"]');
-              console.log(`removed slide:${slideName}`)
-              $relation.remove();
-          }
-          console.info(`removed ${this.templateSlides.length} pages' relationship.`)
-
-          this.newSlidePages.forEach(slideNum=>{
-            let new_rel_str=`<Relationship Id="rId${maxId++}" Target="slides/slide${slideNum}.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"/>`
-            $('Relationships').append(new_rel_str)
-            console.log(`added slide:${new_rel_str}`)
-          })
-          console.info(`added ${this.newSlidePages.length} pages' relationship.`)
-          console.info($.xml())*/
-          this.newSlideFileDicts.push(new SlideFileDict(filename,$.xml()));
-        });
-      });
-
-    return relationIds;
-  }
-
-  /**
-   * 根据relationIds生成新的ppt/presentation.xml
-   * @param relationIds
-   */
-  async genNewPresentations(relationIds :Array<string>) {
-    let filename="ppt/presentation.xml";
+  async genNewPresentationRelation(): Promise<Array<{ page: number; rId: string }>> {
+    const slideRels: Array<{ page: number; rId: string }> = [];
+    const filename = "ppt/_rels/presentation.xml.rels";
     await this.zip.loadAsync(this.templateBuffer).then(async (zip) => {
       await zip.files[filename].async("string").then(async (slideContent) => {
-        const $ = cheerio.load(slideContent, {xml: true});
-        for (let rid of relationIds) {
-          let $sldId=$("p\\:sldId[r\\:id='"+rid+"']")
-          $sldId.remove()
+        const $ = cheerio.load(slideContent, { xml: true });
+
+        // 删掉所有指向 slides/slideN.xml 的 Relationship
+        $("Relationship").each((_, el) => {
+          const target = ($(el).attr("Target") || "").replace(/\\/g, "/");
+          if (/^slides\/slide\d+\.xml$/i.test(target)) {
+            $(el).remove();
+          }
+        });
+
+        let maxId = 0;
+        $("Relationship").each((_, el) => {
+          const m = (($(el).attr("Id") || "").match(/^rId(\d+)$/i) || [])[1];
+          if (m) maxId = Math.max(maxId, parseInt(m, 10));
+        });
+
+        const slideType =
+          "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        for (const page of this.newSlidePages) {
+          maxId += 1;
+          const rId = `rId${maxId}`;
+          $("Relationships").append(
+            `<Relationship Id="${rId}" Type="${slideType}" Target="slides/slide${page}.xml"/>`,
+          );
+          slideRels.push({ page, rId });
         }
-        this.newSlideRelationDicts.push(new SlideFileDict(filename,$.xml()));
-      })
-    })
+
+        this.newSlideFileDicts.push(new SlideFileDict(filename, $.xml()));
+      });
+    });
+    return slideRels;
   }
 
   /**
-   * 生成【content_Types】.xml
+   * 按生成文档页序重建 ppt/presentation.xml 的 sldIdLst（可多于或少于模板页数）。
+   */
+  async genNewPresentations(slideRels: Array<{ page: number; rId: string }>) {
+    const filename = "ppt/presentation.xml";
+    await this.zip.loadAsync(this.templateBuffer).then(async (zip) => {
+      await zip.files[filename].async("string").then(async (slideContent) => {
+        const $ = cheerio.load(slideContent, { xml: true });
+        $("p\\:sldId").remove();
+        let sldId = 256;
+        const $lst = $("p\\:sldIdLst");
+        for (const { rId } of slideRels) {
+          $lst.append(`<p:sldId id="${sldId}" r:id="${rId}"/>`);
+          sldId += 1;
+        }
+        this.newSlideRelationDicts.push(new SlideFileDict(filename, $.xml()));
+      });
+    });
+  }
+
+  /**
+   * 重建 [Content_Types].xml 中的 slide Override，与生成页数对齐。
    */
   async genNewContentTypes() {
-    let filename="[Content_Types].xml";
+    const filename = "[Content_Types].xml";
+    const slideCt =
+      "application/vnd.openxmlformats-officedocument.presentationml.slide+xml";
     await this.zip.loadAsync(this.templateBuffer).then(async (zip) => {
       await zip.files[filename].async("string").then(async (slideContent) => {
-        const $ = cheerio.load(slideContent, {xml: true});
-        for(let i=1;i<=31;i++){
-          if(!this.newSlidePages.includes(i)){
-            let $override=$('Override[PartName="/ppt/slides/slide'+i+'.xml"]');
-            $override.remove();
+        const $ = cheerio.load(slideContent, { xml: true });
+        $("Override").each((_, el) => {
+          const part = ($(el).attr("PartName") || "").replace(/\\/g, "/");
+          if (/^\/ppt\/slides\/slide\d+\.xml$/i.test(part)) {
+            $(el).remove();
           }
+        });
+        for (const page of this.newSlidePages) {
+          $("Types").append(
+            `<Override PartName="/ppt/slides/slide${page}.xml" ContentType="${slideCt}"/>`,
+          );
         }
-        this.newSlideRelationDicts.push(new SlideFileDict(filename,$.xml()));
-      })
-    })
+        this.newSlideRelationDicts.push(new SlideFileDict(filename, $.xml()));
+      });
+    });
   }
 
   /**
@@ -606,9 +698,9 @@ export default class PptTemplate {
     await JSZip.loadAsync(this.templateBuffer).then(async(zip) => {
       // 复制文件
       const newZip = new JSZip();
-      // 准备两个文件：
-      const relationIds=await this.genNewPresentationRelation();
-      await this.genNewPresentations(relationIds);
+      // 按生成文档页序重建关系 / sldIdLst / Content_Types（与模板页数无关）
+      const slideRels = await this.genNewPresentationRelation();
+      await this.genNewPresentations(slideRels);
       await this.genNewContentTypes();
       // 将所有文件复制到新的zip实例中
       for (const filename of Object.keys(zip.files)) {

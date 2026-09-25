@@ -6,12 +6,13 @@ import { Tree } from 'antd';
 import type { TreeDataNode, TreeProps } from 'antd';
 import { useState } from 'react';
 import { Ollama } from '@langchain/ollama';
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 
 // 本页直接使用ollama服务器。
 const ollama = new Ollama({
   // baseUrl: 'http://localhost:11434',  //直接使用笔记本上的服务
   baseUrl: 'http://192.168.0.202:11434', //使用服务器上的服务
-  model: 'glm4:9b-chat-q8_0',
+  model: DEFAULT_LLM_MODEL,
 });
 
 const treeData: TreeDataNode[] = [
@@ -116,7 +117,7 @@ const Welcome: React.FC = () => {
             request={async (messages: any) => {
               // const completion = await openai.chat.completions.create({
               //   messages: messages,
-              //   model: "glm4:9b-chat-q8_0",
+              //   model: DEFAULT_LLM_MODEL,
               //   stream: true
               // });
               const stream = await ollama.stream(messages);

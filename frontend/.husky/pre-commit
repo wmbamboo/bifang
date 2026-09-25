@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# 忠实度金标：改 outlineEvidenceValidate / outlineJson / pptEval 后提交前必跑
+cd frontend
+npx jest tests/fidelityGold.test.ts --silent

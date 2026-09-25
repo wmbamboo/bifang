@@ -81,20 +81,52 @@ async def _handle_completions(body: dict[str, Any], kb_name: Optional[str]):
 
     extra_system = None
     docs_payload: list = []
+    retrieve_ms = 0.0
     if kb_name:
         user_query = ""
         for m in reversed(norm_messages):
             if m["role"] == "user":
                 user_query = m["content"]
                 break
+        t_ret = time.perf_counter()
         docs, task = kb_service.retrieve_for_writing(
             user_query,
             kb_name,
             top_k=top_k,
             score_threshold=score_threshold,
         )
+        retrieve_ms = (time.perf_counter() - t_ret) * 1000
+        # 大纲按页填 tips：检索仍按 slide，但摘要改用短标签契约，避免套用正文「小点」写法
+        prompt_task = task
+        if task == "slide" and (
+            "只填充这一页 tips" in user_query
+            or "layout 已锁定" in user_query
+            or "【本页锁定】" in user_query
+        ):
+            prompt_task = "outline_slide_fill"
+        # JSON 双轨：结构化指标优先注入（失败不挡检索）
+        extract_block = ""
+        try:
+            from app.services.extract_service import (
+                build_extract_context,
+                extracts_as_pseudo_docs,
+            )
+
+            sources = {
+                str((d.get("metadata") or {}).get("source") or "")
+                for d in docs
+            }
+            extract_block = build_extract_context(kb_name, sources, user_query)
+            if prompt_task == "outline_slide_fill" and extract_block:
+                docs = extracts_as_pseudo_docs(kb_name, sources, user_query) + list(docs)
+        except Exception as ex:  # noqa: BLE001
+            print(f"[warn] extract context failed: {ex}", flush=True)
         _, docs_payload = kb_service.format_docs_for_prompt(docs)
-        extra_system = kb_service.build_rag_system_prompt(docs, task=task)
+        extra_system = kb_service.build_rag_system_prompt(docs, task=prompt_task)
+        if extract_block:
+            extra_system = f"{extract_block}\n\n{extra_system}"
+    else:
+        task = "general"
 
     if conversation_id:
         chat_service.ensure_conv(
@@ -108,10 +140,18 @@ async def _handle_completions(body: dict[str, Any], kb_name: Optional[str]):
 
     if not stream:
         # 非流式：拼接
+        t_llm = time.perf_counter()
         chunks = []
         async for c in stream_chat(norm_messages, model=model, temperature=temperature, extra_system=extra_system):
             chunks.append(c)
+        llm_ms = (time.perf_counter() - t_llm) * 1000
         text = "".join(chunks)
+        print(
+            f"[chat-timing] kb={kb_name or '-'} task={task} model={resolve_model(model)} "
+            f"retrieve={retrieve_ms:.0f}ms llm={llm_ms:.0f}ms docs={len(docs_payload)} "
+            f"chars={len(text)}",
+            flush=True,
+        )
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion",
@@ -125,6 +165,11 @@ async def _handle_completions(body: dict[str, Any], kb_name: Optional[str]):
                 }
             ],
             "docs": docs_payload,
+            "timing": {
+                "retrieve_ms": round(retrieve_ms),
+                "llm_ms": round(llm_ms),
+                "task": task,
+            },
         }
 
     async def event_gen():

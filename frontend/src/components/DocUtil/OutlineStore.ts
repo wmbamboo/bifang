@@ -170,6 +170,18 @@ export default class OutlineRec{
     }
   }
 
+  /** 按 ID 改显示名（不改 outlineContent 正文，除非调用方另行同步 # 标题） */
+  static renameById(type: outlineType, outlineId: string, newName: string): boolean {
+    const name = (newName || "").trim();
+    if (!outlineId || !name) return false;
+    const outlineRecs = this.getOutlineRecs(type);
+    const index = outlineRecs.findIndex((item) => item.outlineId === outlineId);
+    if (index < 0) return false;
+    outlineRecs[index] = {...outlineRecs[index], outlineName: name};
+    localStorage.setItem(`${type}_outlineRecs`, JSON.stringify(outlineRecs));
+    return true;
+  }
+
   /**
    * 获取某类型的大纲标题列表
    * @param type

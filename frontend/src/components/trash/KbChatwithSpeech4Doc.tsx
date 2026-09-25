@@ -6,6 +6,7 @@ import SpeechToTextButton from "@/components/DocUtil/SpeechToTextButton";
 import ViewItem4Doc from "@/components/DocUtil/ViewItem4Doc";
 import * as React from "react";
 import {OpenAI} from "openai";
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 
 
 interface ChatWithSpeechProps{
@@ -131,7 +132,7 @@ const Chat=(props:ChatProps)=> {
       request={async (messages: any) => {
         const completion = await props.openai.chat.completions.create({
           messages: messages,
-          model: 'glm4:9b-chat-q8_0',
+          model: DEFAULT_LLM_MODEL,
           stream: true,
           // temperature: 0.8,
           // top_p: 1,

@@ -8,7 +8,12 @@ import {clean4DocTitle, Doc} from "@/components/DocUtil/ViewItem4Doc";
 import * as React from "react";
 import {OpenAI} from "openai";
 import welcomeStyles from "./ChatWelcome.less";
-import OutlinePromptComposer, {composeDocOutlinePrompt} from "@/components/ChatUtil/OutlinePromptComposer";
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
+import OutlinePromptComposer, {
+  OutlineSendPayload,
+  buildDocOutlineSystemPrompt,
+  composeDocOutlineUserMessage,
+} from "@/components/ChatUtil/OutlinePromptComposer";
 
 
 interface ChatWithSpeechProps{
@@ -60,10 +65,28 @@ const Chat=(props:ChatProps)=> {
   const proChat = useProChat();
   const {kb_name,openai,outlineType,featureName,welcomeSamples,cb4setOutlineRec,cb4setTempOutlineRecs} =props
   const [topic, setTopic] = React.useState('');
+  const pendingSystemRef = React.useRef(buildDocOutlineSystemPrompt());
   const getTextFromMic = (text: string) => {
     console.log("麦克风识别文本:" + text);
     setTopic(text);
   }
+
+  const sendOutline = (payload: OutlineSendPayload) => {
+    pendingSystemRef.current = payload.systemPrompt || buildDocOutlineSystemPrompt();
+    proChat.sendMessage(payload.userMessage);
+  };
+
+  const sendSample = (sample: ButtonMessage) => {
+    const content = (sample.content || '').trim();
+    const topicMatch = content.match(/主题是【(.+?)】/);
+    const topicText = topicMatch?.[1]?.trim() || sample.title || content.slice(0, 40);
+    pendingSystemRef.current = buildDocOutlineSystemPrompt();
+    proChat.sendMessage(
+      topicMatch || content.length > 200
+        ? composeDocOutlineUserMessage(topicText)
+        : content,
+    );
+  };
 
   const welcomeMessage = (
     <div className={welcomeStyles.welcomeBlock}>
@@ -81,7 +104,7 @@ const Chat=(props:ChatProps)=> {
                   key={`welcome-sample-${idx}`}
                   size="small"
                   className={welcomeStyles.sampleBtn}
-                  onClick={() => proChat.sendMessage(sample.content)}
+                  onClick={() => sendSample(sample)}
                 >
                   {label}
                 </Button>
@@ -98,61 +121,55 @@ const Chat=(props:ChatProps)=> {
       style={{minHeight: '82vh', background: "aliceblue"}}
       helloMessage={welcomeMessage}
       chatItemRenderConfig={{
-        actionsRender: (props, dom, actionsProps) => {
+        actionsRender: (props) => {
           const msg: string = props.message?.toString() === undefined ? "" : props.message?.toString();
-          if (props?.editing || msg.length <= 150 || !msg.includes("##")) {
+          const role = (props as any)?.originData?.role;
+          const placement = (props as any)?.placement;
+          const isUser = role === "user" || placement === "right";
+          // 用户消息不提供大纲操作；助手大纲仅保留保存
+          if (isUser || props?.editing || msg.length <= 150 || !msg.includes("##")) {
             return null;
           }
           return (
-            <>
-              <Button key={"outlineEdit"} size={"small"} style={{marginTop: "0.5em"}}
-                      type="dashed"
-                      onClick={() => {
-                        actionsProps?.onStartEdit();
-                      }}
-              >
-                大纲修改
-              </Button>
-              <Button key={"outlineSave"} size={"small"} style={{marginTop: "0.5em"}}
-                      type="dashed"
-                      onClick={(e) => {
-                        console.log(e,props.message);
-                        let content = "";
-                        content=clean4DocTitle(msg)
-                        let recTitle=Doc.getTitleFromMsg(content);
-                        let recContent=Doc.getContentFromMsg(content);
-                        if(!recTitle||recTitle.length===0){
-                          message.error("无法保存，大纲markdown格式有误,标题应该以【# 】开头单独一行，请检查并修改。")
-                          return;
-                        }
-                        if(!recContent||recContent.length===0){
-                          message.error("无法保存，一级文档章节应以【## 】开头单独一行，二级文档段落应以【### 】开头单独一行，请手工检查并修改。")
-                          return;
-                        }
-                        const chapters=Doc.getChaptersFromContent(recContent)
-                        const t =Doc.checkChapter(chapters);
-                        if(t.code!==0){
-                          const msg1="注意：无法保存，一级文档章节应以【## 】开头单独一行，二级文档段落应以【### 】开头单独一行，请手工检查并修改。"
-                          message.error(t.msg+"\n"+msg1)
-                          return;
-                        }
-                        message.success(t.msg)
-                        let newOutlineRec = new OutlineRec(
-                          recTitle,
-                          recContent,
-                          outlineType===outlineTypeDOC ? (kb_name || "samples") : (kb_name || ""),
-                          "",
-                        );
-                        console.log("the new OutlineRec:", JSON.stringify(newOutlineRec));
-                        OutlineRec.save(outlineType,newOutlineRec);
-                        cb4setOutlineRec(newOutlineRec.outlineId!);
-                        let newRecs=OutlineRec.listRecs(outlineType, outlineType===outlineTypeDOC ? (kb_name || "samples") : undefined)
-                        cb4setTempOutlineRecs(newRecs);
-                      }}
-              >
-                大纲保存
-              </Button>
-            </>
+            <Button key={"outlineSave"} size={"small"} style={{marginTop: "0.5em"}}
+                    type="dashed"
+                    onClick={(e) => {
+                      console.log(e,props.message);
+                      let content = "";
+                      content=clean4DocTitle(msg)
+                      let recTitle=Doc.getTitleFromMsg(content);
+                      let recContent=Doc.getContentFromMsg(content);
+                      if(!recTitle||recTitle.length===0){
+                        message.error("无法保存，大纲markdown格式有误,标题应该以【# 】开头单独一行，请检查并修改。")
+                        return;
+                      }
+                      if(!recContent||recContent.length===0){
+                        message.error("无法保存，一级文档章节应以【## 】开头单独一行，二级文档段落应以【### 】开头单独一行，请手工检查并修改。")
+                        return;
+                      }
+                      const chapters=Doc.getChaptersFromContent(recContent)
+                      const t =Doc.checkChapter(chapters);
+                      if(t.code!==0){
+                        const msg1="注意：无法保存，一级文档章节应以【## 】开头单独一行，二级文档段落应以【### 】开头单独一行，请手工检查并修改。"
+                        message.error(t.msg+"\n"+msg1)
+                        return;
+                      }
+                      message.success(t.msg)
+                      let newOutlineRec = new OutlineRec(
+                        recTitle,
+                        recContent,
+                        outlineType===outlineTypeDOC ? (kb_name || "samples") : (kb_name || ""),
+                        "",
+                      );
+                      console.log("the new OutlineRec:", JSON.stringify(newOutlineRec));
+                      OutlineRec.save(outlineType,newOutlineRec);
+                      cb4setOutlineRec(newOutlineRec.outlineId!);
+                      let newRecs=OutlineRec.listRecs(outlineType, outlineType===outlineTypeDOC ? (kb_name || "samples") : undefined)
+                      cb4setTempOutlineRecs(newRecs);
+                    }}
+            >
+              大纲保存
+            </Button>
           );
         },
       }}
@@ -169,18 +186,25 @@ const Chat=(props:ChatProps)=> {
           justify: 'space-between',
         },
       }}
-      inputAreaRender={(_defaultDom, onMessageSend) => (
+      inputAreaRender={(_defaultDom) => (
         <OutlinePromptComposer
           topic={topic}
           setTopic={setTopic}
-          composePrompt={composeDocOutlinePrompt}
-          onSend={onMessageSend}
+          mode="doc"
+          onSend={sendOutline}
         />
       )}
       request={async (messages: any) => {
+        const rest = (Array.isArray(messages) ? messages : []).filter(
+          (m: any) => m?.role !== 'system',
+        );
+        const apiMessages = [
+          { role: 'system', content: pendingSystemRef.current || buildDocOutlineSystemPrompt() },
+          ...rest,
+        ];
         const completion = await openai.chat.completions.create({
-          messages: messages,
-          model: 'glm4:9b-chat-q8_0',
+          messages: apiMessages,
+          model: DEFAULT_LLM_MODEL,
           stream: true,
           stream_options: {
             top_k: 4,
@@ -189,7 +213,7 @@ const Chat=(props:ChatProps)=> {
             return_direct: false
           }
         });
-        console.log('messages', messages);
+        console.log('messages', apiMessages);
         const reader = completion.toReadableStream().getReader();
         const decoder = new TextDecoder('utf-8');
         const encoder = new TextEncoder();

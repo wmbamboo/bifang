@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from app.db import get_conn, ok, fail, rows_to_list, _now
 from app.services import kb_service
-from app.services.document_loader import load_file_text, split_text
+from app.services.document_loader import load_file_text, split_text_with_meta
 from app.services.embeddings import embed_texts
 from app.config import get_settings
 
@@ -403,20 +403,31 @@ def _vectorize_one(kb_name: str, file_name: str, task_id: str) -> tuple[bool, st
             _set_item(task_id, file_name, stage="ocr", progress=25)
 
             def on_progress(page: int, total: int, mode: str) -> None:
-                pct = 25 + int(30 * page / max(total, 1))
+                if mode == "loading":
+                    _set_item(task_id, file_name, stage="ocr", progress=22)
+                    _set_task(
+                        task_id,
+                        current_file=file_name,
+                        message=f"OCR加载模型：{file_name}（首次较慢）",
+                    )
+                    return
+                # page 从 1 起；完成后给一点进度，避免长时间停在同一百分比
+                done = max(page - (0 if mode == "ocr_done" else 1), 0)
+                if mode == "ocr_done":
+                    done = page
+                pct = 25 + int(30 * done / max(total, 1))
                 _set_item(
                     task_id,
                     file_name,
                     stage="ocr",
-                    progress=min(55, pct),
+                    progress=min(55, max(25, pct)),
                 )
-                # 仅每隔几页更新任务文案，避免频繁写库导致列表刷新抖动
-                if page == 1 or page == total or page % 3 == 0:
-                    _set_task(
-                        task_id,
-                        current_file=file_name,
-                        message=f"OCR识别：{file_name}（{page}/{total}页）",
-                    )
+                label = "完成" if mode == "ocr_done" else "识别中"
+                _set_task(
+                    task_id,
+                    current_file=file_name,
+                    message=f"OCR{label}：{file_name}（{page}/{total}页）",
+                )
 
             text = load_file_text(
                 path,
@@ -430,12 +441,12 @@ def _vectorize_one(kb_name: str, file_name: str, task_id: str) -> tuple[bool, st
         if not _still_running():
             return False, "用户停止", 0
 
-        chunks = split_text(
+        pieces = split_text_with_meta(
             text,
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
         )
-        if not chunks:
+        if not pieces:
             tip = (
                 "未能解析出文本内容（OCR 后仍为空；请检查是否为损坏文件或纯空白页）"
                 if need_ocr_stage
@@ -443,18 +454,41 @@ def _vectorize_one(kb_name: str, file_name: str, task_id: str) -> tuple[bool, st
             )
             return False, tip, 0
 
-        # 2) 向量化
+        # 2) 双轨同源：同一次 text → parse artifact + JSONL + 向量块
         _set_item(task_id, file_name, stage="vectorizing", progress=60)
         if not _still_running():
             return False, "用户停止", 0
 
+        chunks = [p[0] for p in pieces]
+        try:
+            from app.services.extract_service import save_file_extract, save_parse_artifact
+
+            save_parse_artifact(kb_name, file_name, text, ocr_meta={"pipeline": "upload"})
+            # 必须用全文，不用 pieces（避免表被切碎后回拼丢序）
+            save_file_extract(kb_name, file_name, text, prefer_full_text=True)
+        except Exception as ex:  # noqa: BLE001
+            print(f"[warn] extract save failed {file_name}: {ex}", flush=True)
+        asset_meta = kb_service._extract_pdf_image_assets(path, kb_name, file_name)
         store = kb_service.get_store(kb_name)
         store.delete_by_source(file_name)
         vectors = embed_texts(chunks)
-        metadatas = [
-            {"source": file_name, "kb_name": kb_name, "chunk": i}
-            for i in range(len(chunks))
-        ]
+        metadatas = []
+        for i, (_c, meta) in enumerate(pieces):
+            m = {
+                "source": file_name,
+                "kb_name": kb_name,
+                "chunk": i,
+                "kind": meta.get("kind") or "text",
+            }
+            if meta.get("atomic"):
+                m["atomic"] = True
+            if meta.get("page") is not None:
+                m["page"] = meta["page"]
+            page = meta.get("page")
+            if page is not None and asset_meta.get(page):
+                m["asset_ids"] = asset_meta[page]
+                m["has_image"] = True
+            metadatas.append(m)
         store.add(chunks, metadatas, vectors)
         kb_service.save_store(kb_name)
         with get_conn() as conn:

@@ -55,9 +55,19 @@ async def stream_chat(
 
     final_messages = list(messages)
     if extra_system:
-        final_messages = [{"role": "system", "content": extra_system}] + [
-            m for m in final_messages if m.get("role") != "system"
+        # 保留前端下发的版式/tips 契约，再拼知识库材料；不可整段替换，
+        # 否则 columns 短标签等约束会丢失，模型只会按 RAG 写成带引用的长叙述。
+        prior_systems = [
+            str(m.get("content") or "")
+            for m in final_messages
+            if m.get("role") == "system" and str(m.get("content") or "").strip()
         ]
+        others = [m for m in final_messages if m.get("role") != "system"]
+        if prior_systems:
+            merged = "\n\n".join(prior_systems) + "\n\n" + extra_system
+        else:
+            merged = extra_system
+        final_messages = [{"role": "system", "content": merged}] + others
 
     try:
         stream = await client.chat.completions.create(

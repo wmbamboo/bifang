@@ -10,7 +10,7 @@ import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Doc from "@/components/ChatUtil/ChatWithSpeech4Doc";
-import {DOC_OUTLINE_TEMPLATE} from "@/components/ChatUtil/OutlinePromptComposer";
+import {composeDocOutlineUserMessage} from "@/components/ChatUtil/OutlinePromptComposer";
 import {message, Tag, Button} from "antd";
 import {ALL_KB_NAME, kbLabel, opKbTagStyle} from "@/components/DocUtil/kbSelectorModal";
 
@@ -39,17 +39,15 @@ export const KbGenDocOutline: React.FC = () => {
   //----------------------------------------------------------------------------------------------
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
-  const outlineGen_template_init = DOC_OUTLINE_TEMPLATE;
-  /***预设对话消息，title可以不填，自动提取content中的主题（注意格式：主题是【】）****/
   const buttonMessages_init:ButtonMessage[]=[
     {title: "",
-      content:'作为一个撰写者，你要撰写一篇文章，主题是【万科怎么了】。\n'+outlineGen_template_init
+      content: composeDocOutlineUserMessage('万科怎么了')
     },
     {title: '',
-      content:'为“深空探测科学目标体系图谱项目”撰写一个主题是【研制总结报告】的大纲，要求遵循GJB438B的要求。\n'+outlineGen_template_init
+      content: composeDocOutlineUserMessage('研制总结报告') + '（深空探测科学目标体系图谱项目，遵循GJB438B）'
     },
     {title: '',
-      content:'作为一个撰写者，你要撰写一篇文章，主题是【2024年男装流行趋势如何】\n'+outlineGen_template_init
+      content: composeDocOutlineUserMessage('2024年男装流行趋势如何')
     }
   ]
   const openai = new OpenAI({

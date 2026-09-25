@@ -9,6 +9,7 @@ import * as React from "react";
 import {FieldDataNode, Key} from "rc-tree/lib/interface";
 import {OpenAI} from "openai";
 import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 
 const openai = new OpenAI({
   apiKey: 'sk-f46769dda93743ba8266506c28500d32',
@@ -240,7 +241,7 @@ const Welcome: React.FC = () => {
             request={async (messages: any) => {
                let body={
                 messages: messages,
-                model: 'glm4:9b-chat-q8_0',
+                model: DEFAULT_LLM_MODEL,
                 stream: true,
                 // temperature: 0.8,
                 // top_p: 1,

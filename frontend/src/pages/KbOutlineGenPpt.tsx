@@ -5,16 +5,19 @@ import {Button, Empty, Flex, message, Progress, Spin, Tag} from 'antd';
 import React, {useCallback, useEffect, useState} from "react";
 import axios from "axios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
-import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems} from "@/components/DocUtil/ViewItem4Ppt";
+import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars} from "@/components/DocUtil/ViewItem4Ppt";
 import OutlineRec, {outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {PptOutlinePrompt} from "@/components/DocUtil/OutlinePromptPpt";
 import {PptOutlineResult} from "@/components/DocUtil/OutlineResultPpt";
 import SlideDrawer from "@/components/DocUtil/SliderDrawer";
 import PptTemplate from "@/components/DocUtil/PptTemplate";
+import { downgradeMetricColumns } from "@/components/DocUtil/outlineTipSlots";
+import { layoutForRender } from "@/components/DocUtil/outlineJson";
 import {CompassTwoTone, FilePptTwoTone, FolderOpenTwoTone, RocketTwoTone} from "@ant-design/icons";
 import SlideTemplateDrawer from "@/components/DocUtil/SlideTemplateDrawer";
 import KnowledgeBaseSelector, {opStackStyle, opBtnStyle, opKbTagStyle, ALL_KB_NAME, kbLabel} from "@/components/DocUtil/kbSelectorModal";
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 interface Dictionary {
   [key: string]: string;
 }
@@ -117,12 +120,8 @@ init_kbName=get_kbName_from_outlineRecs(outlineRecs,0)*/
 function init():[OutlineRec[],string,string,Chapter[],string]{
   const formatPrompt = buildPptItemFormatPrompt();
   const outlineRecs = OutlineRec.listRecs(outlineTypePPT, ALL_KB_NAME);
-  if (!outlineRecs.length) {
-    return [[], "", ALL_KB_NAME, [], formatPrompt];
-  }
-  const init_id = outlineRecs[0].outlineId!;
-  const [init_title, _, __, init_chapters] = Ppt.get_chapters_from_outlineRecs(outlineRecs, outlineTypePPT, init_id, formatPrompt);
-  return [outlineRecs, init_title, ALL_KB_NAME, init_chapters, formatPrompt];
+  // 不预载第一条大纲：同主题常有多份，预载容易和「大纲管理」里点开的那份对不上。
+  return [outlineRecs, "", ALL_KB_NAME, [], formatPrompt];
 }
 /**
  * 设置幻灯片模板
@@ -171,18 +170,23 @@ const KbOutlineGenPpt: React.FC = () => {
   }, [kbName]);
 
   const onOutlineRecSelect=useCallback( (id:string)=>{
-    const [newTitle,_,newKbName,newChapters]=Ppt.get_chapters_from_outlineRecs(OutlineRec.listRecs(outlineTypePPT),outlineTypePPT,id,formatPrompt)
-    if(newTitle&&newKbName&&newChapters) {
+    // 按 ID 从全量列表取，避免同名大纲或知识库筛选导致取错份。
+    const allRecs = OutlineRec.listRecs(outlineTypePPT);
+    const [newTitle, , outlineKb, newChapters]=Ppt.get_chapters_from_outlineRecs(allRecs, outlineTypePPT, id, formatPrompt)
+    if(newTitle && newChapters && newChapters.length > 0) {
       setChapters(newChapters);
-      setKbName(newKbName);
-      setTitle(newTitle);   //(or?or.outlineName:"");
+      setTitle(newTitle);
       setDownloadable(false);
-      message.info(`selectOutline:ID:${id},${title},${kbName},${chapters.length}`);
+      // 大纲所属库与当前筛选不一致时，切到该大纲的库，便于列表与内容一致
+      if (outlineKb && outlineKb !== kbName) {
+        setKbName(outlineKb);
+      }
+      message.info(`已载入大纲：${newTitle}（${newChapters.length} 章）`);
       return true
     }
-    message.warning(`出错了，ID为${id}的大纲中，主题、知识库、章节这三项之一无内容`);
+    message.warning(`出错了，ID为${id}的大纲中，主题或章节无内容`);
     return false;
-  },[title,kbName,chapters]);
+  },[kbName, formatPrompt]);
 
   function onOutlineRecDelete(id:string) {
     // let outlineRec=olRecs[idx]
@@ -242,7 +246,22 @@ const KbOutlineGenPpt: React.FC = () => {
       message.warning(`生成幻灯片变量出错。`);
       return;
     }
-    const emptyItems = slideVars.filter((sv) => Object.keys(sv.vItem || {}).length === 0);
+    const emptyItems = slideVars.filter((sv, idx) => {
+      if (Object.keys(sv.vItem || {}).length > 0) return false;
+      let i = 0;
+      for (const ch of chapters) {
+        for (const sl of ch.slides || []) {
+          if (i === idx) {
+            if (sl.layout === 'columns' || sl.layout === 'metric_columns') {
+              return !(sl.subTitle || '').trim();
+            }
+            return true;
+          }
+          i++;
+        }
+      }
+      return true;
+    });
     if (emptyItems.length > 0) {
       message.error(`有 ${emptyItems.length} 张幻灯片尚未解析出小项，无法生成 PPT，请先重新生成内容。`);
       setDownloadable(false);
@@ -277,21 +296,108 @@ const KbOutlineGenPpt: React.FC = () => {
     }
     // console.log(`新幻灯片第2页的slideVar:${JSON.stringify(slideVar_catalog)}`)
     await pptTemplate.genNewSlideFileDict_Random("catalog",slideVar_catalog,2,chapters.length);
-    let pages=3
-    //page3~..
-    if(slideVars.length > 0){
-      for (const sv of slideVars) {
-        const index = slideVars.indexOf(sv);
-        let counts=Object.keys(sv.vItem).length/2;
-        counts = Ppt.padVItemForTemplate(sv.vItem, counts);
-        console.log(`新幻灯片第${index+3}页的slideVar:${JSON.stringify(sv)},,每页项数: ${counts}`);
-
-        await pptTemplate.genNewSlideFileDict_Random("list",sv,index+3,counts);
-        pages++
+    let page = 3;
+    let svIndex = 0;
+    for (const chapter of chapters) {
+      await pptTemplate.genNewSlideFileDict_Random("chapterCover", {
+        chapterTitle: stripChapterOrdinalPrefix(chapter.title),
+        chapterSubTitle: chapter.subTitle || "",
+      }, page);
+      page++;
+      for (const slide of chapter.slides || []) {
+        const sv = slideVars[svIndex++];
+        if (!sv) continue;
+        if (slide.layout === 'metric_list') {
+          const { metricCount, listCount, vars } = buildMetricListFillVars(
+            slide.subTitle || '',
+            sv.vItem || {},
+          );
+          await pptTemplate.genNewSlideFileDict_Random(
+            "metric_list",
+            { ...sv, ...vars },
+            page,
+            metricCount,
+            listCount,
+          );
+          page++;
+          continue;
+        }
+        if (slide.layout === 'columns') {
+          const { colCount, vars } = buildColumnsFillVars(slide.subTitle || '', sv.vItem || {});
+          await pptTemplate.genNewSlideFileDict_Random(
+            "columns",
+            { ...sv, ...vars },
+            page,
+            colCount,
+          );
+          page++;
+          continue;
+        }
+        if (slide.layout === 'metric_columns') {
+          const { metricCount, colCount, vars } = buildMetricColumnsFillVars(
+            slide.subTitle || '',
+            sv.vItem || {},
+          );
+          const d = downgradeMetricColumns(metricCount, colCount);
+          if (d.note) console.log('metric_columns downgrade', d.note);
+          Ppt.padMetricVItem(vars.vItem as any, d.metricCount);
+          await pptTemplate.genNewSlideFileDict_Random(
+            d.layout === 'metric_list' ? 'metric_list' : 'metric_columns',
+            { ...sv, ...vars },
+            page,
+            d.metricCount,
+            d.colCount,
+          );
+          page++;
+          continue;
+        }
+        if (slide.layout === 'table') {
+          const { vars } = buildTableFillVars(slide.subTitle || '', sv.vItem || {});
+          await pptTemplate.genNewSlideFileDict_Random(
+            'table',
+            { ...sv, ...vars },
+            page,
+          );
+          page++;
+          continue;
+        }
+        if (slide.layout === 'image_grid') {
+          const { vars } = buildImageGridFillVars(slide.subTitle || '', sv.vItem || {});
+          await pptTemplate.genNewSlideFileDict_Random(
+            'image_grid',
+            { ...sv, ...vars },
+            page,
+          );
+          page++;
+          continue;
+        }
+        const counts = Object.keys(sv.vItem).length / 2;
+        const renderLayout = layoutForRender(
+          (slide.layout as any) || 'list',
+        );
+        if (renderLayout === 'metric' && Ppt.canFillMetric(sv.vItem)) {
+          const slots = Ppt.padMetricVItem(sv.vItem, counts);
+          await pptTemplate.genNewSlideFileDict_Random("metric", sv, page, slots);
+        } else {
+          const padded = Ppt.padVItemForTemplate(sv.vItem, counts);
+          await pptTemplate.genNewSlideFileDict_Random("list", sv, page, padded);
+        }
+        page++;
       }
     }
-    // const sv_tail={}
-    await pptTemplate.genNewSlideFileDict_Random("tail",slideVar_cover,pages);
+    await pptTemplate.genNewSlideFileDict_Random("tail",slideVar_cover,page);
+
+    const gate = pptTemplate.runProductGate();
+    if (!gate.ok) {
+      message.error(PptTemplate.formatGateMessage(gate));
+      setDownloadable(false);
+      return;
+    }
+    if (gate.warnings.length) {
+      message.warning(
+        `成品闸告警 ${gate.warnings.length} 处（如同文双卡），已继续下载；请人工复核。`,
+      );
+    }
 
     console.log(pptTemplate)
     await pptTemplate.genNewSlideFile("urlFile")
@@ -326,7 +432,7 @@ const KbOutlineGenPpt: React.FC = () => {
     //---------------------------------------------
     const buildMsg=(prompt:string )=>{
       setDownloadable(false);
-      const msg={messages:[{content:WRITING_SYSTEM_PROMPT,role:"system",name:"string"},{content: prompt,role:"user",name:"string"}],model:"glm4:9b-chat-q8_0",frequency_penalty:0,stream:false,temperature:0.7,top_logprobs:0,top_p:0}
+      const msg={messages:[{content:WRITING_SYSTEM_PROMPT,role:"system",name:"string"},{content: prompt,role:"user",name:"string"}],model:DEFAULT_LLM_MODEL,frequency_penalty:0,stream:false,temperature:0.7,top_logprobs:0,top_p:0}
       return JSON.stringify(msg);
     }
 
@@ -339,7 +445,7 @@ const KbOutlineGenPpt: React.FC = () => {
           /*** 生成全部 ***/
           if (genKey.length === 0) {
             if (slide.prompt.length > 0) {
-              promiseArr.push(axios.post(url, buildMsg(slide.prompt + buildPptItemFormatPrompt(countOutlineTips(slide.subTitle)) + KB_WRITING_CONSTRAINT_PROMPT), {headers: headers}));
+              promiseArr.push(axios.post(url, buildMsg(slide.prompt + KB_WRITING_CONSTRAINT_PROMPT + buildPptItemFormatPrompt(countOutlineTips(slide.subTitle), slide.layout, (() => { const p = splitMetricListTips(slide.subTitle || ''); return slide.layout === 'metric_list' ? { metric: p.metrics.length, list: p.lists.length } : undefined; })())), {headers: headers}));
               tArray.push({key: slide.key, idx: index});
               index++;
             } else {
@@ -349,7 +455,7 @@ const KbOutlineGenPpt: React.FC = () => {
           }else{
             if(genKey === slide.key) {
               if (slide.prompt.length > 0) {
-                promiseArr.push(axios.post(url, buildMsg(slide.prompt + buildPptItemFormatPrompt(countOutlineTips(slide.subTitle)) + KB_WRITING_CONSTRAINT_PROMPT), {headers: headers}));
+                promiseArr.push(axios.post(url, buildMsg(slide.prompt + KB_WRITING_CONSTRAINT_PROMPT + buildPptItemFormatPrompt(countOutlineTips(slide.subTitle), slide.layout, (() => { const p = splitMetricListTips(slide.subTitle || ''); return slide.layout === 'metric_list' ? { metric: p.metrics.length, list: p.lists.length } : undefined; })())), {headers: headers}));
                 tArray.push({key: slide.key, idx: index});
                 index++;
               } else {
@@ -571,7 +677,11 @@ const KbOutlineGenPpt: React.FC = () => {
     const ok = theSlide.setViewItemsStructured(items);
     setChapters(chapters.slice());
     if (!ok) {
-      message.error(validateSlideViewItems(items) || '请至少填写 1 条完整小项（概括标题 + 具体描述）。');
+      message.error(
+        validateSlideViewItems(items, theSlide.layout, {
+          metricCount: splitMetricListTips(theSlide.subTitle || '').metrics.length,
+        }) || '请至少填写 1 条完整小项（概括标题 + 具体描述）。',
+      );
       setDownloadable(false);
       return false;
     }

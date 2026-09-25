@@ -1,7 +1,7 @@
 import {CollapseProps} from "antd/es/collapse/Collapse";
 import {Collapse, Tag, Input, message, Button, Tooltip, Space, Card, Typography} from "antd";
 import React from "react";
-import {Slide} from "@/components/DocUtil/ViewItem4Ppt";
+import {Slide, parseColumnBlocks, alignItemsToColumnSlots} from "@/components/DocUtil/ViewItem4Ppt";
 import {CheckCircleTwoTone, FormOutlined} from "@ant-design/icons";
 const {TextArea} = Input;
 const {Text} = Typography;
@@ -36,6 +36,50 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
   };
   const contentEmpty=() => <p><Tag color="geekblue">生成内容</Tag><br/>尚未生成</p>;
   const contentShow=(slide:Slide) => {
+      const cols =
+        slide.layout === 'columns' || slide.layout === 'metric_columns'
+          ? parseColumnBlocks(slide.subTitle || '')
+          : [];
+      if (cols.length >= 2 && (slide.viewItems || []).length > 0) {
+        const aligned = alignItemsToColumnSlots(
+          slide.subTitle || '',
+          (slide.viewItems || []).map((vi) => ({ title: vi.title, content: vi.content })),
+        );
+        const byCol = cols.map((col, ci) => ({
+          col,
+          slice: aligned.filter((a) => a.colIndex === ci),
+        }));
+        return (
+          <div>
+            <Tag color="cyan" style={{marginBottom: 8}}>生成内容（分栏）</Tag>
+            <Space direction="vertical" style={{width: '100%'}} size={10}>
+              {byCol.map(({ col, slice }, gi) => (
+                <Card
+                  key={`${slide.key}-col-${gi}`}
+                  size="small"
+                  title={
+                    <Space direction="vertical" size={0}>
+                      <Text strong>{col.title || `栏 ${gi + 1}`}</Text>
+                      {col.sub ? <Text type="secondary" style={{fontSize: 12}}>{col.sub}</Text> : null}
+                    </Space>
+                  }
+                >
+                  <Space direction="vertical" style={{width: '100%'}} size={6}>
+                    {(slice.length ? slice : [{ title: '（暂无生成条目）', content: '' }]).map((item, ii) => (
+                      <div key={`${slide.key}-col-${gi}-i-${ii}`}>
+                        <Text>{item.title}</Text>
+                        {item.content ? (
+                          <div><Text type="secondary" style={{whiteSpace: 'pre-wrap'}}>{item.content}</Text></div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </Space>
+                </Card>
+              ))}
+            </Space>
+          </div>
+        );
+      }
       return (
         <div>
           <Tag color="geekblue" style={{marginBottom: 8}}>生成内容（结构化）</Tag>
@@ -125,7 +169,15 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
       cItemsSubNew.push(
         {
           key: slide.key,
-          label: slide.label,
+          label: slide.layout === 'metric'
+            ? `${slide.label}（数据卡）`
+            : slide.layout === 'metric_list'
+              ? `${slide.label}（数据卡+要点）`
+              : slide.layout === 'columns'
+                ? `${slide.label}（分栏）`
+                : slide.layout === 'metric_columns'
+                  ? `${slide.label}（数据卡+分栏）`
+                  : slide.label,
           // eslint-disable-next-line react/no-unescaped-entities
           children: hasItems ? contentShow(slide) : hasRaw ? contentRawUnparsed(slide) : genFailed ? contentGenFailed(slide) : contentEmpty(),
           style: panelStyle,

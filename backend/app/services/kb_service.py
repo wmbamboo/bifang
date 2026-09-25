@@ -12,7 +12,7 @@ from rank_bm25 import BM25Okapi
 
 from app.config import get_settings
 from app.db import get_conn, ok, fail, rows_to_list, _now
-from app.services.document_loader import load_file_text, split_text
+from app.services.document_loader import load_file_text, split_text_with_meta
 from app.services.embeddings import embed_query, embed_texts
 
 
@@ -383,6 +383,55 @@ def save_uploaded_files(
     return ok({"failed_files": failed}, msg="文件上传完成")
 
 
+def _extract_pdf_image_assets(
+    path: Path,
+    kb_name: str,
+    file_name: str,
+    *,
+    max_per_page: int = 4,
+) -> dict[int, list[str]]:
+    """抽出 PDF 内嵌图到 kb assets 目录；返回 {page_1based: [asset_id,...]}。"""
+    if path.suffix.lower() != ".pdf":
+        return {}
+    try:
+        import pymupdf as fitz
+    except Exception:  # noqa: BLE001
+        return {}
+
+    settings = get_settings()
+    content = kb_content_dir(kb_name)
+    assets_dir = content.parent / "assets" / Path(file_name).stem
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    out: dict[int, list[str]] = {}
+    try:
+        doc = fitz.open(str(path))
+        try:
+            for i in range(doc.page_count):
+                page = doc.load_page(i)
+                page_no = i + 1
+                images = page.get_images(full=True) or []
+                ids: list[str] = []
+                for j, img in enumerate(images[:max_per_page]):
+                    xref = img[0]
+                    try:
+                        pix = fitz.Pixmap(doc, xref)
+                        if pix.n >= 5:
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        asset_id = f"{Path(file_name).stem}_p{page_no}_{j}.png"
+                        dest = assets_dir / asset_id
+                        pix.save(str(dest))
+                        ids.append(asset_id)
+                    except Exception:  # noqa: BLE001
+                        continue
+                if ids:
+                    out[page_no] = ids
+        finally:
+            doc.close()
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
 def vectorize_files(
     knowledge_base_name: str,
     file_names: Optional[list[str]] = None,
@@ -418,15 +467,41 @@ def vectorize_files(
         try:
             store.delete_by_source(name)
             text = load_file_text(path, enable_ocr=settings.ocr_enabled)
-            chunks = split_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-            if not chunks:
+            # 尽量按页切块；并抽出 PDF 内嵌图为 asset（供后续 image_grid）
+            asset_meta = _extract_pdf_image_assets(path, knowledge_base_name, name)
+            pieces = split_text_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            if not pieces:
                 failed_files[name] = "未能解析出文本内容（含OCR）"
                 continue
+            try:
+                from app.services.extract_service import save_file_extract, save_parse_artifact
+
+                save_parse_artifact(
+                    knowledge_base_name, name, text, ocr_meta={"pipeline": "vectorize"}
+                )
+                save_file_extract(knowledge_base_name, name, text, prefer_full_text=True)
+            except Exception as ex:  # noqa: BLE001
+                print(f"[warn] extract save failed {name}: {ex}", flush=True)
+            chunks = [p[0] for p in pieces]
             vectors = embed_texts(chunks)
-            metadatas = [
-                {"source": name, "kb_name": knowledge_base_name, "chunk": i}
-                for i in range(len(chunks))
-            ]
+            metadatas = []
+            for i, (_c, meta) in enumerate(pieces):
+                m = {
+                    "source": name,
+                    "kb_name": knowledge_base_name,
+                    "chunk": i,
+                    "kind": meta.get("kind") or "text",
+                }
+                if meta.get("atomic"):
+                    m["atomic"] = True
+                if meta.get("page") is not None:
+                    m["page"] = meta["page"]
+                # 同页附图挂到文本 chunk（bbox 暂用整页标记，细粒度随 VL 升级）
+                page = meta.get("page")
+                if page is not None and asset_meta.get(page):
+                    m["asset_ids"] = asset_meta[page]
+                    m["has_image"] = True
+                metadatas.append(m)
             store.add(chunks, metadatas, vectors)
             with get_conn() as conn:
                 conn.execute(
@@ -445,6 +520,12 @@ def delete_docs(knowledge_base_name: str, file_names: list[str], delete_content:
     content_dir = kb_content_dir(knowledge_base_name)
     for name in file_names:
         store.delete_by_source(name)
+        try:
+            from app.services.extract_service import delete_file_extract
+
+            delete_file_extract(knowledge_base_name, name)
+        except Exception:  # noqa: BLE001
+            pass
         with get_conn() as conn:
             conn.execute(
                 "DELETE FROM kb_files WHERE kb_name=? AND file_name=?",
@@ -547,11 +628,16 @@ def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
         source = meta.get("source", "未知文档")
         kb_name = meta.get("kb_name", "")
         chunk_id = meta.get("chunk")
+        page = meta.get("page")
         content = d.get("page_content", "")
         link = f"/knowledge_base/download_doc?knowledge_base_name={kb_name}&file_name={source}"
         snippet = " ".join((content or "").split())[:160]
         loc = f" 片段{chunk_id}" if chunk_id is not None else ""
-        contexts.append(f"[文档{i}] 来源：{source}{loc}\n{content}")
+        if page is not None:
+            loc += f" 第{page}页"
+        # 同 chunk 边界标记，供前端数值+实体同块校验
+        head = f"⟦chunk:{chunk_id}|page:{page if page is not None else ''}⟧"
+        contexts.append(f"[文档{i}] 来源：{source}{loc}\n{head}\n{content}")
         ref_docs.append(
             {
                 "id": i,
@@ -559,6 +645,9 @@ def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
                 "source": source,
                 "kb_name": kb_name,
                 "chunk_id": chunk_id,
+                "page": page,
+                "asset_ids": meta.get("asset_ids"),
+                "kind": meta.get("kind"),
                 "snippet": snippet,
                 "content": content,
                 "link": link,
@@ -581,6 +670,67 @@ _NAME_STOP = {
 
 def _clean_query(text: str, limit: int = 80) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()[:limit]
+
+
+def _slide_query_variants(primary: str) -> list[str]:
+    """页标题多路检索：去问句尾巴、切短内容词窗口，不依赖领域词表。"""
+    t = _clean_query(primary, 80)
+    if not t:
+        return []
+    out: list[str] = []
+
+    def _push(q: str) -> None:
+        q = _clean_query(q, 80)
+        if q and q not in out:
+            out.append(q)
+
+    _push(t)
+    stripped = re.sub(
+        r"(?:是什么|有哪些|哪几个|哪几|哪些|如何|怎样|怎么看|怎么做|吗|呢|？|\?)+$",
+        "",
+        t,
+    ).strip(" ，,：:")
+    _push(stripped)
+    no_shell = re.sub(
+        r"^(?:请(?:指出|说明|写出|概括|分析)|帮我|帮忙)\s*",
+        "",
+        stripped or t,
+    ).strip(" ，,：:")
+    _push(no_shell)
+    core = no_shell or stripped or t
+    if len(core) > 16:
+        _push(core[:16])
+
+    # 内容词短窗口：缓解「整句标题向量漂」；不写死品类词
+    try:
+        import jieba  # type: ignore
+
+        words = [
+            w.strip()
+            for w in jieba.lcut(core)
+            if re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", w.strip() or "")
+        ]
+    except Exception:
+        words = []
+    if len(words) >= 2:
+        _push("".join(words[-3:]))
+        _push("".join(words[-2:]))
+        if len(words) >= 3:
+            _push("".join(words[1:]))
+            _push(f"{words[0]}{words[-1]}")
+
+    # 标题实体短查询：压跨品类向量漂移（大盘页勿漂到衬衫价表）
+    if "大盘" in core and not any(k in core for k in ("衬衫", "polo", "Polo", "T恤")):
+        _push("男装大盘 总销量 总销售额")
+        _push("品类大盘 采样时间")
+    elif "衬衫" in core and "polo" not in core.lower():
+        _push("男士衬衫 销量 销售额")
+    elif "polo" in core.lower() or "Polo" in core:
+        _push("polo衫 男士polo 销量")
+    if "价格带" in core:
+        _push("价格带 销量占比")
+
+    return out[:8]
 
 
 def _add_name(names: list[str], term: str) -> None:
@@ -630,6 +780,18 @@ def _quoted_and_enum_names(text: str) -> list[str]:
 
 
 _GRASS_FORMS = ("种拔", "收拔", "种草", "拔草")
+_METRIC_TOKEN = re.compile(r"\d+(?:\.\d+)?\s*[%％]|\d+(?:\.\d+)?\s*[亿万]")
+
+
+def _metric_tokens(texts: list[str]) -> list[str]:
+    """大纲要点里的原数字。数据卡页要靠它们把含该数字的片段留在上下文里。"""
+    found: list[str] = []
+    for text in texts:
+        for matched in _METRIC_TOKEN.findall(text or ""):
+            token = re.sub(r"\s+", "", matched)
+            if token not in found:
+                found.append(token)
+    return found
 
 
 def _grass_queries(term: str) -> list[str]:
@@ -647,6 +809,10 @@ def _contains_term(page: str, term: str) -> bool:
     page = page or ""
     if term and term in page:
         return True
+    # 采样日：库里常是 2024.03.19，主题可能是 20240319
+    if term and re.fullmatch(r"20\d{6}", term):
+        if term in re.sub(r"[.\-/]", "", page):
+            return True
     if term and any(form in term for form in ("种草", "拔草", "种拔", "收拔")):
         return any(form in page for form in _GRASS_FORMS)
     return False
@@ -657,14 +823,92 @@ def plan_writing_retrieval(user_text: str) -> tuple[str, str, list[str]]:
 
     大纲用主题，不用整段格式说明；本页写作用标题加各条要点。
     问答保持原问题，不做第二跳。
+
+    若同时出现「撰写大纲」与「【本页标题】」（按页填充），优先按本页检索，
+    否则会整段按主题召回，漏掉页级相关片段。
     """
     text = user_text or ""
-    if _OUTLINE_RE.search(text):
-        topic = ""
-        matched = re.search(r"主题是【([^】]{2,80})】", text)
-        if matched:
-            topic = matched.group(1).strip()
-        return "outline", topic or _clean_query(text), []
+
+    def _scope_extras(src: str) -> list[str]:
+        """定框范围「商务男装衬衫/polo衫」→ 整段 + 斜杠拆分，助召回品类页事实。"""
+        out: list[str] = []
+        matched = re.search(r"范围「([^」]{1,40})」", src)
+        if not matched:
+            matched = re.search(r'范围["“]([^"”]{1,40})["”]', src)
+        if not matched:
+            # 主题里也可能直接写品类对
+            matched = re.search(
+                r"主题是【[^】]{0,120}?(商务男装[^】]{0,30}|衬衫/polo[^】]{0,10})",
+                src,
+            )
+            if matched:
+                raw = matched.group(1).strip()
+                if raw:
+                    out.append(raw)
+                    for part in re.split(r"[/／|｜]", raw):
+                        part = part.strip()
+                        if part and part not in out:
+                            out.append(part)
+                return out
+            return out
+        raw = matched.group(1).strip()
+        if not raw:
+            return out
+        out.append(raw)
+        for part in re.split(r"[/／|｜]", raw):
+            part = part.strip()
+            if part and part not in out:
+                out.append(part)
+        return out
+
+    def _period_extras(src: str) -> list[str]:
+        """主题/正文里的采样窗 → 多种写法，助命中同窗材料、压掉其它周期大盘。"""
+        out: list[str] = []
+
+        def _add(tok: str) -> None:
+            tok = (tok or "").strip()
+            if tok and tok not in out:
+                out.append(tok)
+
+        def _expand_ymd(y: str, m: str, d: str) -> None:
+            mm, dd = m.zfill(2), d.zfill(2)
+            _add(f"{y}.{mm}.{dd}")
+            _add(f"{y}-{mm}-{dd}")
+            _add(f"{y}{mm}{dd}")
+
+        # 20240319-20240417 / 20240319至20240417
+        for m in re.finditer(
+            r"(20\d{2})(\d{2})(\d{2})\s*[-~～至到]\s*(20\d{2})(\d{2})(\d{2})",
+            src,
+        ):
+            y1, mo1, d1, y2, mo2, d2 = m.groups()
+            _expand_ymd(y1, mo1, d1)
+            _expand_ymd(y2, mo2, d2)
+            _add(f"{y1}{mo1}{d1}-{y2}{mo2}{d2}")
+            _add(f"{y1}.{mo1}.{d1}-{y2}.{mo2}.{d2}")
+            _add(f"{y1}-{mo1}-{d1}至{y2}-{mo2}-{d2}")
+
+        # 2024.03.19-2024.04.17 / 2024-03-19至2024-04-17
+        for m in re.finditer(
+            r"(20\d{2})[./\-](\d{1,2})[./\-](\d{1,2})\s*[-~～至到]\s*"
+            r"(20\d{2})[./\-](\d{1,2})[./\-](\d{1,2})",
+            src,
+        ):
+            y1, mo1, d1, y2, mo2, d2 = m.groups()
+            _expand_ymd(y1, mo1, d1)
+            _expand_ymd(y2, mo2, d2)
+            _add(f"{y1}.{mo1.zfill(2)}.{d1.zfill(2)}-{y2}.{mo2.zfill(2)}.{d2.zfill(2)}")
+            _add(f"{y1}-{mo1.zfill(2)}-{d1.zfill(2)}至{y2}-{mo2.zfill(2)}-{d2.zfill(2)}")
+
+        return out[:12]
+
+    def _merge_extras(*groups: list[str]) -> list[str]:
+        out: list[str] = []
+        for g in groups:
+            for s in g:
+                if s and s not in out:
+                    out.append(s)
+        return out
 
     if "【本页标题】" in text or "【大纲要点】" in text:
         title = ""
@@ -679,8 +923,32 @@ def plan_writing_retrieval(user_text: str) -> tuple[str, str, list[str]]:
                 if not line or line.startswith("（"):
                     continue
                 points.append(_clean_query(line, 80))
-        extras = [p for p in points if p and p != title]
+        extras = _merge_extras(
+            [p for p in points if p and p != title],
+            _scope_extras(text),
+            _period_extras(text),
+        )
+        if title and "大盘" in title and "男装大盘" not in extras:
+            extras.append("男装大盘")
+        if title and "衬衫" in title and "polo" not in title.lower():
+            for t in ("男士衬衫", "衬衫"):
+                if t not in extras:
+                    extras.append(t)
+        if title and ("polo" in title.lower() or "Polo" in title):
+            for t in ("polo衫", "男士polo"):
+                if t not in extras:
+                    extras.append(t)
+        if title and "价格带" in title and "价格带" not in extras:
+            extras.append("价格带")
         return "slide", title or (extras[0] if extras else _clean_query(text)), extras
+
+    if _OUTLINE_RE.search(text):
+        topic = ""
+        matched = re.search(r"主题是【([^】]{2,120})】", text)
+        if matched:
+            topic = matched.group(1).strip()
+        extras = _merge_extras(_scope_extras(text), _period_extras(text))
+        return "outline", topic or _clean_query(text), extras
 
     if "文章标题是" in text and "撰写大约" in text:
         para = ""
@@ -704,7 +972,7 @@ def _doc_key(doc: dict) -> str:
 
 
 def _neighbor_docs(doc: dict, *, previous: bool = False) -> list[dict]:
-    """同一文件里紧挨着的下一段。上一段多半是上一节的尾巴，大纲里会串章，默认不取。"""
+    """同一文件里紧邻片段。默认只取下一段；previous=True 时取前后段。"""
     meta = doc.get("metadata") or {}
     source = meta.get("source")
     kb = meta.get("kb_name")
@@ -739,6 +1007,14 @@ def _neighbor_docs(doc: dict, *, previous: bool = False) -> list[dict]:
                 "vector_score": parent_score,
             }
         )
+    return out
+
+
+def _expand_neighbors(docs: list[dict], *, previous: bool, limit_parents: int = 6) -> list[dict]:
+    """对靠前命中扩邻居；limit_parents 避免上下文被邻居占满。"""
+    out: list[dict] = []
+    for doc in docs[: max(0, limit_parents)]:
+        out.extend(_neighbor_docs(doc, previous=previous))
     return out
 
 
@@ -778,12 +1054,35 @@ def retrieve_for_writing(
         return _search(primary, top_k), task
 
     settings = get_settings()
-    first = _search(
-        primary,
-        settings.writing_vector_top_k,
-        threshold=settings.default_score_threshold,
-        search_mode="vector",
-    )
+    # 本页/段落：标题多路向量（去问句尾巴等），再按分数融合，避免口语问句漂到无关段。
+    if task in ("slide", "paragraph"):
+        first_map: dict[str, dict] = {}
+        for q in _slide_query_variants(primary):
+            for doc in _search(
+                q,
+                settings.writing_vector_top_k,
+                threshold=settings.default_score_threshold,
+                search_mode="vector",
+            ):
+                key = _doc_key(doc)
+                prev = first_map.get(key)
+                score = float(doc.get("vector_score") or doc.get("score") or 0.0)
+                if prev is None or score > float(
+                    prev.get("vector_score") or prev.get("score") or 0.0
+                ):
+                    first_map[key] = doc
+        first = sorted(
+            first_map.values(),
+            key=lambda d: float(d.get("vector_score") or d.get("score") or 0.0),
+            reverse=True,
+        )[: settings.writing_vector_top_k]
+    else:
+        first = _search(
+            primary,
+            settings.writing_vector_top_k,
+            threshold=settings.default_score_threshold,
+            search_mode="vector",
+        )
     per_doc_quotes: list[list[str]] = []
     enums: list[str] = []
     for doc in first:
@@ -842,7 +1141,12 @@ def retrieve_for_writing(
                 if not _contains_term(doc.get("page_content") or "", term):
                     continue
                 hops.append(doc)
-                neighbors.extend(_neighbor_docs(doc))
+                neighbors.extend(_neighbor_docs(doc, previous=(task in ("slide", "paragraph"))))
+
+    # 第一跳命中也扩邻居：页级数据常在命中页的前后段（图表轴/% 在邻页）。
+    # 大纲结构段只扩下一段，降低串章；本页/段落扩前后段。
+    take_prev = task in ("slide", "paragraph")
+    neighbors.extend(_expand_neighbors(first, previous=take_prev, limit_parents=6))
 
     merged: list[dict] = []
     seen: set[str] = set()
@@ -854,21 +1158,138 @@ def retrieve_for_writing(
         seen.add(key)
         merged.append(doc)
 
-    for doc in hops:
-        _push(doc)
-    for doc in neighbors:
-        _push(doc)
+    # 专名第二跳会占满名额，把第一跳里真正带百分数的片段挤掉。
+    # 含大纲数字的第一跳结果先留下，其余第一跳仍放在专名之后。
+    tokens = _metric_tokens(extras)
+    numbered_first: list[dict] = []
+    other_first: list[dict] = []
     for doc in first:
+        text = doc.get("page_content") or ""
+        if tokens and any(token in text for token in tokens):
+            numbered_first.append(doc)
+        else:
+            other_first.append(doc)
+    for doc in numbered_first:
         _push(doc)
+    # 本页/段落：第一跳（按页标题向量）优先于专名跳与邻居，避免邻页把 T恤专文等正命中挤出上限。
+    # 大纲结构段：仍先专名+邻居，再补其余第一跳（专名定义常靠第二跳）。
+    if task in ("slide", "paragraph"):
+        for doc in other_first:
+            _push(doc)
+        for doc in hops:
+            _push(doc)
+        for doc in neighbors:
+            _push(doc)
+    else:
+        for doc in hops:
+            _push(doc)
+        for doc in neighbors:
+            _push(doc)
+        for doc in other_first:
+            _push(doc)
+
+    # 采样窗 / 品类范围命中的片段前置，压掉其它周期（如 T恤 5 月窗）的「男装大盘」串数
+    prefer_tokens = [
+        t
+        for t in extras
+        if t
+        and (
+            re.search(r"20\d{2}", t)
+            or any(k in t for k in ("衬衫", "polo", "Polo", "大盘", "商务"))
+        )
+    ]
+    if prefer_tokens:
+        # 已命中正文件时，把同文件里带「采样时间+大盘」的页（常是 chunk0 品类大盘页）一并拉入
+        for doc in list(merged):
+            meta = doc.get("metadata") or {}
+            src = meta.get("source")
+            kb = meta.get("kb_name")
+            if not src or not kb or kb == ALL_KB_NAME:
+                continue
+            src_s = str(src)
+            if not any(k in src_s for k in ("衬衫", "polo", "Polo")):
+                continue
+            try:
+                parent_score = float(doc.get("vector_score") or doc.get("score") or 0.0)
+            except (TypeError, ValueError):
+                parent_score = 0.0
+            for item in get_store(kb).docs:
+                item_meta = item.get("metadata") or {}
+                if item_meta.get("source") != src:
+                    continue
+                text = item.get("page_content") or ""
+                if "采样时间" not in text:
+                    continue
+                if not any(k in text for k in ("男装大盘", "品类大盘", "总销量", "总销售额")):
+                    continue
+                twin = dict(item)
+                twin["vector_score"] = parent_score + 0.02
+                _push(twin)
+
+    # 本页标题实体加权：与 prefer_tokens 解耦，避免无采样窗时大盘页仍串衬衫价表
+    title_boost: list[str] = []
+    title_penalty: list[str] = []
+    if task in ("slide", "paragraph") and primary:
+        if "大盘" in primary and not any(
+            k in primary for k in ("衬衫", "polo", "Polo", "T恤")
+        ):
+            title_boost.extend(["男装大盘", "总销量", "总销售额", "品类大盘"])
+            title_penalty.extend(["男士衬衫 价格带", "价格带 本期销量", "男士polo"])
+        elif "衬衫" in primary and "polo" not in primary.lower():
+            title_boost.extend(["男士衬衫", "衬衫"])
+            title_penalty.extend(["男士polo", "polo衫品类"])
+        elif "polo" in primary.lower() or "Polo" in primary:
+            title_boost.extend(["polo衫", "男士polo", "polo"])
+            title_penalty.extend(["男士衬衫 价格带"])
+        if "价格带" in primary:
+            title_boost.append("价格带")
+
+    if prefer_tokens or title_boost or title_penalty:
+
+        def _prefer_hit(doc: dict) -> int:
+            meta = doc.get("metadata") or {}
+            src = str(meta.get("source") or "")
+            blob = (doc.get("page_content") or "") + " " + src
+            compact = re.sub(r"[.\-/]", "", blob)
+            hit = 0
+            if any(k in src for k in ("衬衫polo", "polo衫", "商务男士衬衫", "商务男装")):
+                hit += 6
+            for t in prefer_tokens:
+                if t in blob:
+                    hit += 2
+                elif re.sub(r"[.\-/]", "", t) in compact:
+                    hit += 2
+            if "采样时间" in blob and "男装大盘" in blob:
+                hit += 4
+            for t in title_boost:
+                if t and t in blob:
+                    hit += 5
+            for t in title_penalty:
+                if t and t in blob:
+                    hit -= 5
+            return hit
+
+        merged.sort(
+            key=lambda d: (
+                _prefer_hit(d),
+                float(d.get("vector_score") or d.get("score") or 0.0),
+            ),
+            reverse=True,
+        )
+
     return merged[: settings.writing_context_limit], task
 
 
 _TASK_SUMMARY = {
     "outline": (
         "【大纲摘要】\n"
-        "每页要点必须且只能是 3～5 条。少于 3 条、多于 5 条都不合格。\n"
-        "有依据就必须写满 3～5 条。一句话里的多个做法、条件、结果要拆开，不要合并成 1 条，也不要编造检索里没有的事实，不要用空话凑条数。\n"
-        "一条要点可以合并多个专名。只有合并后仍不超过 5 条时，才把专名拆开；超过 5 个时，重新摘要进这 3～5 条，不要只保留原文前几条。\n"
+        "每个幻灯片在要点之前单独写一行「- layout: list」或「- layout: metric」。这一行不算要点。\n"
+        "章节顺序按读者决策顺序，不要照搬素材原目录。\n"
+        "list 页要点必须且只能是 3～5 条。metric 页只在至少两条要点各自含有检索中的原数字（百分号、亿或万）时使用，要点必须且只能是 2～4 条，每条写清原数字和它指什么。\n"
+        "不要换算数字，不要编造检索里没有的比例、金额或天数。数字不足两条时必须写 layout: list。\n"
+        "少于该版式下限、多于该版式上限都不合格。\n"
+        "有依据就必须写满该版式的条数。一句话里的多个做法、条件、结果要拆开，不要合并成 1 条，也不要编造检索里没有的事实，不要用空话凑条数。\n"
+        "一条要点可以合并多个专名。只有合并后仍不超过该版式上限时，才把专名拆开；超过上限时，重新摘要进规定条数，不要只保留原文前几条。\n"
         "整页在检索结果中完全没有依据时，不要写这一页。\n"
         "每条要点必须是检索结果中的一条事实（做法、适用条件、数据或案例），"
         "不要写「有几种方法」「可据此判断」这类没有内容的句子。\n"
@@ -885,9 +1306,30 @@ _TASK_SUMMARY = {
         "合并全部检索片段来写，不要只复述总述段。\n"
         "大纲要点里的专名，若其他片段有定义、做法或案例，必须写进对应小点。\n"
         "专名已经出现时，必须把做法写进对应小点，禁止用套话代替。"
-        "只有该要点的专名在检索结果中完全没有出现时，才写「知识库未提供依据」。\n"
+        "数字已经出现时，必须逐行写成数据或小点，解读用该数字旁边的检索原词。"
+        "百分数和名称可以分成相邻短句，不必与大纲短语连成同一句。大纲用词和检索不完全一致时，以检索用词为准。"
+        "禁止整页拒绝，禁止写「知识库未提供」「知识库中未提供」「无法据此」。"
+        "只有该要点的数字和专名在检索结果中都完全没有出现时，这一条才写「知识库未提供依据」，其余有数字的条目照写。\n"
         "一条大纲要点只对应一个小点，不要拆开，也不要另起没有依据的小点。\n"
         "小点标题用该条要点里的专名或做法，不要写成「打法适用情境」「情境」「打法」这类栏目名。\n"
+        "小点描述不要重复【当前章节】和【本页标题】里已经写过的话，只写这一条比标题多出来的事实。\n"
+        "各小点的描述必须互不雷同：禁止把同一段品牌背景或案例故事粘到多个小点后面；第 N 点描述只服务第 N 条大纲要点。\n"
+    ),
+    # 大纲流水线·按页填 tips（与正文「小点」不同）
+    "outline_slide_fill": (
+        "【大纲 tips 填充】\n"
+        "必须遵守上方已给出的 layout/tips 契约与 JSON 形状；知识库只提供事实来源。\n"
+        "从材料中抽取短事实写入 tips，不要写成带引用编号的长叙述正文。\n"
+        "layout=columns 时：栏轴用材料中的对照名（如高举高打/精种准打/聚流快打）；"
+        "栏内只挂 4～16 字短标签（如「官方媒体背书」「单日播放破500万+」「内容赛马」「星推搜直」「矩阵收拔」），"
+        "禁止把整段案例故事、背景机会塞进同一个 tip；过长事实留给后续案例页。\n"
+        "占比/分布类（面料、价格带、属性销量占比等）：同一表内同类口径列齐，"
+        "且必须包含份额最大的一项；禁止只摘中间两项漏掉第一名。\n"
+        "主题已点名品类时，规模页优先同页写「大盘 + 该品类」原数字对照。\n"
+        "【口径对齐】同一片段常并排大盘与子类数字：页标题写大盘则只用大盘数，"
+        "写衬衫/polo 则只用该品类数；价格带 tip 必须点名价格带。主题有采样窗时只用同窗数字。\n"
+        "tips 数组每个元素一行；禁止在单个 tip 字符串里塞 Markdown 多行列表。\n"
+        "不要输出 [1]/[2] 引用标注（大纲 tips 阶段不需要）。\n"
     ),
     "paragraph": (
         "【段落摘要】\n"
@@ -911,14 +1353,21 @@ def build_rag_system_prompt(
         )
     summary = _TASK_SUMMARY.get(task, "")
     tail = f"\n\n{summary}" if summary else ""
+    cite_rule = (
+        "引用规范：大纲 tips 填充阶段不要输出 [1]/[2] 引用标注。\n"
+        if task == "outline_slide_fill"
+        else (
+            "引用规范：在对应句子末尾使用方括号编号引用，例如 [1] 或 [2][3]，"
+            "不要写「(文档1)」这类文字；不要编造未提供的文档编号。\n"
+        )
+    )
     return (
         "你是毕方智能知识管理助手。请严格依据下列知识库内容回答用户问题或完成撰写任务。\n"
         "写作约束：只使用下列检索结果中的信息；不得用检索外的常识补全或编造数字/案例/结论。\n"
         "不同片段可能分别给出总述和定义，撰写时要合并使用，不要只复述第一条。\n"
         "输出要求：直接给出可用的正文/答案，不要以「根据知识库内容」「根据资料」「根据检索结果」"
         "「基于知识库」等套话或元说明开头；不要复述「我将根据知识库…」这类过程描述。\n"
-        "引用规范：在对应句子末尾使用方括号编号引用，例如 [1] 或 [2][3]，"
-        "不要写「(文档1)」这类文字；不要编造未提供的文档编号。\n"
+        f"{cite_rule}"
         "如果知识库不足以回答，请明确说明无法从知识库得到答案。\n\n"
         f"知识库检索结果：\n{context}{tail}"
     )

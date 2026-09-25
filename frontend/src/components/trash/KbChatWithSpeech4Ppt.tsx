@@ -5,6 +5,7 @@ import {Ppt} from "@/components/DocUtil/ViewItem4Ppt";
 import OutlineRec, {outlineTypeAiPPT} from "@/components/DocUtil/OutlineStore";
 import SpeechToTextButton from "@/components/DocUtil/SpeechToTextButton";
 import {OpenAI} from "openai";
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 
 const chats_init = {
   ZGxiX2p4: {
@@ -135,7 +136,7 @@ const Chat=(props:ChatProps)=>{
         // @ts-ignore
         const completion = await openai.chat.completions.create({
           messages: messages,
-          model: 'glm4:9b-chat-q8_0',
+          model: DEFAULT_LLM_MODEL,
           stream: true,
           // temperature: 0.8,
           // top_p: 1,

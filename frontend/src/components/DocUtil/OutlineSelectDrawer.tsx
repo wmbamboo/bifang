@@ -1,13 +1,14 @@
 import React, {useEffect, useState} from "react";
-import {Button, Col, Divider, Drawer, Flex, message, Modal, Row, Space, Typography} from "antd";
+import {Button, Col, Divider, Drawer, Flex, message, Modal, Row, Space, Typography, Tooltip} from "antd";
 import {ProCard} from "@ant-design/pro-components";
 import MdViewer from "@/components/DocUtil/mdViewer";
 import OutlineRec, {outlineType, outlineTypeAiPPT, outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectRadio from "@/components/DocUtil/OutlineSelectRadio";
-import {ContainerOutlined, ReadOutlined} from "@ant-design/icons";
+import {ContainerOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined} from "@ant-design/icons";
 import {Ppt} from "@/components/DocUtil/ViewItem4Ppt";
 import {Doc} from "@/components/DocUtil/ViewItem4Doc";
 import OutlineUploader from "@/components/DocUtil/OutlineUploader";
+import OutlineTreeEditor from "@/components/DocUtil/OutlineTreeEditor";
 
 interface OutlineSelectDrawerProps {
   open?:boolean,
@@ -34,6 +35,7 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
   const [recIndexDeleted, setRecIndexDeleted] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
   const [olRecs, setOlRecs] = useState(props.outlineRecs);
+  const [listCollapsed, setListCollapsed] = useState(false);
 
   const handleOk = () => {
     props.delFn(recIndexDeleted);
@@ -123,12 +125,62 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
     }
   }, [props.outlineRecs, props.outlineType, props.type, props.focusId]);
 
+  useEffect(() => {
+    if (props.open) setListCollapsed(false);
+  }, [props.open]);
+
+  const isPptOutline =
+    props.outlineType === outlineTypePPT || props.outlineType === outlineTypeAiPPT;
+
+  const onTreeSave = (title: string, markdownBody: string) => {
+    const or = OutlineRec.getRecById(olRecs, currentId);
+    if (!or) {
+      message.error("未找到当前大纲记录");
+      return;
+    }
+    or.outlineName = title;
+    or.outlineContent = markdownBody;
+    OutlineRec.save(props.outlineType, or);
+    const next = [...olRecs];
+    const idx = next.findIndex((r) => r.outlineId === currentId);
+    if (idx >= 0) next[idx] = or;
+    setOlRecs(next);
+  };
+
   let extraUploadButton: React.JSX.Element =<></>
   if(props.cb4ImportOutline) {
     extraUploadButton = <OutlineUploader cb4ImportOutline={props.cb4ImportOutline}/>
   }
-  const extraTitleButton = <div><ContainerOutlined style={{fontSize:"large"}}/><b>&nbsp;大纲标题列表</b></div>
-  const extraOutlineButton=<div><ReadOutlined style={{fontSize:"large"}}/><b>&nbsp;大纲内容</b></div>
+  const extraTitleButton = (
+    <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%'}}>
+      <span><ContainerOutlined style={{fontSize:"large"}}/><b>&nbsp;大纲标题列表</b></span>
+      <Tooltip title="收起列表">
+        <Button
+          type="text"
+          size="small"
+          icon={<MenuFoldOutlined />}
+          onClick={() => setListCollapsed(true)}
+        />
+      </Tooltip>
+    </div>
+  );
+  const extraOutlineButton = (
+    <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+      {listCollapsed ? (
+        <Tooltip title="展开大纲标题列表">
+          <Button
+            type="default"
+            size="small"
+            icon={<MenuUnfoldOutlined />}
+            onClick={() => setListCollapsed(false)}
+          >
+            大纲列表
+          </Button>
+        </Tooltip>
+      ) : null}
+      <span><ReadOutlined style={{fontSize:"large"}}/><b>&nbsp;大纲内容</b></span>
+    </div>
+  );
 
     return (
     <Drawer
@@ -154,23 +206,30 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
         boxShadow
         bodyStyle={{height: '85vh'}}
       >
+        {!listCollapsed ? (
         <ProCard
           title={extraTitleButton}
           subTitle="请选择下列大纲"
-          // extra={extraTitleButton}
-          colSpan="45%"
+          colSpan="38%"
           headerBordered
           headStyle={{backgroundColor:"peachpuff"}}
           bodyStyle={{height: '100%'}}
         >
-          {/*<OutlineSelectRadio type={props.type} outlineRecs={OutlineRec.listRecs(outlineTypePPT)} outlineSelectFn={onOutlineSelected} />*/}
           <Flex vertical={true}>
           <Col span={24}>
             <Row style={{height:'570px', overflowY:'auto'}}>
             <OutlineSelectRadio outlineType={props.outlineType}
-                                outlineRecs={props.outlineRecs}
+                                outlineRecs={olRecs}
                                 focusId={props.focusId}
-                                outlineDeleteFn={deleteConfirm} outlineSelectFn={onOutlineSelected}/>
+                                outlineDeleteFn={deleteConfirm} outlineSelectFn={onOutlineSelected}
+                                outlineRenameFn={(id, name) => {
+                                  setOlRecs((prev) =>
+                                    prev.map((r) =>
+                                      r.outlineId === id ? {...r, outlineName: name} : r,
+                                    ),
+                                  );
+                                }}
+            />
             </Row>
             <Row>
               <Divider type="horizontal" />
@@ -179,16 +238,43 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
           </Col>
           </Flex>
         </ProCard>
+        ) : null}
         <ProCard
           title={extraOutlineButton}
-          colSpan="55%"
+          colSpan={listCollapsed ? "100%" : "62%"}
           headerBordered
           headStyle={{backgroundColor:"peachpuff"}}
           bodyStyle={{height: '100%'}}
         >
-          <Typography style={{height:'750px',overflowY:'auto'}}>
-            <MdViewer source={getContent(currentId)}/>
-          </Typography>
+          <div style={{height:'750px',overflowY:'auto'}}>
+            {isPptOutline ? (
+              currentId ? (
+                <OutlineTreeEditor
+                  key={currentId}
+                  title={OutlineRec.getRecById(olRecs, currentId)?.outlineName || ""}
+                  markdown={
+                    (() => {
+                      const or = OutlineRec.getRecById(olRecs, currentId);
+                      if (!or) return "";
+                      const body = (or.outlineContent || "").trim();
+                      // 仅当没有一级标题时补 `# 名称`；`##` 开头不能当成已有 H1
+                      return /^#\s+(?!#)/.test(body)
+                        ? body
+                        : `# ${or.outlineName}\n${body}`;
+                    })()
+                  }
+                  editable
+                  onSave={onTreeSave}
+                />
+              ) : (
+                <Typography.Text type="secondary">请选择左侧大纲</Typography.Text>
+              )
+            ) : (
+              <Typography style={{height:'750px',overflowY:'auto'}}>
+                <MdViewer source={getContent(currentId)}/>
+              </Typography>
+            )}
+          </div>
         </ProCard>
       </ProCard>
       {showConfirm && (

@@ -1,7 +1,8 @@
 import {CollapseProps} from "antd/es/collapse/Collapse";
-import {Collapse, Tag, Input, message, Button, Tooltip,Image} from "antd";
+import {Collapse, Tag, Input, message, Button, Tooltip, Image, Space} from "antd";
 import React, {useState} from "react";
 import {Slide} from "@/components/DocUtil/ViewItem4Ppt";
+import {layoutLabel} from "@/components/DocUtil/outlineSerialize";
 import {
   CheckCircleTwoTone, CompassTwoTone,
   EditTwoTone,
@@ -122,7 +123,14 @@ const EditablePromptCollapse4Ppt: React.FC <EditablePromptCollapseProps>=(props:
       cItemsSubNew.push(
         {
           key: slide.key,
-          label: slide.label,
+          label: (
+            <Space size={6}>
+              <span>{slide.label}</span>
+              <Tag color={slide.layout === "metric" ? "geekblue" : slide.layout === "metric_list" ? "purple" : "default"}>
+                {layoutLabel(slide.layout)}
+              </Tag>
+            </Space>
+          ),
           // eslint-disable-next-line react/no-unescaped-entities
           children: props.activeKey===props.editKey && props.editKey===slide.key ?  contentEditor(slide):contentShower(slide) ,
           style: panelStyle,

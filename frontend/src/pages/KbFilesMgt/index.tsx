@@ -267,6 +267,43 @@ const KnowledgeBaseFile: React.FC = () => {
     }
   };
 
+  /** 批量向量化更新（勾选多文件 → 一个异步任务） */
+  const handleBatRevectorize = () => {
+    if (!curSelectKbName) {
+      message.warning('请先选择知识库');
+      return;
+    }
+    if (!selectedRowKeys.length) {
+      message.warning('请先勾选要更新的文件');
+      return;
+    }
+    const names = selectedRowKeys.map(String);
+    Modal.confirm({
+      title: '批量向量化更新',
+      content: `确认将已选 ${names.length} 个文件重新解析/OCR 并写入向量库吗？任务可在「上传任务管理」中查看进度。`,
+      okText: '开始更新',
+      onOk: async () => {
+        try {
+          const res = await revectorizeUploadTask({
+            knowledge_base_name: curSelectKbName,
+            file_names: names,
+          });
+          if (res?.code === 200 && res.data?.id) {
+            message.success(`已创建批量向量化任务（${names.length} 个文件）`);
+            openTask(res.data.id);
+            setMinimized(false);
+            setPanelOpen(true);
+            setSelectedRowKeys([]);
+            return;
+          }
+          message.error(res?.msg || '创建批量向量化任务失败');
+        } catch {
+          message.error('批量向量化更新失败');
+        }
+      },
+    });
+  };
+
  // 表格列定义
  const columns: ProColumns<API.KnowledgeBaseFile>[] = [
     {
@@ -462,7 +499,16 @@ const KnowledgeBaseFile: React.FC = () => {
             上传任务管理
           </Button>,
           <Button
+            type="primary"
+            key="batRevectorize"
+            onClick={handleBatRevectorize}
+            disabled={!selectedRowKeys.length || !curSelectKbName}
+          >
+            批量向量化更新
+          </Button>,
+          <Button
           type="primary"
+          danger
           key="batDel"
           onClick={handleBatDelete}
           disabled={!selectedRowKeys.length}

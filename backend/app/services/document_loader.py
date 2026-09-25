@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -96,7 +97,7 @@ def _read_pdf(
             for i in range(doc.page_count):
                 t = (doc.load_page(i).get_text("text") or "").strip()
                 if t:
-                    parts.append(t)
+                    parts.append(f"[第{i + 1}页]\n{t}")
             return "\n\n".join(parts)
         finally:
             doc.close()
@@ -122,21 +123,36 @@ def _read_pptx(path: Path) -> str:
 
 
 def split_text(text: str, chunk_size: int = 500, chunk_overlap: int = 80) -> list[str]:
-    text = (text or "").strip()
-    if not text:
-        return []
-    paragraphs = [p.strip() for p in text.replace("\r\n", "\n").split("\n") if p.strip()]
-    chunks: list[str] = []
+    return [c for c, _ in split_text_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)]
+
+
+def _split_plain_text(
+    body: str,
+    *,
+    page: Optional[int],
+    chunk_size: int,
+    chunk_overlap: int,
+) -> list[tuple[str, dict]]:
+    """普通正文按段/长度切；不含表。"""
+    paragraphs = [p.strip() for p in body.split("\n") if p.strip()]
+    out: list[tuple[str, dict]] = []
     buf = ""
+
+    def _meta(kind: str = "text") -> dict:
+        m: dict = {"kind": kind}
+        if page is not None:
+            m["page"] = page
+        return m
+
     for p in paragraphs:
         if len(buf) + len(p) + 1 <= chunk_size:
             buf = f"{buf}\n{p}".strip() if buf else p
             continue
         if buf:
-            chunks.append(buf)
+            out.append((buf, _meta()))
         if len(p) <= chunk_size:
-            if chunks and chunk_overlap > 0:
-                prev = chunks[-1]
+            if out and chunk_overlap > 0:
+                prev = out[-1][0]
                 overlap = prev[-chunk_overlap:]
                 buf = f"{overlap}\n{p}".strip()
             else:
@@ -145,9 +161,72 @@ def split_text(text: str, chunk_size: int = 500, chunk_overlap: int = 80) -> lis
             start = 0
             while start < len(p):
                 end = start + chunk_size
-                chunks.append(p[start:end])
+                out.append((p[start:end], _meta()))
                 start = max(end - chunk_overlap, end)
             buf = ""
     if buf:
-        chunks.append(buf)
-    return chunks
+        out.append((buf, _meta()))
+    return out
+
+
+def split_text_with_meta(
+    text: str,
+    chunk_size: int = 500,
+    chunk_overlap: int = 80,
+) -> list[tuple[str, dict]]:
+    """切块并尽量继承页码。识别 `[第N页]` / `[幻灯片N]` 标记。
+
+    表格整块入 chunk（kind=table），不按 token 数切开——根治表头/数据分家。
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    page_re = re.compile(r"^\[(?:第|幻灯片)?\s*(\d+)\s*页?\]\s*", re.M)
+    parts: list[tuple[Optional[int], str]] = []
+    cur_page: Optional[int] = None
+    buf_lines: list[str] = []
+
+    def _flush() -> None:
+        nonlocal buf_lines, cur_page
+        body = "\n".join(buf_lines).strip()
+        if body:
+            parts.append((cur_page, body))
+        buf_lines = []
+
+    for line in text.replace("\r\n", "\n").split("\n"):
+        m = page_re.match(line.strip())
+        if m:
+            _flush()
+            cur_page = int(m.group(1))
+            rest = page_re.sub("", line.strip(), count=1).strip()
+            if rest:
+                buf_lines.append(rest)
+            continue
+        if line.strip():
+            buf_lines.append(line.strip())
+    _flush()
+
+    if not parts:
+        parts = [(None, text)]
+
+    from app.services.table_structure import iter_page_segments
+
+    out: list[tuple[str, dict]] = []
+    for page, body in parts:
+        for kind, seg, _s, _e in iter_page_segments(body):
+            if kind == "table":
+                meta: dict = {"kind": "table", "atomic": True}
+                if page is not None:
+                    meta["page"] = page
+                out.append((seg, meta))
+            else:
+                out.extend(
+                    _split_plain_text(
+                        seg,
+                        page=page,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                    )
+                )
+    return out

@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     default_score_threshold: float = 0.5
 
     # 大纲与正文：按向量取前 N 条。混合排序容易把封面、爆款标题页顶上来。
-    writing_vector_top_k: int = 10
+    writing_vector_top_k: int = 12
     # 每个片段最多取几个引号专名
     writing_quote_per_chunk: int = 3
     # 第二跳专名个数上限
@@ -47,10 +47,16 @@ class Settings(BaseSettings):
     # 专名第二跳的余弦门槛。短专名对长片段常只有 0.3～0.45，0 表示不按分数过滤，原文包含该专名才保留。
     writing_name_score_threshold: float = 0.0
     # 最终送进模型的片段上限
-    writing_context_limit: int = 12
+    writing_context_limit: int = 14
 
     # OCR：扫描件 / 图表文字混排 PDF
     ocr_enabled: bool = True
+    # paddleocr_vl（PaddleOCR-VL，版面/表格更强）| rapidocr（轻量回退）
+    ocr_engine: str = "paddleocr_vl"
+    # PaddleOCR-VL 管线版本：v1 | v1.5 | v1.6
+    ocr_vl_pipeline_version: str = "v1.5"
+    # 推理后端：transformers（与 torch 共存，推荐）| paddle（需 paddlepaddle-gpu，易与 torch CUDA 冲突）
+    ocr_vl_engine: str = "transformers"
     # 单页原生文字少于此字数则触发 OCR
     ocr_min_chars_per_page: int = 40
     # 渲染倍率（约等于 dpi/72）；2.0 ≈ 144dpi，兼顾速度与识别率

@@ -6,6 +6,7 @@ import { OpenAI } from 'openai';
 import * as React from "react";
 import SpeechToTextButton from "@/components/DocUtil/SpeechToTextButton";
 import ChatControlBar, {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 
 //使用毕方后台提供的接口，
 const openai = new OpenAI({
@@ -75,7 +76,7 @@ const Welcome: React.FC = () => {
         request={async (messages: any) => {
           const completion = await openai.chat.completions.create({
             messages: messages,
-            model: 'glm4:9b-chat-q8_0',
+            model: DEFAULT_LLM_MODEL,
             stream: true,
           });
 

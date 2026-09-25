@@ -17,6 +17,7 @@ import OutlineRec, {outlineTypeDOC, outlineTypePPT} from "@/components/DocUtil/O
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import KnowledgeBaseSelector, {opStackStyle, opBtnStyle, opKbTagStyle, ALL_KB_NAME, kbLabel} from "@/components/DocUtil/kbSelectorModal";
 import {CompassTwoTone, FileWordTwoTone, FolderOpenTwoTone} from "@ant-design/icons";
+import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 
 
 // 定义一个markdown字串，当localstorage中一个文档也没有的情况下暂时使用。
@@ -230,7 +231,7 @@ const KbOutlineGenDoc: React.FC = () => {
     //---------------------------------------------
     const buildMsg=(prompt:string )=>{
       setDownloadable(false);
-      const msg={messages:[{content:WRITING_SYSTEM_PROMPT,role:"system",name:"string"},{content: prompt,role:"user",name:"string"}],model:"glm4:9b-chat-q8_0",frequency_penalty:0,stream:false,temperature:0.7,top_logprobs:0,top_p:0}
+      const msg={messages:[{content:WRITING_SYSTEM_PROMPT,role:"system",name:"string"},{content: prompt,role:"user",name:"string"}],model:DEFAULT_LLM_MODEL,frequency_penalty:0,stream:false,temperature:0.7,top_logprobs:0,top_p:0}
       return JSON.stringify(msg);
     }
 

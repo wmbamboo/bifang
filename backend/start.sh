@@ -17,4 +17,6 @@ fi
 
 mkdir -p data/knowledge_base
 export PYTHONPATH="$(pwd)${PYTHONPATH:+:$PYTHONPATH}"
+# 跳过 PaddleOCR 模型源连通性探测，加快冷启动
+export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}"
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port 7861 --reload

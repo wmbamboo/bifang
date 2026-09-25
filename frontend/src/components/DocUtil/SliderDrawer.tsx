@@ -1,7 +1,7 @@
 import React, {useEffect} from 'react';
 import { Button, Col, Drawer, Flex, Input, Row, Space, Typography, Alert, Card, message } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
-import { Slide, ViewItem4Ppt, PPT_ITEM_TITLE_MAX, PPT_ITEM_TITLE_MIN, PPT_ITEM_DESC_MAX, PPT_ITEM_DESC_MIN, validateSlideViewItems } from "@/components/DocUtil/ViewItem4Ppt";
+import { Slide, ViewItem4Ppt, PPT_ITEM_TITLE_MAX, PPT_ITEM_TITLE_MIN, PPT_ITEM_DESC_MAX, PPT_ITEM_DESC_MIN, PPT_METRIC_TITLE_MIN, PPT_METRIC_TITLE_MAX, PPT_METRIC_DESC_MIN, PPT_METRIC_DESC_MAX, validateSlideViewItems, splitMetricListTips, parseColumnBlocks, alignItemsToColumnSlots } from "@/components/DocUtil/ViewItem4Ppt";
 
 const { Title, Text } = Typography;
 
@@ -31,9 +31,19 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
     if (!props.open) return;
     const existing = (props.slide?.viewItems || [])
       .map((vi) => ({ title: vi.title || '', content: vi.content || '' }));
-    const next = existing.length > 0
+    let next = existing.length > 0
       ? existing
       : [emptyItem(), emptyItem(), emptyItem()];
+    // 分栏：打开时按大纲槽位对齐，去掉栏标题伪条目
+    if (
+      (props.slide?.layout === 'columns' || props.slide?.layout === 'metric_columns') &&
+      existing.length > 0
+    ) {
+      const aligned = alignItemsToColumnSlots(props.slide?.subTitle || '', existing);
+      if (aligned.length) {
+        next = aligned.map((s) => ({ title: s.title, content: s.content }));
+      }
+    }
     itemsRef.current = next;
     setItems(next);
     setRawDraft(props.slide?.content || '');
@@ -48,12 +58,18 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
   };
 
   const addItem = () => {
-    setItems((prev) => (prev.length >= MAX_ITEMS ? prev : [...prev, emptyItem()]));
+    setItems((prev) => {
+      const layout = props.slide?.layout;
+      const cap = layout === 'metric' ? 4 : layout === 'metric_list' ? 8 : MAX_ITEMS;
+      return prev.length >= cap ? prev : [...prev, emptyItem()];
+    });
   };
 
   const removeItem = (index: number) => {
     setItems((prev) => {
-      if (prev.length <= MIN_ITEMS) return prev;
+      const layout = props.slide?.layout;
+      const floor = layout === 'metric' ? 2 : layout === 'metric_list' ? 4 : MIN_ITEMS;
+      if (prev.length <= floor) return prev;
       return prev.filter((_, i) => i !== index);
     });
   };
@@ -70,7 +86,19 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
 
   const onSave=()=>{
     const current = itemsRef.current;
-    const err = validateSlideViewItems(current);
+    const layout = props.slide?.layout === 'metric'
+      ? 'metric'
+      : props.slide?.layout === 'metric_list'
+        ? 'metric_list'
+        : props.slide?.layout === 'columns'
+          ? 'columns'
+          : props.slide?.layout === 'metric_columns'
+            ? 'metric_columns'
+            : 'list';
+    const metricCount = layout === 'metric_list' || layout === 'metric_columns'
+      ? splitMetricListTips(props.slide?.subTitle || '').metrics.length
+      : undefined;
+    const err = validateSlideViewItems(current, layout, { metricCount });
     if (err) {
       message.error(err);
       return;
@@ -80,6 +108,32 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
       props.closeFn();
     }
   };
+
+  const layout = props.slide?.layout === 'metric'
+    ? 'metric'
+    : props.slide?.layout === 'metric_list'
+      ? 'metric_list'
+      : props.slide?.layout === 'columns'
+        ? 'columns'
+        : props.slide?.layout === 'metric_columns'
+          ? 'metric_columns'
+          : 'list';
+  const metricCount = layout === 'metric_list' || layout === 'metric_columns'
+    ? splitMetricListTips(props.slide?.subTitle || '').metrics.length
+    : 0;
+  const colBlocks =
+    layout === 'columns' || layout === 'metric_columns'
+      ? parseColumnBlocks(props.slide?.subTitle || '')
+      : [];
+  const itemColMeta =
+    colBlocks.length >= 2
+      ? alignItemsToColumnSlots(
+          props.slide?.subTitle || '',
+          items.map((it) => ({ title: it.title, content: it.content })),
+        )
+      : [];
+  const maxItems = layout === 'metric' ? 4 : layout === 'metric_list' ? 8 : layout === 'columns' || layout === 'metric_columns' ? 20 : MAX_ITEMS;
+  const minItems = layout === 'metric' ? 2 : layout === 'metric_list' ? 4 : layout === 'columns' || layout === 'metric_columns' ? 2 : MIN_ITEMS;
 
   return (
     <>
@@ -107,7 +161,13 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
             type="info"
             showIcon
             message="结构化编辑"
-            description={`每条概括标题 ${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX} 字，具体描述 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字。保存后写回幻灯片，用于 PPT 模板填充。`}
+            description={layout === 'metric'
+              ? `数据卡：每条数字 ${PPT_METRIC_TITLE_MIN}～${PPT_METRIC_TITLE_MAX} 字（须含百分号、亿或万），解读 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字，共 2～4 条。`
+              : layout === 'metric_list'
+                ? `数据卡+要点：前 ${metricCount || 2}～4 条为数据卡（原数字+短解读），其后为列表要点（概括+描述），合计最多 8 条。`
+                : layout === 'columns' || layout === 'metric_columns'
+                  ? `分栏短条目：按栏顺序编辑短词/短句（宜 4～16 字）；栏标题与副标来自大纲，此处只改条目。`
+                  : `每条概括标题 ${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX} 字，具体描述 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字。保存后写回幻灯片，用于 PPT 模板填充。`}
           />
           <Row gutter={28} style={{width: '100%'}}>
             <Col span={24}>
@@ -116,15 +176,27 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
             </Col>
           </Row>
 
-          <Title level={5} style={{marginBottom: 0}}>小项列表</Title>
+          <Title level={5} style={{marginBottom: 0}}>
+            {layout === 'columns' || layout === 'metric_columns' ? '分栏条目' : '小项列表'}
+          </Title>
           <Space direction="vertical" style={{width: '100%'}} size={10}>
-            {items.map((item, index) => (
+            {items.map((item, index) => {
+              const asMetric = layout === 'metric' || ((layout === 'metric_list' || layout === 'metric_columns') && index < metricCount);
+              const asColumn = (layout === 'columns' || layout === 'metric_columns') && !asMetric;
+              const tMin = asMetric ? PPT_METRIC_TITLE_MIN : asColumn ? 2 : PPT_ITEM_TITLE_MIN;
+              const tMax = asMetric ? PPT_METRIC_TITLE_MAX : asColumn ? 16 : PPT_ITEM_TITLE_MAX;
+              const dMin = asMetric ? PPT_METRIC_DESC_MIN : asColumn ? 0 : PPT_ITEM_DESC_MIN;
+              const dMax = asMetric ? PPT_METRIC_DESC_MAX : asColumn ? 28 : PPT_ITEM_DESC_MAX;
+              const cardTitle = asColumn && itemColMeta[index]
+                ? itemColMeta[index].label
+                : `第 ${index + 1} 点${layout === 'metric_list' ? (asMetric ? '（数据卡）' : '（要点）') : ''}`;
+              return (
               <Card
                 key={`edit-item-${index}`}
                 size="small"
-                title={`第 ${index + 1} 点`}
+                title={cardTitle}
                 extra={
-                  items.length > MIN_ITEMS ? (
+                  items.length > minItems ? (
                     <MinusCircleOutlined
                       onClick={() => removeItem(index)}
                       style={{color: '#ff4d4f'}}
@@ -134,37 +206,40 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
               >
                 <Space direction="vertical" style={{width: '100%'}} size={8}>
                   <div>
-                    <Text type="secondary">概括标题（{item.title.trim().length}/{PPT_ITEM_TITLE_MAX}，须 {PPT_ITEM_TITLE_MIN}～{PPT_ITEM_TITLE_MAX} 字）</Text>
+                    <Text type="secondary">{asMetric ? '原数字' : asColumn ? '短条目' : '概括标题'}（{item.title.trim().length}/{tMax}{asColumn ? '' : `，须 ${tMin}～${tMax} 字`}）</Text>
                     <Input
                       value={item.title}
-                      maxLength={PPT_ITEM_TITLE_MAX}
-                      placeholder={`${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX} 字`}
+                      maxLength={tMax}
+                      placeholder={asColumn ? '4～16 字短词/短句' : `${tMin}～${tMax} 字`}
                       onChange={(e) => updateItem(index, { title: e.target.value })}
                     />
                   </div>
+                  {!asColumn || item.content ? (
                   <div>
-                    <Text type="secondary">具体描述（{item.content.trim().length}/{PPT_ITEM_DESC_MAX}，须 {PPT_ITEM_DESC_MIN}～{PPT_ITEM_DESC_MAX} 字）</Text>
+                    <Text type="secondary">{asMetric ? '数字解读' : asColumn ? '补充说明（可选）' : '具体描述'}（{item.content.trim().length}/{dMax}{asColumn ? '' : `，须 ${dMin}～${dMax} 字`}）</Text>
                     <Input.TextArea
                       value={item.content}
-                      maxLength={PPT_ITEM_DESC_MAX}
-                      autoSize={{ minRows: 2, maxRows: 5 }}
-                      placeholder={`${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字`}
+                      maxLength={dMax}
+                      autoSize={{ minRows: asColumn ? 1 : 2, maxRows: 5 }}
+                      placeholder={asColumn ? '可留空' : `${dMin}～${dMax} 字`}
                       onChange={(e) => updateItem(index, { content: e.target.value })}
                     />
                   </div>
+                  ) : null}
                 </Space>
               </Card>
-            ))}
+              );
+            })}
           </Space>
 
           <Button
             type="dashed"
             block
             icon={<PlusOutlined />}
-            disabled={items.length >= MAX_ITEMS}
+            disabled={items.length >= maxItems}
             onClick={addItem}
           >
-            添加小项（最多 {MAX_ITEMS} 条）
+            添加小项（最多 {maxItems} 条）
           </Button>
 
           <Title level={5} style={{marginBottom: 0}}>原始文本（可选）</Title>

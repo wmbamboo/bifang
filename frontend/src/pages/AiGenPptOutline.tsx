@@ -8,7 +8,7 @@ import OutlineRec, {outlineTypeAiPPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Ppt from "@/components/ChatUtil/ChatWithSpeech4Ppt";
-import {PPT_OUTLINE_TEMPLATE} from "@/components/ChatUtil/OutlinePromptComposer";
+import {composePptOutlineUserMessage} from "@/components/ChatUtil/OutlinePromptComposer";
 import {message, Button} from "antd";
 
 const AiGenPptOutline: React.FC = () => {
@@ -31,17 +31,28 @@ const AiGenPptOutline: React.FC = () => {
   //----------------------------------------------------------------------------------------------
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
-  const outlineGen_template_init = PPT_OUTLINE_TEMPLATE;
-  /***预设对话消息，title可以不填，自动提取content中的主题（注意格式：主题是【】）****/
+  /** 样例只带主题短句；骨架/领域由对话层注入 system */
   const buttonMessages_init:ButtonMessage[]=[
     {title: "",
-      content:'撰写Ppt大纲，主题是【帮助选品师筛选出抖音男装爆品】'+outlineGen_template_init
+      content: composePptOutlineUserMessage(
+        '帮助选品师，通过采样时间20240319-20240417的数据筛选抖音商务男装衬衫/polo衫爆品',
+        {
+          role: '选品师',
+          object: '商务男装衬衫/polo衫爆品',
+          scope: '商务男装衬衫/polo衫',
+          domainPack: 'selection',
+        },
+      )
     },
     {title: '',
-      content:'撰写Ppt大纲，主题是【深空探测图谱项目研制总结报告】，要求遵循GJB438B的要求，' +outlineGen_template_init
+      content: composePptOutlineUserMessage('深空探测图谱项目研制总结报告', {
+        role: '研制人员', object: '深空探测图谱项目研制总结报告', scope: '', domainPack: 'report',
+      }) + '要求遵循GJB438B的要求。'
     },
     {title: '',
-      content:'撰写Ppt大纲，主题是【万科怎么了】' +outlineGen_template_init
+      content: composePptOutlineUserMessage('万科怎么了', {
+        role: '读者', object: '万科怎么了', scope: '', domainPack: 'generic',
+      })
     }
   ]
   const openai = new OpenAI({

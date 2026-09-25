@@ -236,30 +236,19 @@ export class Doc{
   }*/
 
   /**
-   * 从生成的message中获取Word大纲标题
+   * 从生成的message中获取Word大纲标题（仅一级标题 `# `，不含 `##`）
    * @param msg
    */
   static getTitleFromMsg(msg:string){
-    // const regTitle =/(?:^# )((.*)\n\n)/g
-    const regTitle =/^# ((.*)\n{1,2})/g
-    const matchTitle = msg.matchAll(regTitle);
-    const rTitle=[...matchTitle].map(m=>m.slice(1));
-    let title=""
-    if(rTitle.length>0) {
-      title = rTitle[0][0];
-    }else{
-      console.log("rTitle's len:"+rTitle.length);
-    }
-    return title.trim();
+    const m = (msg || "").match(/^#\s+(?!#)(.+?)(?:\r?\n|$)/);
+    return m ? m[1].trim() : "";
   }
 
   /**
-   * 从生成的message中获取DOC大纲内容。
-   * @param msg
+   * 去掉文首一级标题，保留章节。禁止用 "# "+title 做全局替换（会误伤「## 章节」）。
    */
   static getContentFromMsg=(msg:string)=>{
-    let content=msg.replace("# "+Doc.getTitleFromMsg(msg),"");
-    return content.trim();
+    return (msg || "").replace(/^#\s+(?!#).*(?:\r?\n+|$)/, "").trim();
   }
 
   /**

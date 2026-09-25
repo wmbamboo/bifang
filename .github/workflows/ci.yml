@@ -20,9 +20,9 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - name: 忠实度金标（改闸门必看）
-        run: npx jest --ci tests/fidelityGold.test.ts --runInBand
-      - name: 全量测试
+      - name: 忠实度金标 + 元话语/栏轴闸（改闸门必看）
+        run: npx jest --ci --runInBand --testPathPattern='(fidelityGold|outlineMetaCoverage|priceBandTokenFidelity)'
+      - name: 全量测试（已忽略未迁移遗留用例）
         run: npx jest --ci --runInBand
 
   backend-smoke:

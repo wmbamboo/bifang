@@ -146,7 +146,7 @@ export function normalizeMetricToken(raw: string): string {
     .replace(/％/g, "%");
 }
 
-/** 从 tip 抽出需核对的数字 token（带单位优先）；日期/采样窗数字不抽 */
+/** 从 tip 抽出需核对的数字 token（带单位优先）；日期/采样窗/价格带边界数字不抽 */
 export function extractMetricTokens(tip: string): string[] {
   const s = String(tip || "");
   const out: string[] = [];
@@ -158,11 +158,30 @@ export function extractMetricTokens(tip: string): string[] {
     if (!num) continue;
     // 年份、日期片段不当指标（采样窗 2024.03.19-04.17）
     if (isDateLikeNumberToken(num, unit, s, m.index)) continue;
+    // 价格带区间边界不当指标（¥50-100 里的 50/100）
+    if (isPriceBandBoundToken(num, unit, s, m.index)) continue;
     const token = normalizeMetricToken(num + unit);
     if (token && !out.includes(token)) out.push(token);
     if (num && !out.includes(num)) out.push(num);
   }
   return out;
+}
+
+/**
+ * 价格带区间边界：禁止进忠实度校验。
+ * 例：`polo衫|¥50-100|172.6万` 里的 50/100 是区间标签，不是销量/销售额。
+ * 万/亿/% 单位一律不当边界（真指标）。
+ */
+export function isPriceBandBoundToken(
+  num: string,
+  unit: string,
+  tip: string,
+  indexInTip: number = -1,
+): boolean {
+  if (unit && /[%％亿万]/.test(unit)) return false;
+  const n = String(num || "").trim();
+  if (!n || indexInTip < 0) return false;
+  return numberInsidePriceBandSpan(tip, indexInTip, n.length);
 }
 
 /**
@@ -228,6 +247,26 @@ function numberInsideDateSpan(
   DATE_SPAN_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = DATE_SPAN_RE.exec(s))) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (index >= start && index + len <= end) return true;
+  }
+  return false;
+}
+
+/** tip 内价格带区间跨度（与 PRICE_BAND_TOKEN_RE 同形，全局扫） */
+const PRICE_BAND_SPAN_RE = new RegExp(PRICE_BAND_TOKEN_RE.source, "g");
+
+function numberInsidePriceBandSpan(
+  tip: string,
+  index: number,
+  len: number,
+): boolean {
+  const s = String(tip || "");
+  if (!s || index < 0) return false;
+  PRICE_BAND_SPAN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = PRICE_BAND_SPAN_RE.exec(s))) {
     const start = m.index;
     const end = start + m[0].length;
     if (index >= start && index + len <= end) return true;

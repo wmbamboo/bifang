@@ -133,9 +133,12 @@ export const PPT_OUTLINE_LAYOUT_RULES: Record<FillLayoutKey, string> = {
     '若发现自己在写 col:项1、col:项2、col:项3… 且栏下无条目 → 应改用 list，或合并成 2～3 个真正的轴再写条目。\n' +
     metaDiagnosticBanClause() +
     '。\n' +
-    '正例：["col: 高举高打","colSub: 预算前置拉声量","官方媒体背书","单日播放破500万+","col: 精种准打","colSub: 圈层强种草","数据定位破圈","内容赛马","col: 聚流快打","colSub: 预算集中做爆点","星推搜直","矩阵收拔"]\n' +
-    '反例：多开一栏「col: 星推搜直种收一体」（轴下玩法升成第 4 轴）。\n' +
-    '反例：["col: 高举高打——长段定义\\n- 条目1\\n- 条目2"]（整段塞进一个 tip）。\n' +
+    '正例（轴名须能在检索证据中找到痕迹；勿照抄营销口号当轴）：' +
+    '["col: 衬衫","colSub: 销量口径","296.2万 本期销量","占大盘可核对",' +
+    '"col: polo衫","colSub: 销量口径","403.7万 本期销量","同比领涨",' +
+    '"col: 男装大盘","colSub: 对照分母","7280.1万 总销量","作占比分母"]\n' +
+    '反例：["col: 高举高打","col: 精种准打"]（域外口号轴，证据无词 → 会被栏轴闸拒收）。\n' +
+    '反例：["col: 衬衫——长段定义\\n- 条目1\\n- 条目2"]（整段塞进一个 tip）。\n' +
     '反例：["col: 叶子1","col: 叶子2","col: 叶子3"]（全是空栏）。\n',
   metric_columns:
     '【本页 layout=metric_columns】tips：先 2～5 条「metric: 原数字 短口径」（贴本页标题、含 %/亿/万、来自检索），' +
@@ -175,7 +178,7 @@ export const PPT_OUTLINE_FILL_SKELETON =
   '【输出格式·整章】\n' +
   '{"title":"…","chapters":[{"title":"…","subtitle":"…","slides":[' +
   '{"title":"规模与增速口径","layout":"metric_list","tips":["metric: 586亿 某口径销售额","metric: +42.3% 同比增速","list: 核心子类多数超大盘","list: 领涨子类可核对"]},' +
-  '{"title":"三种打法对照","layout":"columns","tips":["col: 轴A","colSub: A侧打法","下属事实1","下属事实2","col: 轴B","colSub: B侧打法","下属事实3","下属事实4","col: 轴C","colSub: C侧打法","下属事实5","下属事实6"]},' +
+  '{"title":"品类对照","layout":"columns","tips":["col: 衬衫","colSub: 销量口径","下属事实1","下属事实2","col: polo衫","colSub: 销量口径","下属事实3","下属事实4","col: 男装大盘","colSub: 对照分母","下属事实5","下属事实6"]},' +
   '{"title":"案例展开页","layout":"list","tips":["节点一：可核对事实","节点二：可核对事实","节点三：带原数字的结果"]}' +
   ']}]}\n';
 

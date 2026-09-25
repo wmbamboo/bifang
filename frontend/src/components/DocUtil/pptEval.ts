@@ -54,7 +54,8 @@ const GOLD_EVIDENCE =
   "⟦chunk:tbl-data⟧ 单元格数值 3.31亿 无品类词" +
   "⟦chunk:polo-rate⟧ 男士polo衫 同比+30.6% 环比+46.8% 增速可核对。" +
   "⟦chunk:band⟧ 衬衫价格带 ￥50-100 销量80.2万 为机会段。" +
-  "⟦chunk:polo-band⟧ 男士polo衫价格带 ¥50以下 126.5万 占比31.34% 同比+35.94%。";
+  "⟦chunk:polo-band⟧ 男士polo衫价格带 ¥50以下 126.5万 占比31.34% 同比+35.94%。" +
+  "⟦chunk:polo-band-mid⟧ 男士polo衫价格带销量对照：中价段销量172.6万 同比+17.09% 销售额1.31亿。";
 
 export type FidelityGoldCase = {
   id: string;
@@ -239,6 +240,14 @@ export const FIDELITY_GOLD_CASES: FidelityGoldCase[] = [
     tips: ["¥50以下|126.5万|31.34%|+35.94%"],
     expectOk: true,
     note: "table 行 ¥50以下 管道写法：须过",
+  },
+  {
+    id: "price-band-range-pipe-no-bound-digit",
+    title: "爆款价格与销量对照",
+    intent: "price-band",
+    tips: ["polo衫|¥50-100|172.6万|+17.09%|1.31亿"],
+    expectOk: true,
+    note: "table 行 ¥50-100：边界 50/100 不当独立指标；证据可无裸 100",
   },
   {
     id: "price-band-bare-rate",

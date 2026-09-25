@@ -1,5 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import {Alert, Button, Collapse, Form, Input, Modal, Select, Space, Typography, message} from 'antd';
+import {metaDiagnosticBanClause} from '@/components/DocUtil/outlineMetaDiagnostic';
 
 const {Text, Paragraph} = Typography;
 
@@ -130,8 +131,8 @@ export const PPT_OUTLINE_LAYOUT_RULES: Record<FillLayoutKey, string> = {
     '栏标题 = 分组/角色/对照轴；栏内条目 = 该轴下的事实或标签。禁止把「对等叶子答案」逐个写成只有 `col:`、没有栏内条目。\n' +
     '禁止把多行 Markdown 列表塞进同一个 tip 字符串：`col:轴名` 与每条短标签必须是 tips 数组里的独立元素。\n' +
     '若发现自己在写 col:项1、col:项2、col:项3… 且栏下无条目 → 应改用 list，或合并成 2～3 个真正的轴再写条目。\n' +
-    '禁止把检索诊断写进 tip（如「材料未覆盖」「口径未标注」「仅见一项指标」「无法定位」「知识库无」）；' +
-    '材料不足时写可执行的选品短动作（如「回查属性特征页」「对照爆款图鉴」「补采面料占比」），勿写元话语。\n' +
+    metaDiagnosticBanClause() +
+    '。\n' +
     '正例：["col: 高举高打","colSub: 预算前置拉声量","官方媒体背书","单日播放破500万+","col: 精种准打","colSub: 圈层强种草","数据定位破圈","内容赛马","col: 聚流快打","colSub: 预算集中做爆点","星推搜直","矩阵收拔"]\n' +
     '反例：多开一栏「col: 星推搜直种收一体」（轴下玩法升成第 4 轴）。\n' +
     '反例：["col: 高举高打——长段定义\\n- 条目1\\n- 条目2"]（整段塞进一个 tip）。\n' +

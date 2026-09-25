@@ -11,6 +11,25 @@ import {
   normalizeSlideIntent,
   resolveSlideIntent,
 } from "@/components/DocUtil/outlineEvidenceValidate";
+import {
+  findMetaDiagnosticTips,
+  metaDiagnosticBanClause,
+  metaDiagnosticRetryHint,
+  textHasMetaDiagnostic,
+  META_DIAGNOSTIC_TIP_RE,
+} from "@/components/DocUtil/outlineMetaDiagnostic";
+import {
+  checkColumnAxisEvidence,
+  findUnsupportedActionSlideTitles,
+} from "@/components/DocUtil/outlineCoverage";
+
+export {
+  findMetaDiagnosticTips,
+  metaDiagnosticBanClause,
+  metaDiagnosticRetryHint,
+  textHasMetaDiagnostic,
+  META_DIAGNOSTIC_TIP_RE,
+};
 
 export type OutlineStructureJson = {
   title: string;
@@ -476,9 +495,18 @@ export function validateOutlineStructure(
   if (slideTotal > 18) {
     return {ok: false, msg: `全文幻灯片过多（当前 ${slideTotal}，最多 18）`};
   }
+  const structureValue: OutlineStructureJson = {
+    title: title || chapters[0].title,
+    chapters,
+  };
+  // 结构阶段前置：动作页题未点名材料轴 → 拒收换页题（避免填充反复写「材料未覆盖」）
+  const actionBad = findUnsupportedActionSlideTitles(structureValue);
+  if (actionBad) {
+    return {ok: false, msg: actionBad};
+  }
   return {
     ok: true,
-    value: {title: title || chapters[0].title, chapters},
+    value: structureValue,
   };
 }
 
@@ -566,24 +594,6 @@ function isPlaceholderTips(tips: string[]): boolean {
     /直接相关的行动或口径要点/.test(blob) ||
     /需要继续核实的证据缺口/.test(blob)
   );
-}
-
-/** 检索诊断/元话语误写成 tip（须拒收重试，禁止灌进大纲与生成内容） */
-const META_DIAGNOSTIC_TIP_RE =
-  /材料未覆盖|知识库无|口径未标注|无法定位|仅见一项|未提供依据|检索不足|证据不足|材料不足/;
-
-export function findMetaDiagnosticTips(tips: string[]): string | null {
-  for (const raw of tips || []) {
-    const t = String(raw || "").trim();
-    if (!t) continue;
-    if (/^(?:col|column|栏|colSub|栏副|副标|metric|list|layout)\s*[:：]/i.test(t)) {
-      continue;
-    }
-    if (META_DIAGNOSTIC_TIP_RE.test(t)) {
-      return t.length > 24 ? `${t.slice(0, 24)}…` : t;
-    }
-  }
-  return null;
 }
 
 function countColMarkers(tips: string[]): number {
@@ -762,6 +772,13 @@ export function validateFilledSlideInChapter(
       });
       if (longBody.length >= 2) {
         return `页「${title}」总览栏内条目宜短标签（≤16 字量级）；过长事实留给后续案例页，或改用 list`;
+      }
+    }
+    // 按栏：轴名须在本页证据有痕迹（无证据则改轴或降 list，勿写诊断语）
+    if (evidence) {
+      const colEv = checkColumnAxisEvidence(tips, evidence);
+      if (!colEv.ok) {
+        return `页「${title}」${colEv.hint}`;
       }
     }
   }

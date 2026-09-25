@@ -29,6 +29,7 @@ import {
   assistantContentToOutlineMarkdown,
   coerceLayoutBySlideTitle,
   filledToMarkdown,
+  metaDiagnosticRetryHint,
   normalizeSlideLayout,
   parseFilledSlideFromModel,
   parseLayoutAssignFromModel,
@@ -484,7 +485,7 @@ const Chat=(props:ChatProps)=> {
           );
           const sys = buildPptOutlineStructureSystemPrompt(pack);
           const hint = attempt
-            ? `\n【重试】上一版不合格：${structureErr}。必须输出 JSON：chapters 恰好 3～5 个（推荐 4）；每个 chapter 含非空 title 与 subtitle；每章 slides 至少 2 项且只含 title（不要 layout/tips）。章标题禁止「先看/再看」口语。不要用 Markdown。`
+            ? `\n【重试】上一版不合格：${structureErr}。必须输出 JSON：chapters 恰好 3～5 个（推荐 4）；每个 chapter 含非空 title 与 subtitle；每章 slides 至少 2 项且只含 title（不要 layout/tips）。章标题禁止「先看/再看」口语。页题勿写无材料轴的「…筛选动作」（须点名属性/面料/价格带/图鉴等）。不要用 Markdown。`
             : '';
           try {
             const raw = await runOnce(sys, `${lastUser}${hint}`);
@@ -712,10 +713,14 @@ const Chat=(props:ChatProps)=> {
           const isMetricScarceErr = (msg: string) =>
             /原数字|改用 list|勿用类目名充数据卡/.test(msg || '');
           const isColumnsEmptyErr = (msg: string) =>
-            /分栏每栏至少|col:\s*不足|伪分栏|各栏条目数/.test(msg || '');
-          /** tips 空/过少或未解析：任何复杂版式都降到 list 再填 */
+            /分栏每栏至少|col:\s*不足|伪分栏|各栏条目数|栏轴无证据|分栏轴/.test(
+              msg || '',
+            );
+          /** tips 空/过少或未解析 / 元话语污染：任何复杂版式都降到 list 再填 */
           const isSparseTipsErr = (msg: string) =>
-            /tips 不足|未解析到 tips|仍是占位句/.test(msg || '');
+            /tips 不足|未解析到 tips|仍是占位句|检索诊断|材料未覆盖|口径未标注|元话语|禁元话语/.test(
+              msg || '',
+            );
 
           for (let si = 0; si < ch.slides.length; si++) {
             const slTitle = ch.slides[si].title;
@@ -781,8 +786,8 @@ const Chat=(props:ChatProps)=> {
                 (downgraded
                   ? `\n【已降级】已改为 ${layout}，按新版式写 tips，必须写出 ≥2 条真实要点。`
                   : '') +
-                (fillErr && /材料未覆盖|口径未标注|检索诊断|元话语/.test(fillErr)
-                  ? `\n【禁元话语】禁止 tip 写「材料未覆盖/口径未标注/仅见一项/无法定位」；材料薄时写可执行短动作（回查属性页、对照爆款图鉴）。`
+                (fillErr && /材料未覆盖|口径未标注|检索诊断|元话语|分栏轴/.test(fillErr)
+                  ? `\n${metaDiagnosticRetryHint()}`
                   : '') +
                 (attempt && fillErr
                   ? `\n【重试】上一版不合格：${fillErr}。只改本页 tips，补齐契约要求。`

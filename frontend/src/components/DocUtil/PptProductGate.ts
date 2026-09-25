@@ -26,8 +26,10 @@ export function isOrphanNumberFragment(line: string): boolean {
   const s = String(line || "").trim();
   if (!s) return false;
   if (/[%％亿万元]/.test(s)) return false;
-  // 模板目录/章节装饰：01、02、03…
+  // 模板目录/章节装饰序号：01～09、1～9、10～18（全文页上限约 18）
   if (/^0\d{1,2}$/.test(s)) return false;
+  if (/^[1-9]$/.test(s)) return false;
+  if (/^1[0-8]$/.test(s)) return false;
   // 年份 / 日期片段（采样窗灌进副标时）
   if (/^20\d{2}$/.test(s)) return false;
   if (/^20\d{2}[.\-/]\d{1,2}([.\-/]\d{1,2})?$/.test(s)) return false;

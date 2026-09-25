@@ -14,7 +14,9 @@ from app.config import get_settings
 from app.services.table_structure import (
     extract_tables,
     iter_page_segments,
+    metrics_from_attribute_prose,
     metrics_from_kpi_prose,
+    metrics_from_product_captions,
     metrics_from_table,
 )
 
@@ -44,14 +46,18 @@ PAGE_SCHEMAS: dict[str, dict[str, Any]] = {
         "require_price_band_or_unit": True,
         "fields": ["price_band", "value", "unit"],
     },
+    "product_grid": {
+        "min_metrics": 2,
+        "fields": ["name", "value", "price"],
+    },
     "ranking": {
-        "min_metrics": 0,  # 图鉴页可无表数字
+        "min_metrics": 0,
         "fields": ["name", "value"],
     },
     "attribute": {
-        "min_metrics": 0,  # 图表页：无数字则 extract_warnings，不硬失败
+        "min_metrics": 0,
         "prefer_min_metrics": 8,
-        "fields": ["name", "value", "unit"],
+        "fields": ["name", "value", "unit", "attr_label"],
     },
     "general": {"min_metrics": 0, "fields": ["name", "value"]},
 }
@@ -91,13 +97,25 @@ def _detect_page_type(text: str, scopes: list[str]) -> str:
     t = text or ""
     if re.search(r"属性特征|面料材质|图案花纹|属性销量", t):
         return "attribute"
+    # 图鉴/爆款 caption 页：优先于 price_band（caption 里常有 ¥）
+    if re.search(r"爆款分析|热销款式|款式墙|图鉴", t) and re.search(
+        r"本期销量", t
+    ):
+        return "product_grid"
+    if re.search(r"TREND", t) and re.search(r"本期销量|[￥¥]\s*\d+", t):
+        if not re.search(r"品类大盘|价格带\s*本期销量|主力价格带", t):
+            return "product_grid"
     if "价格带" in scopes or ("价格带" in t and re.search(r"[￥¥]\d+", t)):
-        # 含 KPI 卡 + 价格带表的品类大盘页 → category_kpi 优先
         if re.search(r"品类大盘|销量\s*TOP|总销量", t):
             return "category_kpi"
+        # 真价格带表：有「本期销量」列或「主力/机会价格带」
+        if re.search(r"主力价格带|机会价格带|本期销量.*销量同比|价格带.*本期销量", t):
+            return "price_band"
+        if re.search(r"本期销量\s*[:：]", t) and not re.search(r"<table", t, re.I):
+            return "product_grid"
         return "price_band"
     if re.search(r"热销款式|爆款分析", t) and not re.search(r"品类大盘|总销量", t):
-        return "ranking"
+        return "product_grid" if re.search(r"本期销量|[￥¥]", t) else "ranking"
     if re.search(r"TOP\s*\d+|热销|榜单", t, re.I) and not re.search(
         r"品类大盘|总销量", t
     ):
@@ -114,7 +132,10 @@ def _dedupe_metrics(metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for m in metrics:
-        key = f"{m.get('value')}|{m.get('unit')}|{m.get('name')}|{m.get('rank_badge')}"
+        key = (
+            f"{m.get('value')}|{m.get('unit')}|{m.get('name')}|"
+            f"{m.get('rank_badge')}|{m.get('price_band')}|{m.get('attr_label')}"
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -122,20 +143,36 @@ def _dedupe_metrics(metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def extract_metrics_layout(text: str, scopes: list[str]) -> list[dict[str, Any]]:
-    """版面优先：表单元格 → KPI 散文块。禁止跨 cell 绑同比。"""
+def extract_metrics_layout(
+    text: str,
+    scopes: list[str],
+    *,
+    page_type: str = "general",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list]:
+    """版面优先：表单元格 → KPI/属性/图鉴 caption。禁止跨 cell 绑同比。
+
+    返回 (metrics, table_profiles, tables)。tables 已挂 profile。
+    """
     metrics: list[dict[str, Any]] = []
+    profiles: list[dict[str, Any]] = []
     tables = extract_tables(text)
-    covered = set()
     for tb in tables:
-        covered.add((tb.start, tb.end))
-        metrics.extend(metrics_from_table(tb, page_scopes=scopes))
-    # 表外文本（去掉表 HTML，避免重复）
+        mets, prof = metrics_from_table(
+            tb, page_scopes=scopes, page_type=page_type
+        )
+        metrics.extend(mets)
+        profiles.append(prof)
     residual = text or ""
     for tb in sorted(tables, key=lambda x: -x.start):
         residual = residual[: tb.start] + "\n" + residual[tb.end :]
     metrics.extend(metrics_from_kpi_prose(residual, page_scopes=scopes))
-    return _dedupe_metrics(metrics)
+    metrics.extend(
+        metrics_from_attribute_prose(
+            residual, page_scopes=scopes, page_type=page_type
+        )
+    )
+    metrics.extend(metrics_from_product_captions(text, page_scopes=scopes))
+    return _dedupe_metrics(metrics), profiles, tables
 
 
 def _validate_schema(
@@ -153,9 +190,15 @@ def _validate_schema(
         )
     prefer = schema.get("prefer_min_metrics")
     if prefer and len(metrics) < int(prefer):
-        warnings.append(
-            f"schema:{page_type} 建议至少 {prefer} 条，实际 {len(metrics)}（图表页可能需 VL 读数）"
-        )
+        if page_type == "attribute":
+            warnings.append(
+                f"schema:attribute 建议至少 {prefer} 条，实际 {len(metrics)}"
+                f"（OCR 未检出「标签+占比」文本；条形装饰旁的纯文字应可抽，请重跑解析）"
+            )
+        else:
+            warnings.append(
+                f"schema:{page_type} 建议至少 {prefer} 条，实际 {len(metrics)}"
+            )
     req_units = schema.get("require_units")
     if req_units:
         units = {m.get("unit") for m in metrics}
@@ -163,10 +206,11 @@ def _validate_schema(
             errors.append(
                 f"schema:{page_type} 缺少单位 {sorted(req_units)} 的主指标"
             )
-    # 无名「指标」过多
     anon = sum(1 for m in metrics if m.get("name") == "指标")
     if metrics and anon == len(metrics):
-        warnings.append("全部指标未贴实体名，需 LLM 贴标签或检查页标题 scope")
+        warnings.append("全部指标未贴实体名，需检查行头绑定或页标题 scope")
+    elif metrics and anon > len(metrics) * 0.5:
+        warnings.append(f"占位名「指标」仍有 {anon}/{len(metrics)} 条，行头可能未绑全")
     for m in metrics:
         raw = (m.get("raw_text") or m.get("raw") or "").replace(",", "")
         val = str(m.get("value") or "").replace(",", "")
@@ -175,36 +219,65 @@ def _validate_schema(
     return errors, warnings
 
 
-def extract_page_record(source: str, page: Optional[int], text: str) -> dict[str, Any]:
-    scopes = _detect_scopes(text)
-    page_type = _detect_page_type(text, scopes)
-    metrics = extract_metrics_layout(text, scopes)
-    # display 字段：原样展示串
+def _refresh_displays(metrics: list[dict[str, Any]]) -> None:
     for m in metrics:
         unit = m.get("unit") or ""
         m["display"] = f"{m.get('value')}{unit}".strip()
         if m.get("rank_badge"):
             m["display"] = f"{m['rank_badge']} {m['display']}"
+
+
+def extract_page_record(
+    source: str,
+    page: Optional[int],
+    text: str,
+    *,
+    label_ambiguous_tables: bool = False,
+) -> dict[str, Any]:
+    scopes = _detect_scopes(text)
+    page_type = _detect_page_type(text, scopes)
+    metrics, table_profiles, tables = extract_metrics_layout(
+        text, scopes, page_type=page_type
+    )
+    _refresh_displays(metrics)
     errors, warnings = _validate_schema(page_type, metrics)
     # snippet 保留足量上下文（不再 240 截断 KPI）
     snippet = re.sub(r"\s+", " ", (text or "").strip())
     if len(snippet) > 4000:
         snippet = snippet[:4000]
-    tables = extract_tables(text)
+    ambiguous = any(p.get("ambiguous") for p in table_profiles)
+    if ambiguous:
+        warnings.append(
+            "table_profile_ambiguous:信号冲突或双层表头，可开 label_ambiguous_tables"
+        )
+    if label_ambiguous_tables and ambiguous:
+        try:
+            from app.services.extract_labeler import label_table_cell_roles
+
+            metrics, table_profiles, role_warns = label_table_cell_roles(
+                text, metrics, table_profiles, page_type=page_type
+            )
+            warnings.extend(role_warns)
+            _refresh_displays(metrics)
+        except Exception as ex:  # noqa: BLE001
+            warnings.append(f"llm_cell_roles:{ex}")
     return {
         "source": source,
         "page": page,
         "scopes": scopes,
         "page_type": page_type,
         "metrics": metrics,
+        "table_profiles": table_profiles,
         "tables": [
             {
                 "n_rows": len(tb.rows),
                 "n_cols": max((len(r) for r in tb.rows), default=0),
                 "start": tb.start,
                 "end": tb.end,
+                "profile": tb.profile
+                or (table_profiles[i] if i < len(table_profiles) else None),
             }
-            for tb in tables
+            for i, tb in enumerate(tables)
         ],
         "snippet": snippet,
         "extract_errors": errors,
@@ -460,6 +533,9 @@ def format_extracts_block(records: list[dict[str, Any]]) -> str:
                 extra += f" 同比{met['yoy']}"
             if met.get("mom"):
                 extra += f" 环比{met['mom']}"
+            if met.get("rate_unlabeled"):
+                # 无标签速率：只跟数字，禁止补写「同比/环比」
+                extra += f" {met['rate_unlabeled']}"
             if met.get("price_band"):
                 extra += f" {met['price_band']}"
             lines.append(f"  - {met.get('value')}{unit} {name}{extra}")
@@ -512,6 +588,9 @@ def extracts_as_pseudo_docs(
                 lines.append(f"{met['yoy']} {name}同比".strip())
             if met.get("mom"):
                 lines.append(f"{met['mom']} {name}环比".strip())
+            if met.get("rate_unlabeled"):
+                # 裸速率：不得写成「xx同比」，否则会骗过前端闸门
+                lines.append(f"{met['rate_unlabeled']} {name}".strip())
         body = "\n".join(lines)
         page = rec.get("page")
         src = rec.get("source") or ""

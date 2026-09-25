@@ -40,3 +40,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: 导入烟测（防止依赖/语法损坏）
         run: python -c "import app.main; print('backend import ok')"
+      - name: 抽取层金标（改 table_structure/extract 必看）
+        run: |
+          pip install pytest -q
+          PYTHONPATH=. python -m pytest tests/ -v --tb=short

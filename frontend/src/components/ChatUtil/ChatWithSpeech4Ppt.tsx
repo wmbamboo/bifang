@@ -781,6 +781,9 @@ const Chat=(props:ChatProps)=> {
                 (downgraded
                   ? `\n【已降级】已改为 ${layout}，按新版式写 tips，必须写出 ≥2 条真实要点。`
                   : '') +
+                (fillErr && /材料未覆盖|口径未标注|检索诊断|元话语/.test(fillErr)
+                  ? `\n【禁元话语】禁止 tip 写「材料未覆盖/口径未标注/仅见一项/无法定位」；材料薄时写可执行短动作（回查属性页、对照爆款图鉴）。`
+                  : '') +
                 (attempt && fillErr
                   ? `\n【重试】上一版不合格：${fillErr}。只改本页 tips，补齐契约要求。`
                   : '');

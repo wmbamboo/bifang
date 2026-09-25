@@ -229,6 +229,7 @@ const KbOutlineGenPpt: React.FC = () => {
     // warning("drawerOpenStatus:"+drawerOpen);
   }
   async function saveDoc(){
+    try {
     // setLoading(true);
     Ppt.reparseAllSlideContents(chapters);
     const badFormat = Ppt.getSlidesWithBadFormat(chapters);
@@ -402,6 +403,11 @@ const KbOutlineGenPpt: React.FC = () => {
     console.log(pptTemplate)
     await pptTemplate.genNewSlideFile("urlFile")
     // setLoading(false);
+    } catch (err: any) {
+      console.error('文档下载失败', err);
+      const msg = err?.message || String(err || '未知错误');
+      message.error(`文档下载时出错：${msg}`);
+    }
   }
 
   const genDoc = useCallback(async (genKey:string="") => {

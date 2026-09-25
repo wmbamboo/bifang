@@ -568,6 +568,24 @@ function isPlaceholderTips(tips: string[]): boolean {
   );
 }
 
+/** 检索诊断/元话语误写成 tip（须拒收重试，禁止灌进大纲与生成内容） */
+const META_DIAGNOSTIC_TIP_RE =
+  /材料未覆盖|知识库无|口径未标注|无法定位|仅见一项|未提供依据|检索不足|证据不足|材料不足/;
+
+export function findMetaDiagnosticTips(tips: string[]): string | null {
+  for (const raw of tips || []) {
+    const t = String(raw || "").trim();
+    if (!t) continue;
+    if (/^(?:col|column|栏|colSub|栏副|副标|metric|list|layout)\s*[:：]/i.test(t)) {
+      continue;
+    }
+    if (META_DIAGNOSTIC_TIP_RE.test(t)) {
+      return t.length > 24 ? `${t.slice(0, 24)}…` : t;
+    }
+  }
+  return null;
+}
+
 function countColMarkers(tips: string[]): number {
   return (tips || []).filter((t) => /^(?:col|column|栏)\s*[:：]/i.test(String(t || "").trim())).length;
 }
@@ -703,6 +721,13 @@ export function validateFilledSlideInChapter(
   }
   if (isPlaceholderTips(tips)) {
     return `页「${title}」tips 仍是占位句，须换成材料中的真实要点`;
+  }
+  const metaTip = findMetaDiagnosticTips(tips);
+  if (metaTip) {
+    return (
+      `页「${title}」tips 含检索诊断「${metaTip}」，禁止写进大纲；` +
+      `材料不足时改写可执行的选品短动作（如「回查属性特征页」「对照爆款图鉴」），勿写「材料未覆盖/口径未标注」`
+    );
   }
 
   const dup = findDuplicateTips(tips);
@@ -1039,6 +1064,15 @@ export function validateOutlineFilled(
         return {
           ok: false,
           msg: `页「${title || lockedSl.title}」tips 仍是占位句，须换成材料中的真实要点`,
+        };
+      }
+      const metaTip = findMetaDiagnosticTips(tips);
+      if (metaTip) {
+        return {
+          ok: false,
+          msg:
+            `页「${title || lockedSl.title}」tips 含检索诊断「${metaTip}」，禁止写进大纲；` +
+            `材料不足时改写可执行的选品短动作，勿写「材料未覆盖/口径未标注」`,
         };
       }
       if (layout === "metric_list" || layout === "metric") {

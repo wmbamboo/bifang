@@ -169,6 +169,7 @@ export function extractMetricTokens(tip: string): string[] {
  * 日期 / 采样窗数字：禁止进忠实度校验。
  * - 纯年份 20xx
  * - YYYY.MM / YYYY-MM / MM.DD 且落在日期区间上下文
+ * - tip 内落在日期串跨度里的日/月碎片（如 7280.1万（2024.03.19-04.17）里的 19）
  * - tip 本身是采样窗/时间区间说明
  */
 export function isDateLikeNumberToken(
@@ -182,6 +183,10 @@ export function isDateLikeNumberToken(
   if (!n) return true;
   if (/^20\d{2}$/.test(n)) return true;
   if (/^20\d{2}[.\-/]\d{1,2}([.\-/]\d{1,2})?$/.test(n)) return true;
+  // 落在 tip 内任一日期/区间跨度中 → 一律不当指标
+  if (indexInTip >= 0 && numberInsideDateSpan(tip, indexInTip, n.length)) {
+    return true;
+  }
   // 04.17 / 3.19 这类月日：仅在采样/日期语境跳过，避免误伤真指标
   if (/^\d{1,2}[.\-/]\d{1,2}$/.test(n)) {
     if (isSamplingWindowTip(tip)) return true;
@@ -196,7 +201,37 @@ export function isDateLikeNumberToken(
     }
   }
   // 孤立两位日/月数字贴在日期串旁（…19-04… 里的 19）
-  if (/^\d{1,2}$/.test(n) && isSamplingWindowTip(tip)) return true;
+  if (/^\d{1,2}$/.test(n)) {
+    if (isSamplingWindowTip(tip)) return true;
+    if (indexInTip >= 0) {
+      const win = tip.slice(
+        Math.max(0, indexInTip - 28),
+        Math.min(tip.length, indexInTip + n.length + 20),
+      );
+      if (/20\d{2}/.test(win) && /[.\-/至到~～—–]/.test(win)) return true;
+    }
+  }
+  return false;
+}
+
+/** tip 内日期/区间跨度（含括号旁注采样窗） */
+const DATE_SPAN_RE =
+  /20\d{2}[.\-/]\d{1,2}(?:[.\-/]\d{1,2})?(?:\s*[-~～至到—–]\s*(?:20\d{2}[.\-/])?\d{1,2}(?:[.\-/]\d{1,2})?)?/g;
+
+function numberInsideDateSpan(
+  tip: string,
+  index: number,
+  len: number,
+): boolean {
+  const s = String(tip || "");
+  if (!s || index < 0) return false;
+  DATE_SPAN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = DATE_SPAN_RE.exec(s))) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (index >= start && index + len <= end) return true;
+  }
   return false;
 }
 

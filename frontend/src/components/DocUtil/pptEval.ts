@@ -161,6 +161,17 @@ export const FIDELITY_GOLD_CASES: FidelityGoldCase[] = [
     note: "Q1 不进数字正则、2024 年份豁免：副标非指标（须过）",
   },
   {
+    id: "metric-with-date-paren-not-day-fragment",
+    title: "衬衫polo在大盘中的位置",
+    intent: "category-position",
+    tips: [
+      "metric: 男装大盘总销量 7,280.1万（2024.03.19-04.17）",
+      "metric: 男士衬衫销量296.2万",
+    ],
+    expectOk: true,
+    note: "指标旁注采样日期：不得把 19/04 当日碎片当指标串用（须过）",
+  },
+  {
     id: "mixed-chunk-wash",
     title: "polo品类销量",
     intent: "category-detail",

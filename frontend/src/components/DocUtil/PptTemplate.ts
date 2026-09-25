@@ -346,8 +346,15 @@ export default class PptTemplate {
     let pageContent: string="";
     const slidePageName=`ppt/slides/slide${slidePageNo}.xml`
     if(!this.templateBuffer)  await this.init();
+    if (!slidePageNo || slidePageNo < 1) {
+      throw new Error(`模板页码无效：${slidePageNo}（layout 未命中 manifest）`);
+    }
     await this.zip.loadAsync(this.templateBuffer).then(async (zip) => {
-      await zip.files[slidePageName].async("string").then(async (slideContent) => {
+      const entry = zip.files[slidePageName];
+      if (!entry) {
+        throw new Error(`模板缺少 ${slidePageName}，无法灌模`);
+      }
+      await entry.async("string").then(async (slideContent) => {
         pageContent = slideContent;
       });
     });

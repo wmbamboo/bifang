@@ -18,7 +18,22 @@ export type ProductGateReport = {
 
 const SLOT_RE = /\{[A-Za-z_][\w.]*(?:\[[\w.]+\])?\}/g;
 const PROGRESS_RE = /\bprogress\d*\b/i;
-const ORPHAN_NUM_RE = /^(?:[+\-]?\d{2,4}|[+\-]?\d{1,3}\s*[:：]?)$/;
+/** 像截断指标的裸数字；不含模板装饰序号 01/02、年份、日期 */
+const ORPHAN_METRIC_RE = /^(?:[+\-]?\d{2,4}|[+\-]?\d{1,3}\s*[:：]?)$/;
+
+/** 成品闸：是否「孤立数字碎片」（须拦的截断 tip，不是模板装饰/日期） */
+export function isOrphanNumberFragment(line: string): boolean {
+  const s = String(line || "").trim();
+  if (!s) return false;
+  if (/[%％亿万元]/.test(s)) return false;
+  // 模板目录/章节装饰：01、02、03…
+  if (/^0\d{1,2}$/.test(s)) return false;
+  // 年份 / 日期片段（采样窗灌进副标时）
+  if (/^20\d{2}$/.test(s)) return false;
+  if (/^20\d{2}[.\-/]\d{1,2}([.\-/]\d{1,2})?$/.test(s)) return false;
+  if (/^\d{1,2}[.\-/]\d{1,2}$/.test(s)) return false;
+  return ORPHAN_METRIC_RE.test(s);
+}
 
 /** 从 slide XML 抽出可读文本（合并 a:t） */
 export function extractTextFromSlideXml(xml: string): string {
@@ -63,7 +78,7 @@ function scanOnePage(
     .map((s) => s.trim())
     .filter(Boolean);
   for (const line of lines) {
-    if (ORPHAN_NUM_RE.test(line) && !/[%％亿万元]/.test(line)) {
+    if (isOrphanNumberFragment(line)) {
       issues.push({
         page,
         slideName,

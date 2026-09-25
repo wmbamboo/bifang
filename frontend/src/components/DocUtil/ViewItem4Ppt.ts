@@ -1053,7 +1053,8 @@ export function buildPptItemFormatPrompt(
       countLine +
       '每行只写一条短词/短句（宜 4～16 字）；横线后可写极短补充（≤16 字）或留空。\n' +
       '错误示例：把「学生党」「预算敏感追潮流」也编成 1. 2. 行。\n' +
-      '正确：只输出「街头宽松」「低客单套装」这类栏内短条目。\n' +
+      '错误示例：把「材料未覆盖」「口径未标注」「仅见一项指标」写成条目。\n' +
+      '正确：只输出「街头宽松」「低客单套装」「回查属性页」这类栏内短条目。\n' +
       '1. 短条目 - 可选补充\n'
     );
   }
@@ -1133,6 +1134,10 @@ export function validateSlideViewItems(
       if (title.length > 28) return `第 ${i + 1} 条过长（宜 ≤16 字，当前 ${title.length} 字）。`;
       if (content && content.length > 28) {
         return `第 ${i + 1} 条补充过长（宜省略或 ≤16 字）。`;
+      }
+      const blob = `${title} ${content}`;
+      if (/材料未覆盖|口径未标注|仅见一项|无法定位|知识库无/.test(blob)) {
+        return `第 ${i + 1} 条是检索诊断元话语，须改成可执行的选品短动作或材料事实。`;
       }
     }
     return null;

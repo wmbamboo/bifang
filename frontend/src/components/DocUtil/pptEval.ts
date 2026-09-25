@@ -41,8 +41,8 @@ export function emptyEvalReport(sampleId: string): EvalReport {
  * - hdr/data：表头与数据分家（靠邻块拼接）
  */
 const GOLD_EVIDENCE =
-  "⟦chunk:macro⟧ 男装大盘总销量7280.1万，总销售额58.12亿。" +
-  "⟦chunk:shirt⟧ 男士衬衫销量296.2万，商务男装衬衫为主。" +
+  "⟦chunk:macro⟧ 男装大盘总销量7280.1万，总销售额58.12亿。采样时间区间：2024-03-19至2024-04-17。" +
+  "⟦chunk:shirt⟧ 男士衬衫销量296.2万，商务男装衬衫为主。占大盘4.1%。" +
   "⟦chunk:shirt-gmv⟧ 品类销售额表……中间隔开若干单元格……销售额 3.3亿……页脚衬衫品类口径。" +
   "⟦chunk:polo⟧ 品类排行表（采样窗内）……中间隔开若干单元格……销量 403.7万 销售额3.9亿……页眉男士polo衫口径。" +
   "⟦chunk:polo-share⟧ 男装大盘总销量7280.1万。男士polo衫销量 TOP6 403.7万 占比 5.5% 同比+26.9%（同表含总销售额表头）。" +
@@ -129,6 +129,36 @@ export const FIDELITY_GOLD_CASES: FidelityGoldCase[] = [
     tips: ["metric: 403.7万 polo衫销量TOP6 占比5.5%"],
     expectOk: true,
     note: "同 tip 万主量+占比%：表内总销量不得抢 5.5% 就近（须过）",
+  },
+  {
+    id: "shirt-share-of-macro-compound-tip",
+    title: "衬衫polo在大盘中的位置",
+    intent: "category-position",
+    tips: ["metric: 296.2万 男士衬衫TOP7销量，占大盘4.1%"],
+    expectOk: true,
+    note: "主量点名衬衫+附属占大盘%：296.2 不得被远处「大盘」抢走口径（须过）",
+  },
+  {
+    id: "colsub-sampling-window-not-metric",
+    title: "衬衫polo大盘位置对照",
+    intent: "category-position",
+    tips: [
+      "col: 大盘",
+      "colSub: 采样窗2024.03.19-04.17",
+      "大盘总销量7280.1万",
+      "col: 衬衫",
+      "男士衬衫销量296.2万",
+    ],
+    expectOk: true,
+    note: "colSub 采样日期不是指标：不得把 2024.03 当大盘数字校验（须过）",
+  },
+  {
+    id: "q1-2024-year-not-metric",
+    title: "衬衫与polo品类位置",
+    intent: "category-position",
+    tips: ["col: 衬衫", "colSub: Q1 2024", "男士衬衫销量296.2万"],
+    expectOk: true,
+    note: "Q1 不进数字正则、2024 年份豁免：副标非指标（须过）",
   },
   {
     id: "mixed-chunk-wash",

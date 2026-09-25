@@ -146,7 +146,7 @@ export function normalizeMetricToken(raw: string): string {
     .replace(/％/g, "%");
 }
 
-/** 从 tip 抽出需核对的数字 token（带单位优先） */
+/** 从 tip 抽出需核对的数字 token（带单位优先）；日期/采样窗数字不抽 */
 export function extractMetricTokens(tip: string): string[] {
   const s = String(tip || "");
   const out: string[] = [];
@@ -156,11 +156,68 @@ export function extractMetricTokens(tip: string): string[] {
     const num = (m[1] || "").replace(/,/g, "");
     const unit = m[2] || "";
     if (!num) continue;
+    // 年份、日期片段不当指标（采样窗 2024.03.19-04.17）
+    if (isDateLikeNumberToken(num, unit, s, m.index)) continue;
     const token = normalizeMetricToken(num + unit);
     if (token && !out.includes(token)) out.push(token);
     if (num && !out.includes(num)) out.push(num);
   }
   return out;
+}
+
+/**
+ * 日期 / 采样窗数字：禁止进忠实度校验。
+ * - 纯年份 20xx
+ * - YYYY.MM / YYYY-MM / MM.DD 且落在日期区间上下文
+ * - tip 本身是采样窗/时间区间说明
+ */
+export function isDateLikeNumberToken(
+  num: string,
+  unit: string,
+  tip: string,
+  indexInTip: number = -1,
+): boolean {
+  if (unit && /[%％亿万元]/.test(unit)) return false;
+  const n = String(num || "").trim();
+  if (!n) return true;
+  if (/^20\d{2}$/.test(n)) return true;
+  if (/^20\d{2}[.\-/]\d{1,2}([.\-/]\d{1,2})?$/.test(n)) return true;
+  // 04.17 / 3.19 这类月日：仅在采样/日期语境跳过，避免误伤真指标
+  if (/^\d{1,2}[.\-/]\d{1,2}$/.test(n)) {
+    if (isSamplingWindowTip(tip)) return true;
+    if (indexInTip >= 0) {
+      const win = tip.slice(
+        Math.max(0, indexInTip - 24),
+        Math.min(tip.length, indexInTip + n.length + 16),
+      );
+      if (/采样|时间|日期|区间|至|~|—|–/.test(win) || /20\d{2}/.test(win)) {
+        return true;
+      }
+    }
+  }
+  // 孤立两位日/月数字贴在日期串旁（…19-04… 里的 19）
+  if (/^\d{1,2}$/.test(n) && isSamplingWindowTip(tip)) return true;
+  return false;
+}
+
+/** colSub/短句：采样时间窗说明（非整页指标） */
+export function isSamplingWindowTip(tip: string): boolean {
+  const s = String(tip || "")
+    .replace(/^(?:colSub|columnSub|栏副|副标|metric|list|col|column|栏)\s*[:：]\s*/i, "")
+    .trim();
+  if (!s) return false;
+  if (/采样|时间窗|时间区间|采样窗|统计周期|数据周期/.test(s) && /20\d{2}/.test(s)) {
+    return true;
+  }
+  // 纯日期区间行：2024.03.19-04.17 / 2024-03-19至2024-04-17
+  if (
+    /^20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}\s*[-~～至到—–]\s*(?:20\d{2}[.\-/])?\d{1,2}[.\-/]\d{1,2}/.test(
+      s,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** 同一数值只留一个代表 token（优先带单位），避免 7280.1 / 7280.1万 双验 */
@@ -557,6 +614,15 @@ function lastIndexAny(s: string, words: readonly string[]): number {
   return best;
 }
 
+function firstIndexAny(s: string, words: readonly string[]): number {
+  let best = Infinity;
+  for (const w of words) {
+    const i = s.indexOf(w);
+    if (i >= 0 && i < best) best = i;
+  }
+  return best === Infinity ? -1 : best;
+}
+
 /** 最近品类命中词及其 labels（不做 ALL 兜底） */
 function lastCategoryHit(
   s: string,
@@ -573,11 +639,30 @@ function lastCategoryHit(
   return best >= 0 && labels ? {at: best, labels} : null;
 }
 
+function firstCategoryHit(
+  s: string,
+): {at: number; labels: readonly string[]} | null {
+  let best = Infinity;
+  let labels: readonly string[] | null = null;
+  for (const {word, labels: lab} of CATEGORY_HIT_WORDS) {
+    const i = s.indexOf(word);
+    if (i >= 0 && i < best) {
+      best = i;
+      labels = lab;
+    }
+  }
+  return best < Infinity && labels ? {at: best, labels} : null;
+}
+
 export type TipLocalClaim =
   | {kind: "dapan" | "category"; labels: string[]}
   | {kind: "price-band"; labels: string[]};
 
-/** 在 tip 正文里看数字左右近邻标了什么口径（用于多数字 tip 逐 token 归属）。 */
+/** 在 tip 正文里看数字左右近邻标了什么口径（用于多数字 tip 逐 token 归属）。
+ *
+ *  before：取最靠右的实体（离数字最近）；
+ *  after：取最靠左的实体（离数字最近）——禁止用 lastIndex 把远处的「占大盘」抢成主量口径。
+ */
 export function entitiesClaimedNearNumberInTip(
   tip: string,
   numToken: string,
@@ -594,24 +679,49 @@ export function entitiesClaimedNearNumberInTip(
     Math.min(tipFlat.length, idx + compactNum.length + window),
   );
 
-  const nearestIn = (
-    s: string,
+  const pickCloser = (
+    dapanAt: number,
+    cat: {at: number; labels: readonly string[]} | null,
+    /** before=越大越近；after=越小越近 */
+    preferLarger: boolean,
   ): TipLocalClaim | null => {
-    if (!s) return null;
-    const dapanAt = lastIndexAny(s, DAPAN_HIT_WORDS);
-    const cat = lastCategoryHit(s);
     const catAt = cat?.at ?? -1;
     if (dapanAt < 0 && catAt < 0) return null;
-    if (catAt > dapanAt && cat) {
+    if (dapanAt < 0 && cat) {
+      return {kind: "category", labels: [...cat.labels]};
+    }
+    if (catAt < 0) {
+      return {kind: "dapan", labels: [...ENTITY_DAPAN]};
+    }
+    const catCloser = preferLarger ? catAt > dapanAt : catAt < dapanAt;
+    if (catCloser && cat) {
       return {kind: "category", labels: [...cat.labels]};
     }
     return {kind: "dapan", labels: [...ENTITY_DAPAN]};
   };
 
+  const fromBefore = (): TipLocalClaim | null => {
+    if (!before) return null;
+    return pickCloser(
+      lastIndexAny(before, DAPAN_HIT_WORDS),
+      lastCategoryHit(before),
+      true,
+    );
+  };
+
+  const fromAfter = (): TipLocalClaim | null => {
+    if (!after) return null;
+    return pickCloser(
+      firstIndexAny(after, DAPAN_HIT_WORDS),
+      firstCategoryHit(after),
+      false,
+    );
+  };
+
   // 价格带区间本身即口径（避免「￥50-100 销量」被裸数字兜底误杀）；品类/大盘优先
   return (
-    nearestIn(before) ||
-    nearestIn(after) ||
+    fromBefore() ||
+    fromAfter() ||
     (PRICE_BAND_TOKEN_RE.test(tipFlat)
       ? {kind: "price-band", labels: ["价格带"]}
       : null)
@@ -717,6 +827,11 @@ export function validateTipsAgainstEvidence(
 
     if (isOrphanNumberTip(t)) {
       issues.push(`「${t}」像截断碎片，须写完整口径（含单位/价格带名）`);
+      continue;
+    }
+
+    // 采样窗/日期副标：不是指标，不做数字↔实体对齐
+    if (isSamplingWindowTip(t)) {
       continue;
     }
 

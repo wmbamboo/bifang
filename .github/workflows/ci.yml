@@ -19,7 +19,8 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
+      # 金标/闸门只需 jest；跳过 max setup / husky，避免 CI 环境无浏览器/git hook 误红
+      - run: npm ci --ignore-scripts
       - name: 忠实度金标 + 元话语/栏轴闸（改闸门必看）
         run: npx jest --ci --runInBand --testPathPattern='(fidelityGold|outlineMetaCoverage|priceBandTokenFidelity)'
       - name: 全量测试（已忽略未迁移遗留用例）

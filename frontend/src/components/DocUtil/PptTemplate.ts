@@ -6,6 +6,8 @@ import { mergeBrokenPlaceholderRunsInXml } from "@/components/DocUtil/pptPlaceho
 import {
   formatProductGateMessage,
   scanFilledSlides,
+  stripDocCiteMarkers,
+  stripProgressMarkers,
   type ProductGateReport,
 } from "@/components/DocUtil/PptProductGate";
 
@@ -141,6 +143,8 @@ export default class PptTemplate {
    */
   newSlideFileDicts: Array<SlideFileDict>;
   newSlideRelationDicts: Array<SlideFileDict>;
+  /** 灌模追加的媒体文件（如 image_grid 换图） */
+  newMediaFiles: Array<{ path: string; data: Uint8Array }>;
   /**
    * 新的幻灯片目录用到的老页面序号数组
    */
@@ -155,6 +159,7 @@ export default class PptTemplate {
     this.newFilePath = newFileName;
     this.newSlideFileDicts = new Array<SlideFileDict>();
     this.newSlideRelationDicts= new Array<SlideFileDict>();
+    this.newMediaFiles = [];
     this.templateBuffer=Buffer.alloc(0)
     this.usedSlidePages=[];
     this.newSlidePages = [];
@@ -503,8 +508,11 @@ export default class PptTemplate {
       if (t.includes('{')) {
         cleaned = cleaned.replace(slotRe, '');
       }
-      if (/\bprogress\d*\b/i.test(cleaned)) {
-        cleaned = cleaned.replace(/\bprogress\d*\b/gi, '');
+      if (/progress/i.test(cleaned)) {
+        cleaned = stripProgressMarkers(cleaned);
+      }
+      if (/\[文档/.test(cleaned)) {
+        cleaned = stripDocCiteMarkers(cleaned);
       }
       cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
       if (cleaned !== t) {
@@ -590,6 +598,7 @@ export default class PptTemplate {
     newSlidePageNo: number,
     counts?: number,
     colCounts?: number,
+    imageBuffers?: ArrayBuffer[],
   ) {
     const slidePageNo = PptTemplate.getTemplatePageNumber(pageType, counts, colCounts);
     let slideFileName = `ppt/slides/slide${newSlidePageNo}.xml`
@@ -598,10 +607,49 @@ export default class PptTemplate {
     this.newSlideFileDicts.push(slideFileDict);
     const slideRelationPageName=`ppt/slides/_rels/slide${newSlidePageNo}.xml.rels`
     let slideRelationContent = await this.getTemplatePageRelationContent(slidePageNo);
+    if (imageBuffers && imageBuffers.length && pageType === 'image_grid') {
+      slideRelationContent = this._bindSlideImages(
+        slideRelationContent,
+        newSlidePageNo,
+        imageBuffers,
+      );
+    }
     let slideRelationFileDict:SlideFileDict =new SlideFileDict(slideRelationPageName,slideRelationContent);
     this.newSlideRelationDicts.push(slideRelationFileDict);
     this.usedSlidePages.push(slidePageNo);
     this.newSlidePages.push(newSlidePageNo);
+  }
+
+  /**
+   * 图鉴换图：保持 rId，改 Target 指向本页独立 media，并登记二进制。
+   */
+  private _bindSlideImages(
+    relsXml: string,
+    newSlidePageNo: number,
+    imageBuffers: ArrayBuffer[],
+  ): string {
+    const $ = cheerio.load(relsXml || '', { xml: true });
+    const imgEls: cheerio.Cheerio<any>[] = [];
+    $('Relationship').each((_, el) => {
+      const type = ($(el).attr('Type') || '').toLowerCase();
+      const target = ($(el).attr('Target') || '').replace(/\\/g, '/');
+      if (type.includes('/image') || /\.(png|jpe?g|webp|gif)$/i.test(target)) {
+        imgEls.push($(el));
+      }
+    });
+    const n = Math.min(imgEls.length, imageBuffers.length);
+    for (let i = 0; i < n; i++) {
+      const buf = imageBuffers[i];
+      if (!buf || !buf.byteLength) continue;
+      const mediaName = `gen_p${newSlidePageNo}_i${i + 1}.png`;
+      const mediaPath = `ppt/media/${mediaName}`;
+      this.newMediaFiles.push({
+        path: mediaPath,
+        data: new Uint8Array(buf),
+      });
+      imgEls[i].attr('Target', `../media/${mediaName}`);
+    }
+    return $.xml();
   }
 
   /**
@@ -739,6 +787,11 @@ export default class PptTemplate {
         newZip.file(slideFileDict.slideName,slideFileDict.fileContent)
         newPageCnt++;
       })
+      // 图鉴换图等追加的媒体
+      for (const media of this.newMediaFiles || []) {
+        if (!media?.path || !media?.data) continue;
+        newZip.file(media.path, media.data);
+      }
       console.log(`新产生的幻灯片一共有${newPageCnt}页。`)
       // 生成新的PPTX文件
       await newZip.generateAsync({type: "nodebuffer", platform: "DOS"}).then( (data) => {

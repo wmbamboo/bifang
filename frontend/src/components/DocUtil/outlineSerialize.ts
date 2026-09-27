@@ -6,6 +6,8 @@ import {
   inferSlideLayout,
   parseSlideTips,
   parseColumnBlocks,
+  parseSlideImageAssets,
+  formatImgAssetLine,
   ColumnBlock,
   deriveSlideTitleFromTips,
 } from "@/components/DocUtil/ViewItem4Ppt";
@@ -16,7 +18,9 @@ function normalizeLayout(layout: SlideLayout | string | undefined): SlideLayout 
     layout === "metric_list" ||
     layout === "list" ||
     layout === "columns" ||
-    layout === "metric_columns"
+    layout === "metric_columns" ||
+    layout === "table" ||
+    layout === "image_grid"
   ) {
     return layout;
   }
@@ -105,6 +109,11 @@ export function chaptersToMarkdown(title: string, chapters: Chapter[]): string {
           lines.push(`- ${tip.text}`);
         }
       }
+      if (layout === "image_grid") {
+        for (const ref of parseSlideImageAssets(slide.subTitle || "")) {
+          lines.push(`- ${ref?.asset_id ? formatImgAssetLine(ref) : "img:"}`);
+        }
+      }
     }
   }
   lines.push("");
@@ -136,7 +145,13 @@ export function refreshSlideLayouts(chapters: Chapter[]): Chapter[] {
 
 export function setSlideTips(slide: Slide, tips: string[]) {
   const cleaned = (tips || []).map((t) => t.trim()).filter(Boolean);
-  slide.subTitle = cleaned.join("\n");
+  const imgs = parseSlideImageAssets(slide.subTitle || "").map((r) =>
+    r?.asset_id ? formatImgAssetLine(r) : "img:",
+  );
+  while (imgs.length && imgs[imgs.length - 1] === "img:") {
+    imgs.pop();
+  }
+  slide.subTitle = [...cleaned, ...imgs].join("\n");
 }
 
 /** 按角色写入复合页要点（自动带 metric:/list: 前缀）。 */

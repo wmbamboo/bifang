@@ -139,6 +139,43 @@ def test_attribute_p6_plain_text_no_vl_myth():
     assert "需 VL" not in warn
 
 
+def test_attribute_newline_label_pct_pairs():
+    """RapidOCR 分行「棉\\n72.18%」亦可抽。"""
+    text = (
+        "## 属性特征分析\n## 男士Polo衫\n面料材质\n棉\n72.18%\n涤纶\n15.32%\n"
+        "## 男士衬衫\n厚薄\n薄款\n55.10%\n常规\n30.20%\n"
+    )
+    rec = extract_page_record("x.pdf", 6, text)
+    assert rec["page_type"] == "attribute"
+    assert len(rec["metrics"]) >= 4, rec["metrics"]
+    cotton = next((m for m in rec["metrics"] if m.get("attr_label") == "棉"), None)
+    assert cotton and cotton.get("value") == "72.18"
+    assert cotton.get("name") == "polo衫"
+
+
+def test_attribute_chart_ocr_after_shirt_heading_axis_owner():
+    """实盘：图表OCR整块落在「男士衬衫」后，面料/图案仍归 polo。"""
+    text = (
+        "## 属性特征分析\n## 男士Polo衫\n面料材质\n属性销量占比\n"
+        "图案花纹\n"
+        "## 男士衬衫\n厚薄\n袖型\n"
+        "[图表OCR] 棉 72.18% 聚酯纤维 19.16% 纯色 70.07% 几何图案 11.92% "
+        "薄款 25.90% 落肩袖 15.06%\n"
+    )
+    rec = extract_page_record("抖音单品爆款分析-商务男士衬衫polo衫.pdf", 6, text)
+    assert rec["page_type"] == "attribute"
+    cotton = next((m for m in rec["metrics"] if m.get("attr_label") == "棉"), None)
+    solid = next((m for m in rec["metrics"] if m.get("attr_label") == "纯色"), None)
+    geo = next((m for m in rec["metrics"] if m.get("attr_label") == "几何图案"), None)
+    thin = next((m for m in rec["metrics"] if m.get("attr_label") == "薄款"), None)
+    sleeve = next((m for m in rec["metrics"] if m.get("attr_label") == "落肩袖"), None)
+    assert cotton and cotton.get("name") == "polo衫", cotton
+    assert solid and solid.get("name") == "polo衫", solid
+    assert geo and geo.get("name") == "polo衫", geo
+    assert thin and thin.get("name") == "男士衬衫", thin
+    assert sleeve and sleeve.get("name") == "男士衬衫", sleeve
+
+
 def test_product_grid_p9_captions():
     """P9 图鉴页：不应误判 price_band；caption 销量可抽。"""
     text = _load("polo_p9.md")
@@ -162,3 +199,45 @@ def test_iter_segments_keeps_table_atomic():
     tables = [s for s in segs if s[0] == "table"]
     assert len(tables) == 1
     assert extract_tables(text)
+
+
+def test_filter_extracts_fabric_page_prefers_attribute_only():
+    """面料页注入只留 attribute+标签，丢掉价带/图鉴销量噪声。"""
+    from app.services.extract_service import (
+        filter_extracts_for_query,
+        format_extracts_block,
+        load_file_extract,
+    )
+
+    recs = load_file_extract("服装", "抖音单品爆款分析-商务男士衬衫polo衫.pdf")
+    if not recs:
+        pytest.skip("polo extract jsonl 不在本地 kb_root")
+    q = "【本页标题】 polo衫面料材质属性占比\n【版式】metric"
+    picked = filter_extracts_for_query(recs, q)
+    assert picked, picked
+    assert all(r.get("page_type") == "attribute" for r in picked)
+    block = format_extracts_block(picked)
+    assert "72.18" in block
+    assert "棉" in block
+    assert "¥100-200" not in block and "100-200" not in block
+
+
+def test_filter_extracts_position_page_prefers_category_kpi():
+    """位次页注入只留 category_kpi，并暴露「3.3亿 男士衬衫 占比5.6%（占大盘）」。"""
+    from app.services.extract_service import (
+        filter_extracts_for_query,
+        format_extracts_block,
+        load_file_extract,
+    )
+
+    recs = load_file_extract("服装", "抖音单品爆款分析-商务男士衬衫polo衫.pdf")
+    if not recs:
+        pytest.skip("polo extract jsonl 不在本地 kb_root")
+    q = "【本页标题】 衬衫polo在大盘中的位次\n【版式】metric_columns"
+    picked = filter_extracts_for_query(recs, q)
+    assert picked and all(r.get("page_type") == "category_kpi" for r in picked)
+    block = format_extracts_block(picked)
+    assert "3.3" in block and "男士衬衫" in block and "5.6" in block
+    assert "占大盘" in block
+    assert all(r.get("page_type") == "category_kpi" for r in picked)
+    assert not any(r.get("page_type") == "attribute" for r in picked)

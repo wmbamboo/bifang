@@ -3,7 +3,10 @@
 import {normalizeMetricListTipsArray} from "@/components/DocUtil/outlineMetricNormalize";
 import {
   dropDuplicateColSub,
+  findChartAxisFragmentPage,
   findDuplicateTips,
+  findTitleTipEcho,
+  isTruncatedTip,
   validateTipsAgainstEvidence,
   CATEGORY_TITLE_RE,
   CATEGORY_CLAIM_RE,
@@ -13,18 +16,21 @@ import {
 } from "@/components/DocUtil/outlineEvidenceValidate";
 import {
   findMetaDiagnosticTips,
+  findDemoActionTips,
   metaDiagnosticBanClause,
   metaDiagnosticRetryHint,
   textHasMetaDiagnostic,
   META_DIAGNOSTIC_TIP_RE,
 } from "@/components/DocUtil/outlineMetaDiagnostic";
 import {
+  checkCardTitleAxisEvidence,
   checkColumnAxisEvidence,
   findUnsupportedActionSlideTitles,
 } from "@/components/DocUtil/outlineCoverage";
 
 export {
   findMetaDiagnosticTips,
+  findDemoActionTips,
   metaDiagnosticBanClause,
   metaDiagnosticRetryHint,
   textHasMetaDiagnostic,
@@ -718,6 +724,10 @@ export function validateFilledSlideInChapter(
   slides: FilledSlide[],
   index: number,
   evidence?: string,
+  fidelityOpts?: {
+    boundSources?: string[] | null;
+    retrievalScope?: string | null;
+  },
 ): string | null {
   const sl = slides[index];
   if (!sl) return `缺少第 ${index + 1} 页`;
@@ -729,6 +739,14 @@ export function validateFilledSlideInChapter(
   if (tips.length < 2) {
     return `页「${title}」tips 不足 2 条（现 ${tips.length}），须从材料填写真实要点`;
   }
+  // 页题须短：过长几乎必然是 tip/口径说明串台
+  const titleTrim = String(title || "").trim();
+  if (titleTrim.length > 18) {
+    return `页「${titleTrim.slice(0, 18)}…」标题过长（${titleTrim.length} 字），须≤16 字短标题，长事实放 tips`;
+  }
+  if (/[，。；]/.test(titleTrim) && titleTrim.length > 12) {
+    return `页「${titleTrim.slice(0, 16)}…」标题含长句标点，须改为短标题`;
+  }
   if (isPlaceholderTips(tips)) {
     return `页「${title}」tips 仍是占位句，须换成材料中的真实要点`;
   }
@@ -736,12 +754,41 @@ export function validateFilledSlideInChapter(
   if (metaTip) {
     return (
       `页「${title}」tips 含检索诊断「${metaTip}」，禁止写进大纲；` +
-      `材料不足时改写可执行的选品短动作（如「回查属性特征页」「对照爆款图鉴」），勿写「材料未覆盖/口径未标注」`
+      `材料不足时并入有证据的页，或改写含材料事实/原数字的 tip，勿写「材料未覆盖」或照抄「回查属性页」`
+    );
+  }
+  const demoTip = findDemoActionTips(tips);
+  if (demoTip) {
+    return (
+      `页「${title}」tips 含示范动作语「${demoTip}」（教学示例禁止原样照抄）；` +
+      `请写入材料中的属性占比/款式事实或原数字，或并入有证据的页`
     );
   }
 
   const dup = findDuplicateTips(tips);
   if (dup) return `页「${title}」${dup}`;
+  const echo = findTitleTipEcho(titleTrim, tips);
+  if (echo) return `页「${title}」${echo}`;
+
+  const truncTip = tips.find((t) => isTruncatedTip(String(t || "")));
+  if (truncTip) {
+    return (
+      `页「${title}」要点「${String(truncTip).slice(0, 28)}」疑似半句截断；` +
+      `请补全日期/口径（勿留「至2024-04-」「均为各价格」类残句）`
+    );
+  }
+  const chartFrag = findChartAxisFragmentPage(tips);
+  if (chartFrag) {
+    return `页「${title}」${chartFrag}`;
+  }
+
+  // 属性/面料/图案/厚薄/袖型页：须有原数字，否则空转过程话
+  if (/面料|图案|厚薄|袖型|属性/.test(titleTrim) && nMetric < 1) {
+    return (
+      `页「${title}」属属性偏好页但 tips 无原数字（含%/亿/万）；` +
+      `请写入材料占比/销量，或并入有证据的页/改 list，禁止只写「回查原图/独立成图」类计划语`
+    );
+  }
 
   if (layout === "metric") {
     if (nMetric < 2) {
@@ -784,9 +831,27 @@ export function validateFilledSlideInChapter(
   }
 
   if (layout === "table") {
-    const pipe = tips.filter((t) => (String(t).match(/\|/g) || []).length >= 1);
+    // 全角竖线 ｜ 也认（模型常混用），否则整页会被误判成「没有表格行」
+    const pipe = tips.filter(
+      (t) => (String(t).match(/[|｜]/g) || []).length >= 1,
+    );
     if (pipe.length < 2) {
       return `页「${title}」layout=table 至少 2 行须用 | 分隔单元格（如 维度|数值|增速|口径）`;
+    }
+    if (pipe.length > 8) {
+      return `页「${title}」layout=table 最多 8 行（现 ${pipe.length} 行，含表头）；请合并或拆页`;
+    }
+    // 通用「价格带筛选」表：禁止只写单一品类（双品类主题常见漏衬衫）
+    if (/价格带/.test(titleTrim) && !/衬衫|polo/i.test(titleTrim)) {
+      const blob = tips.join("\n");
+      const hasPolo = /polo/i.test(blob);
+      const hasShirt = /衬衫/.test(blob);
+      if (hasPolo && !hasShirt) {
+        return `页「${title}」价格带表仅有 polo 行；请补衬衫价格带行，或改标题为「polo价格带筛选」`;
+      }
+      if (hasShirt && !hasPolo) {
+        return `页「${title}」价格带表仅有衬衫行；请补 polo 价格带行，或改标题为「衬衫价格带筛选」`;
+      }
     }
   }
   if (layout === "image_grid") {
@@ -798,9 +863,17 @@ export function validateFilledSlideInChapter(
   const mismatch = tipsMismatchSlideTitle(title, tips, sl.intent);
   if (mismatch) return mismatch;
 
+  // 卡题轴：袖型/厚薄/面料/图案 标题不得挂邻列数据
+  const cardAxis = checkCardTitleAxisEvidence(title, tips, evidence || "");
+  if (!cardAxis.ok) {
+    return `页「${title}」${cardAxis.hint}`;
+  }
+
   if (evidence) {
     const fidelity = validateTipsAgainstEvidence(title, tips, evidence, {
       intent: sl.intent,
+      boundSources: fidelityOpts?.boundSources,
+      retrievalScope: fidelityOpts?.retrievalScope,
     });
     if (fidelity) return fidelity;
   }
@@ -825,7 +898,7 @@ function capTipsByLayout(layout: OutlineJsonLayout, tips: string[]): string[] {
       : layout === "metric_list"
         ? 8
         : layout === "table"
-          ? 6
+          ? 8
           : layout === "image_grid"
             ? 4
             : 5;
@@ -977,6 +1050,10 @@ export function parseFilledSlideFromModel(
   chapterSlides: FilledSlide[],
   index: number,
   evidence?: string,
+  fidelityOpts?: {
+    boundSources?: string[] | null;
+    retrievalScope?: string | null;
+  },
 ): {ok: true; value: FilledSlide} | {ok: false; msg: string} {
   const obj = extractJsonObject(text);
   let tipSrc: Record<string, unknown> | null = null;
@@ -1018,7 +1095,7 @@ export function parseFilledSlideFromModel(
     tips,
   };
   const next = chapterSlides.map((s, i) => (i === index ? slide : s));
-  const bad = validateFilledSlideInChapter(next, index, evidence);
+  const bad = validateFilledSlideInChapter(next, index, evidence, fidelityOpts);
   if (bad) return {ok: false, msg: bad};
   return {ok: true, value: slide};
 }
@@ -1089,7 +1166,7 @@ export function validateOutlineFilled(
           ok: false,
           msg:
             `页「${title || lockedSl.title}」tips 含检索诊断「${metaTip}」，禁止写进大纲；` +
-            `材料不足时改写可执行的选品短动作，勿写「材料未覆盖/口径未标注」`,
+            `材料不足时并入有证据的页或写含事实/数字的 tip，勿写「材料未覆盖」或照抄「回查属性页」`,
         };
       }
       if (layout === "metric_list" || layout === "metric") {

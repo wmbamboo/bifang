@@ -62,6 +62,19 @@ async def _handle_completions(body: dict[str, Any], kb_name: Optional[str]):
     score_threshold = float(
         get_settings().default_score_threshold if raw_threshold is None else raw_threshold
     )
+    # 兼容误把 stream_options 字段摊到 body 根上
+    retrieval_scope = str(
+        stream_options.get("retrieval_scope")
+        or body.get("retrieval_scope")
+        or ""
+    ).strip()
+    raw_sources = stream_options.get("source_files") or body.get("source_files") or []
+    if isinstance(raw_sources, str):
+        source_files = [s.strip() for s in raw_sources.split(",") if s.strip()]
+    elif isinstance(raw_sources, list):
+        source_files = [str(s).strip() for s in raw_sources if str(s).strip()]
+    else:
+        source_files = []
 
     # 规范化 messages
     norm_messages = []
@@ -94,6 +107,8 @@ async def _handle_completions(body: dict[str, Any], kb_name: Optional[str]):
             kb_name,
             top_k=top_k,
             score_threshold=score_threshold,
+            source_files=source_files or None,
+            retrieval_scope=retrieval_scope or None,
         )
         retrieve_ms = (time.perf_counter() - t_ret) * 1000
         # 大纲按页填 tips：检索仍按 slide，但摘要改用短标签契约，避免套用正文「小点」写法

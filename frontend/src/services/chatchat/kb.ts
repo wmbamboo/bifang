@@ -116,6 +116,53 @@ export async function downloadDoc(params: {
   });
 }
 
+export type KbAssetItem = {
+  kb_name: string;
+  doc: string;
+  file_name: string;
+  asset_id: string;
+  page: number;
+  kind: 'image' | 'chart' | 'whole' | 'embedded' | string;
+  idx: number;
+  url: string;
+  /** 页级文案摘要，供图鉴文案对齐 */
+  snippet?: string;
+};
+
+/** 列出库内元素图（默认 image+chart） */
+export async function listAssets(params: {
+  knowledge_base_name: string;
+  file_name?: string;
+  kinds?: string;
+}) {
+  return request<KBResponse<KbAssetItem[]>>(`/knowledge_base/list_assets`, {
+    method: 'GET',
+    params: {
+      knowledge_base_name: params.knowledge_base_name,
+      file_name: params.file_name || '',
+      kinds: params.kinds || 'image,chart',
+    },
+  });
+}
+
+/** 拉取单张资产为 ArrayBuffer（灌模用） */
+export async function fetchAssetBytes(params: {
+  knowledge_base_name: string;
+  file_name: string;
+  asset_id: string;
+}): Promise<ArrayBuffer> {
+  const blob = await request<Blob>(`/knowledge_base/asset_file`, {
+    method: 'GET',
+    params: {
+      knowledge_base_name: params.knowledge_base_name,
+      file_name: params.file_name,
+      asset_id: params.asset_id,
+    },
+    responseType: 'blob',
+  });
+  return blob.arrayBuffer();
+}
+
 export async function queryKbList(options?: { [key: string]: any }) {
   return request<API.KbListItem>('/knowledge_base/list_knowledge_bases', {
     method: 'GET',

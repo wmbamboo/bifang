@@ -5,7 +5,7 @@ import {Button, Empty, Flex, message, Progress, Spin, Tag} from 'antd';
 import React, {useCallback, useEffect, useState} from "react";
 import axios from "axios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
-import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars} from "@/components/DocUtil/ViewItem4Ppt";
+import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets} from "@/components/DocUtil/ViewItem4Ppt";
 import OutlineRec, {outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {PptOutlinePrompt} from "@/components/DocUtil/OutlinePromptPpt";
@@ -14,6 +14,7 @@ import SlideDrawer from "@/components/DocUtil/SliderDrawer";
 import PptTemplate from "@/components/DocUtil/PptTemplate";
 import { downgradeMetricColumns } from "@/components/DocUtil/outlineTipSlots";
 import { layoutForRender } from "@/components/DocUtil/outlineJson";
+import { loadImageGridBytes } from "@/components/DocUtil/kbImageAssets";
 import {CompassTwoTone, FilePptTwoTone, FolderOpenTwoTone, RocketTwoTone} from "@ant-design/icons";
 import SlideTemplateDrawer from "@/components/DocUtil/SlideTemplateDrawer";
 import KnowledgeBaseSelector, {opStackStyle, opBtnStyle, opKbTagStyle, ALL_KB_NAME, kbLabel} from "@/components/DocUtil/kbSelectorModal";
@@ -299,6 +300,7 @@ const KbOutlineGenPpt: React.FC = () => {
     await pptTemplate.genNewSlideFileDict_Random("catalog",slideVar_catalog,2,chapters.length);
     let page = 3;
     let svIndex = 0;
+    const usedAssetIds = new Set<string>();
     for (const chapter of chapters) {
       await pptTemplate.genNewSlideFileDict_Random("chapterCover", {
         chapterTitle: stripChapterOrdinalPrefix(chapter.title),
@@ -353,21 +355,42 @@ const KbOutlineGenPpt: React.FC = () => {
           continue;
         }
         if (slide.layout === 'table') {
-          const { vars } = buildTableFillVars(slide.subTitle || '', sv.vItem || {});
+          const { vars, rows, cols } = buildTableFillVars(
+            slide.subTitle || '',
+            sv.vItem || {},
+          );
           await pptTemplate.genNewSlideFileDict_Random(
             'table',
             { ...sv, ...vars },
             page,
+            rows,
+            cols,
           );
           page++;
           continue;
         }
         if (slide.layout === 'image_grid') {
           const { vars } = buildImageGridFillVars(slide.subTitle || '', sv.vItem || {});
+          let imageBuffers: ArrayBuffer[] = [];
+          try {
+            const captions = parseSlideTips(slide.subTitle || '').map((t) => t.text);
+            const manual = parseSlideImageAssets(slide.subTitle || '');
+            const picked = await loadImageGridBytes(kbName, 4, usedAssetIds, {
+              title: slide.title || '',
+              captions,
+              manual,
+            });
+            imageBuffers = picked.map((p) => p.bytes);
+          } catch (e) {
+            console.warn('image_grid assets load failed', e);
+          }
           await pptTemplate.genNewSlideFileDict_Random(
             'image_grid',
             { ...sv, ...vars },
             page,
+            undefined,
+            undefined,
+            imageBuffers.length ? imageBuffers : undefined,
           );
           page++;
           continue;
@@ -815,7 +838,7 @@ const KbOutlineGenPpt: React.FC = () => {
           )}
         </ProCard>
       </ProCard>
-      <OutlineSelectDrawer type={"select"} open={drawerOpen} outlineRecs={olRecs} outlineType={outlineTypePPT} kbName={kbLabel(kbName)}
+      <OutlineSelectDrawer type={"select"} open={drawerOpen} outlineRecs={olRecs} outlineType={outlineTypePPT} kbName={kbName}
                            selFn={onOutlineRecSelect} delFn={onOutlineRecDelete}
                            closeFn={drawerClose} cb4ImportOutline={cb4ImportOutline}/>
       <SlideDrawer key={editSlideKey} slide={editSlide} open={slideDrawerOpen} closeFn={slideDrawerClose} fn={resultSlideEditDrawerSave} />

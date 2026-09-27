@@ -434,6 +434,8 @@ def _vectorize_one(kb_name: str, file_name: str, task_id: str) -> tuple[bool, st
                 enable_ocr=True,
                 on_progress=on_progress,
                 should_continue=_still_running,
+                assets_dir=kb_service.kb_assets_dir(kb_name, file_name),
+                file_stem=Path(file_name).stem,
             )
         else:
             text = load_file_text(path, enable_ocr=False)
@@ -468,7 +470,7 @@ def _vectorize_one(kb_name: str, file_name: str, task_id: str) -> tuple[bool, st
             save_file_extract(kb_name, file_name, text, prefer_full_text=True)
         except Exception as ex:  # noqa: BLE001
             print(f"[warn] extract save failed {file_name}: {ex}", flush=True)
-        asset_meta = kb_service._extract_pdf_image_assets(path, kb_name, file_name)
+        asset_meta = kb_service.extract_page_assets(path, kb_name, file_name)
         store = kb_service.get_store(kb_name)
         store.delete_by_source(file_name)
         vectors = embed_texts(chunks)

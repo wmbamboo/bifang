@@ -23,3 +23,11 @@ frontend/.umi-test
 
 # 私钥
 frontend/config/ssl/*.key
+
+# 个人本地目录（部署文档 / SSL 配置 / 内网 IP，禁止入库）
+frontend/hezl/
+
+# WorkBuddy 本地备份与测试输出（体积大，勿入库）
+.workbuddy/backup/
+.workbuddy/tools/*.txt
+frontend/public/output-test.pptx

@@ -31,6 +31,26 @@ export function getTemplateManifest(): TemplateManifest {
   return manifest;
 }
 
+/**
+ * table 专用：按数据行列选出页码，并回传该页真实规格。
+ * 灌模前必须用回传的 rows/cols 生成 cell 变量，否则模板多出来的格子会留空。
+ */
+export function resolveTableGrid(
+  requestRows?: number,
+  requestCols?: number,
+): { page: number; rows: number; cols: number; downgraded?: string } {
+  const { page, downgraded } = resolveTemplatePage('table', requestRows, requestCols);
+  const hit = (manifest.pages || []).find(
+    (p) => p.layout === 'table' && p.page === page,
+  );
+  return {
+    page,
+    rows: hit?.rows || 5,
+    cols: hit?.cols || 4,
+    downgraded,
+  };
+}
+
 function clamp(n: number | undefined, fallback: number, min = 2, max = 5): number {
   const v = n && n > 0 ? Math.round(n) : fallback;
   return Math.max(min, Math.min(max, v));
@@ -138,8 +158,38 @@ export function resolveTemplatePage(
   }
 
   if (layout === 'table') {
-    const hit = find((p) => p.layout === 'table');
-    return { page: hit?.page || 42 };
+    // 表格有 5×4 / 6×4 / 6×5 / 8×5 四种规格，按数据行列取「最小够用」
+    const tables = pages.filter((p) => p.layout === 'table');
+    if (!tables.length) return { page: 42 };
+    const spec = (p: ManifestPage) => ({ r: p.rows || 5, c: p.cols || 4 });
+    const r = Math.max(2, Math.min(8, itemCounts ? Math.round(itemCounts) : 5));
+    const c = Math.max(2, Math.min(5, colCounts ? Math.round(colCounts) : 4));
+    const exact = tables.find((p) => {
+      const s = spec(p);
+      return s.r === r && s.c === c;
+    });
+    if (exact) return { page: exact.page };
+    const fit = tables
+      .filter((p) => {
+        const s = spec(p);
+        return s.r >= r && s.c >= c;
+      })
+      .sort((a, b) => {
+        const x = spec(a);
+        const y = spec(b);
+        return x.r * x.c - y.r * y.c;
+      })[0];
+    if (fit) {
+      const s = spec(fit);
+      return { page: fit.page, downgraded: `table ${r}×${c}→${s.r}×${s.c}` };
+    }
+    const big = tables.slice().sort((a, b) => {
+      const x = spec(a);
+      const y = spec(b);
+      return y.r * y.c - x.r * x.c;
+    })[0];
+    const s = spec(big);
+    return { page: big.page, downgraded: `table 超限→${s.r}×${s.c}` };
   }
 
   if (layout === 'image_grid') {

@@ -580,6 +580,29 @@ def metrics_from_kpi_prose(
     return out
 
 
+# 属性轴 → 专属标签（图表 OCR 整块挂在错误节标题后时，用轴归属纠偏品类）
+_ATTR_AXIS_LABELS: dict[str, frozenset[str]] = {
+    "面料": frozenset(
+        {"棉", "聚酯纤维", "涤纶", "粘胶纤维", "醋酯纤维", "锦纶", "氨纶"}
+    ),
+    "图案": frozenset({"纯色", "几何图案", "条纹", "字母", "动物图案"}),
+    "厚薄": frozenset({"薄款", "厚款", "加厚", "超薄"}),
+    "袖型": frozenset(
+        {"落肩袖", "灯笼袖", "常规袖", "插肩袖", "短袖", "长袖"}
+    ),
+}
+_ATTR_AXIS_HEADING_RE = re.compile(
+    r"^(面料材质|面料|材质|图案花纹|图案|花纹|厚薄|袖型)$"
+)
+
+
+def _attr_axis_of_label(label: str) -> Optional[str]:
+    for axis, labs in _ATTR_AXIS_LABELS.items():
+        if label in labs:
+            return axis
+    return None
+
+
 def metrics_from_attribute_prose(
     text: str,
     *,
@@ -589,14 +612,23 @@ def metrics_from_attribute_prose(
     """属性页：纯文本「棉 72.18%」类 label+占比，不依赖读图。
 
     仅 attribute 页启用，避免 KPI 脚注文案被误抽成属性指标。
+    双品类页常见「图表OCR」整块落在后一节后：用轴标题归属（面料/图案→Polo，
+    厚薄/袖型→衬衫）纠正 name，避免 polo 面料数被标成男士衬衫。
     """
     if page_type != "attribute":
         return []
     scopes = page_scopes or []
     plain = re.sub(r"<[^>]+>", "\n", text or "")
     plain = re.sub(r"[ \t]+", " ", plain)
-    # 当前小节节（男士Polo衫 / 男士衬衫）
+    # RapidOCR 分行「棉\\n72.18%」→「棉 72.18%」
+    plain = re.sub(
+        r"([\u4e00-\u9fffA-Za-z]{1,12})\s*\n\s*(\d+(?:\.\d+)?\s*[%％])",
+        r"\1 \2",
+        plain,
+    )
+    # 当前小节（男士Polo衫 / 男士衬衫）；轴标题 → 品类归属
     section = ""
+    axis_owner: dict[str, str] = {}
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     _SKIP_LABELS = {
@@ -623,6 +655,18 @@ def metrics_from_attribute_prose(
             section = "polo衫"
         elif re.search(r"男士衬衫|衬衫", line) and not re.search(r"polo", line, re.I):
             section = "男士衬衫"
+        # 轴标题行：记下该轴属于当前节（OCR 数字后置时靠此纠偏）
+        heading = _ATTR_AXIS_HEADING_RE.search(line)
+        if heading and section:
+            raw_h = heading.group(1)
+            if "面料" in raw_h or raw_h == "材质":
+                axis_owner["面料"] = section
+            elif "图案" in raw_h or raw_h == "花纹":
+                axis_owner["图案"] = section
+            elif raw_h == "厚薄":
+                axis_owner["厚薄"] = section
+            elif raw_h == "袖型":
+                axis_owner["袖型"] = section
         for m in _ATTR_PAIR_RE.finditer(line):
             label = (m.group(1) or "").strip()
             num = m.group(2)
@@ -639,13 +683,16 @@ def metrics_from_attribute_prose(
                 continue
             if re.fullmatch(r"20\d{2}", num or ""):
                 continue
-            key = f"{label}|{num}{unit}|{section}"
+            axis = _attr_axis_of_label(label)
+            name = (
+                (axis_owner.get(axis) if axis else None)
+                or section
+                or next((sc for sc in ("polo衫", "男士衬衫") if sc in scopes), "属性")
+            )
+            key = f"{label}|{num}{unit}|{name}"
             if key in seen:
                 continue
             seen.add(key)
-            name = section or (
-                next((sc for sc in ("polo衫", "男士衬衫") if sc in scopes), "属性")
-            )
             out.append(
                 {
                     "name": name,

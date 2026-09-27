@@ -264,6 +264,7 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
                     })()
                   }
                   editable
+                  kbName={props.kbName}
                   onSave={onTreeSave}
                 />
               ) : (

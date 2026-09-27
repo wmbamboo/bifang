@@ -26,6 +26,10 @@ import {
   STRONG_LLM_MODEL,
 } from '@/constants/llm';
 import {
+  defaultRetrievalScope,
+  type RetrievalScope,
+} from '@/components/DocUtil/retrievalScope';
+import {
   assistantContentToOutlineMarkdown,
   coerceLayoutBySlideTitle,
   filledToMarkdown,
@@ -98,6 +102,9 @@ const Chat=(props:ChatProps)=> {
   const pendingPackRef = React.useRef<PptDomainPack>('generic');
   /** 定框短显示名：存盘 / # 标题优先用它 */
   const pendingDisplayTitleRef = React.useRef('');
+  /** 检索范围与绑定源文档（每次构思由定框带入） */
+  const pendingRetrievalScopeRef = React.useRef<RetrievalScope>('kb_supplement');
+  const pendingBoundFilesRef = React.useRef<string[]>([]);
   /** 最近一次构思主题，保存大纲时回退用 */
   const lastTopicRef = React.useRef('');
   /** 大纲流水线进度：结构 / 章选型 / 按页填充 */
@@ -126,6 +133,10 @@ const Chat=(props:ChatProps)=> {
       inferPptDomainPack(payload.userMessage || '', {}) ||
       'generic';
     pendingDisplayTitleRef.current = (payload.displayTitle || '').trim();
+    const files = payload.boundSourceFiles || [];
+    pendingBoundFilesRef.current = files;
+    pendingRetrievalScopeRef.current =
+      payload.retrievalScope || defaultRetrievalScope(files);
     const topicMatch = (payload.userMessage || '').match(/主题是【(.+?)】/);
     if (topicMatch?.[1]) rememberTopic(topicMatch[1]);
     else if (topic.trim()) lastTopicRef.current = topic.trim();
@@ -299,6 +310,7 @@ const Chat=(props:ChatProps)=> {
           mode="ppt"
           onSend={sendOutline}
           showVars
+          kbName={kb_name}
           openPreviewSignal={previewSignal}
           inferVars={async (t) => {
             const completion = await openai.chat.completions.create({
@@ -438,6 +450,8 @@ const Chat=(props:ChatProps)=> {
             temperature: 0.3,
             prompt_name: 'default',
             return_direct: false,
+            retrieval_scope: pendingRetrievalScopeRef.current,
+            source_files: pendingBoundFilesRef.current,
           },
         };
 
@@ -452,7 +466,7 @@ const Chat=(props:ChatProps)=> {
               ],
               model: chatOpts.model,
               stream: false,
-              ...(chatOpts.stream_options as any),
+              stream_options: chatOpts.stream_options,
             } as any);
             ok = true;
             return String(completion?.choices?.[0]?.message?.content || '');
@@ -601,7 +615,9 @@ const Chat=(props:ChatProps)=> {
                   if (!body) return '';
                   const cid = d?.chunk_id ?? d?.chunk ?? '';
                   const page = d?.page ?? '';
-                  return `⟦chunk:${cid}|page:${page}⟧\n${body}`;
+                  const src = String(d?.source || d?.title || '').trim();
+                  const srcPart = src ? `|src:${src}` : '';
+                  return `⟦chunk:${cid}|page:${page}${srcPart}⟧\n${body}`;
                 })
                 .filter(Boolean)
                 .join('\n\n');
@@ -818,6 +834,10 @@ const Chat=(props:ChatProps)=> {
                   slidesOut,
                   si,
                   evidence,
+                  {
+                    boundSources: pendingBoundFilesRef.current,
+                    retrievalScope: pendingRetrievalScopeRef.current,
+                  },
                 );
                 if (parsed.ok) {
                   filledSlide = parsed.value;

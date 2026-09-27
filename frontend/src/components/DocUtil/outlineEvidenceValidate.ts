@@ -33,6 +33,26 @@ export const ENTITY_CATEGORY_ALL = [
 export const CATEGORY_TITLE_RE = /衬衫|polo|Polo|T恤/i;
 /** tip 自称大盘口径 */
 export const DAPAN_CLAIM_RE = /大盘|总销量|总销售额/;
+/** 「占大盘」是品类份额附属语，不是把主量标成大盘总盘 */
+export const SHARE_OF_MACRO_RE = /占大盘/;
+
+/** 去掉「占大盘」后再判是否点名大盘总盘口径 */
+export function tipClaimsBareDapan(tip: string): boolean {
+  const stripped = String(tip || "").replace(/占大盘/g, "");
+  return /大盘|总销量|总销售额/.test(stripped);
+}
+
+/** 扫描窗内找大盘词：忽略落在「占大盘」里的「大盘」 */
+function indexDapanOutsideShareIdiom(
+  s: string,
+  fromEnd: boolean,
+): number {
+  if (!s) return -1;
+  const mask = s.replace(/占大盘/g, (m) => "＿".repeat(m.length));
+  return fromEnd
+    ? lastIndexAny(mask, DAPAN_HIT_WORDS)
+    : firstIndexAny(mask, DAPAN_HIT_WORDS);
+}
 /** tip 点名品类口径 */
 export const CATEGORY_CLAIM_RE = /衬衫|polo|Polo|T恤/i;
 /** tip 点名价格带区间（￥50-100 / ¥50以下 / 200元以上） */
@@ -777,7 +797,7 @@ export function entitiesClaimedNearNumberInTip(
   const fromBefore = (): TipLocalClaim | null => {
     if (!before) return null;
     return pickCloser(
-      lastIndexAny(before, DAPAN_HIT_WORDS),
+      indexDapanOutsideShareIdiom(before, true),
       lastCategoryHit(before),
       true,
     );
@@ -786,7 +806,7 @@ export function entitiesClaimedNearNumberInTip(
   const fromAfter = (): TipLocalClaim | null => {
     if (!after) return null;
     return pickCloser(
-      firstIndexAny(after, DAPAN_HIT_WORDS),
+      indexDapanOutsideShareIdiom(after, false),
       firstCategoryHit(after),
       false,
     );
@@ -816,7 +836,7 @@ export function isCompanionRateToken(token: string, tip: string): boolean {
   const idx = flat.indexOf(num);
   if (idx < 0) return false;
   const win = flat.slice(Math.max(0, idx - 12), idx + num.length + 8);
-  return /占比|同比|环比/.test(win);
+  return /占比|同比|环比|占大盘/.test(win);
 }
 
 /** 孤立数字碎片：整 tip 几乎只有一个短数字、无单位无实体 */
@@ -829,10 +849,154 @@ export function isOrphanNumberTip(tip: string): boolean {
   return false;
 }
 
+/** 剥前缀后的 tip 正文 */
+function tipBodyPlain(tip: string): string {
+  return String(tip || "")
+    .replace(
+      /^(?:metric|list|col|column|栏|colSub|columnSub|栏副|副标)\s*[:：]\s*/i,
+      "",
+    )
+    .trim();
+}
+
+/**
+ * 短标签核心：去掉价签/销量数后的款名核心。
+ * 专治「腰腹加宽/高弹衬衫 ¥129」与「… ¥119」两卡同款名。
+ */
+export function tipLabelCore(tip: string): string {
+  return tipBodyPlain(tip)
+    .replace(/[￥¥]\s*\d+(?:\.\d+)?/g, "")
+    .replace(/\d+(?:\.\d+)?\s*[%％万亿]/g, "")
+    .replace(/本期销量\s*[:：]?\s*/g, "")
+    .replace(/[\s|｜]+/g, "")
+    .toLowerCase();
+}
+
+/**
+ * 半句截断：日期缺日、句尾虚词/连字符、价格带残词等。
+ * 例：…至2024-04- / …均为各价格 / 同比+
+ */
+export function isTruncatedTip(tip: string): boolean {
+  const s = tipBodyPlain(tip);
+  if (!s || s.length < 3) return false;
+  // 完整采样窗放行（isSamplingWindowTip 另跳过忠实度；此处仍拦明显截断）
+  if (/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}\s*$/.test(s)) return false;
+  // 日期截断：缺日或尾随分隔符
+  if (/20\d{2}[.\-/]\d{1,2}[.\-/]?\s*$/.test(s)) return true;
+  if (/至\s*20\d{2}[.\-/]\d{1,2}[.\-/]?\s*$/.test(s)) return true;
+  if (/[.\-/~～—–]\s*$/.test(s)) return true;
+  // 句尾悬挂虚词/介词（成句未完）
+  if (s.length >= 5 && /[的与和及为至于按]$/.test(s)) return true;
+  // 价格带残词
+  if (/各价格$|均为各价格$/.test(s)) return true;
+  // 须带未完成符号：单纯「销量同比」表头放行
+  if (/同比[+\-＋－]\s*$|环比[+\-＋－]\s*$|增速[+\-＋－]\s*$/.test(s)) return true;
+  // 「2024-03-19至2024-04-」无日
+  if (/至\s*20\d{2}[.\-/]\d{1,2}[.\-/]\s*$/.test(s)) return true;
+  return false;
+}
+
+/**
+ * 图表轴/图例碎片：价位刻度串、坐标轴黑话，不成句。
+ * 例：¥50 / ¥100 / ¥200；TOP款口径；销量席位
+ */
+export function isChartAxisFragmentTip(tip: string): boolean {
+  const s = tipBodyPlain(tip);
+  if (!s) return false;
+  // 裸价位刻度（可带斜杠/顿号连接）
+  if (
+    /^(?:[￥¥]?\s*\d{2,4}\s*[\/\|、]\s*){1,}[￥¥]?\s*\d{2,4}$/.test(s.replace(/\s+/g, ""))
+  ) {
+    return true;
+  }
+  if (/^[￥¥]\s*\d{2,4}$/.test(s)) return true;
+  // 轴/图例黑话（无占比/销量成句）
+  if (
+    /^(?:TOP款?口径|销量席位|横轴|纵轴|图例|坐标轴|单位[:：]?万?件?|刻度)$/i.test(
+      s,
+    )
+  ) {
+    return true;
+  }
+  // 「¥50 / ¥100 / TOP款口径 / 销量席位」混排
+  const parts = s.split(/\s*[\/\|、]\s*/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 3) {
+    const crumb = parts.filter(
+      (p) =>
+        /^[￥¥]?\s*\d{2,4}$/.test(p) ||
+        /^(?:TOP款?口径|销量席位|横轴|纵轴|图例)$/i.test(p),
+    );
+    if (crumb.length >= 3 && crumb.length >= parts.length - 1) return true;
+  }
+  return false;
+}
+
+/** 页内 ≥2 条图表碎片且几乎无成句指标 → 拒收 */
+export function findChartAxisFragmentPage(
+  tips: string[],
+): string | null {
+  const frags: string[] = [];
+  let realMetric = 0;
+  for (const tip of tips || []) {
+    const raw = String(tip || "").trim();
+    if (!raw) continue;
+    if (/^(?:colSub|columnSub|栏副|副标|layout|col|column|栏)\s*[:：]/i.test(raw)) {
+      continue;
+    }
+    if (isChartAxisFragmentTip(raw)) {
+      frags.push(tipBodyPlain(raw).slice(0, 16));
+      continue;
+    }
+    const body = tipBodyPlain(raw);
+    if (/[%％]/.test(body) || /\d+(?:\.\d+)?\s*[万亿]/.test(body)) {
+      realMetric += 1;
+    } else if (/[\u4e00-\u9fff]{4,}/.test(body) && body.length >= 8) {
+      realMetric += 1;
+    }
+  }
+  if (frags.length >= 2 && realMetric === 0) {
+    return (
+      `要点多为图表轴/刻度碎片「${frags.slice(0, 2).join('、')}」；` +
+      `请写成可读短句（含口径+数字），勿把坐标轴标签直接灌进卡片`
+    );
+  }
+  return null;
+}
+
 export type ValidateTipsEvidenceOpts = {
   /** 大纲选型阶段声明的页意图；缺省则标题正则降级 */
   intent?: string | null;
+  /** 定框绑定的主文档；扩库模式下跨文档数字须标来源 */
+  boundSources?: string[] | null;
+  /** bound_only | kb_supplement */
+  retrievalScope?: string | null;
 };
+
+/** 从证据块头解析 src= */
+export function sourcesForMetricInEvidence(
+  evidence: string,
+  token: string,
+): string[] {
+  const ev = String(evidence || "");
+  const tok = normalizeMetricToken(token);
+  if (!tok) return [];
+  const parts = ev.split(/(?=⟦chunk:)/);
+  const found = new Set<string>();
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    const head = part.match(/^⟦chunk:([^\]]*)⟧/);
+    const body = head ? part.slice(head[0].length) : part;
+    if (!evidenceHasMetric(body, tok) && !evidenceHasMetric(part, tok)) continue;
+    const srcM = (head?.[1] || "").match(/(?:^|\|)src:([^|\]]+)/);
+    const src = (srcM?.[1] || "").trim();
+    if (src) found.add(src);
+  }
+  return [...found];
+}
+
+export function tipHasSourceAttribution(tip: string): boolean {
+  return /来源\s*[:：]|出处\s*[:：]|（来源[：:]/.test(String(tip || ""));
+}
 
 /** 从栏标题/短句解析口径归属（供 col: 继承） */
 export function claimFromAxisTitle(
@@ -878,6 +1042,8 @@ export function validateTipsAgainstEvidence(
   const titleIsDapan = intent === "macro-market";
   const {requireNear} = titleEntityHints(title);
   const issues: string[] = [];
+  /** 面料/材质/图案等属性页：禁止价带区间 tip（与卡题轴闸双保险） */
+  const attrAxisPage = /面料|材质|图案|厚薄|袖型|属性/.test(String(title || ""));
 
   /** 当前分栏轴口径（遇下一个 col: 更新；colSub 不打断） */
   let colClaim: TipLocalClaim | null = null;
@@ -885,6 +1051,17 @@ export function validateTipsAgainstEvidence(
   for (const tip of tips || []) {
     const t = String(tip || "").trim();
     if (!t) continue;
+
+    if (
+      attrAxisPage &&
+      PRICE_BAND_TOKEN_RE.test(t) &&
+      !/棉|涤纶|聚酯|粘胶|醋酯|锦纶|纯色|条纹|几何|落肩袖|薄款|厚款/.test(t)
+    ) {
+      issues.push(
+        `「${t}」含价格带区间，但本页是属性/面料轴；请改用棉/纯色等属性标签占比，禁止用¥价带销量凑数`,
+      );
+      continue;
+    }
 
     const colM = t.match(/^(?:col|column|栏)\s*[:：]\s*(.+)$/i);
     if (colM) {
@@ -904,6 +1081,18 @@ export function validateTipsAgainstEvidence(
       continue;
     }
 
+    if (isTruncatedTip(t)) {
+      issues.push(`「${t}」疑似半句截断（日期/虚词/价格带残缺），请补全后再填`);
+      continue;
+    }
+
+    if (isChartAxisFragmentTip(t)) {
+      issues.push(
+        `「${t}」像图表轴/刻度标签，请改写成含口径的短句，勿直接灌坐标文字`,
+      );
+      continue;
+    }
+
     // 采样窗/日期副标：不是指标，不做数字↔实体对齐
     if (isSamplingWindowTip(t)) {
       continue;
@@ -912,12 +1101,25 @@ export function validateTipsAgainstEvidence(
     const tokens = uniqueMetricTokens(extractMetricTokens(t));
     if (!tokens.length) continue;
 
-    const tipClaimsDapan = DAPAN_CLAIM_RE.test(t);
+    const tipClaimsDapan = tipClaimsBareDapan(t);
     const tipClaimsCat = CATEGORY_CLAIM_RE.test(t);
 
     if (tipClaimsDapan && !tipClaimsCat && !titleIsDapan && !positionPage) {
       issues.push(
         `「${t}」是大盘口径，本页标题点名品类，禁止把大盘总销量写成品类事实`,
+      );
+      continue;
+    }
+
+    // 位次页：有「占大盘x%」但未点名衬衫/polo → 主量会被误当成大盘；要求写清品类
+    if (
+      positionPage &&
+      SHARE_OF_MACRO_RE.test(t) &&
+      !tipClaimsCat &&
+      /[\d.]+\s*[万亿]/.test(t)
+    ) {
+      issues.push(
+        `「${t}」写了占大盘份额但未点名衬衫/polo；请写成「3.3亿 男士衬衫销售额，占大盘5.6%」这类品类主量+份额`,
       );
       continue;
     }
@@ -928,6 +1130,39 @@ export function validateTipsAgainstEvidence(
           `「${t}」中的数字「${token}」未在本页检索证据中出现（禁止编造或串窗）`,
         );
         break;
+      }
+
+      // 有主文档时：按检索范围约束跨文档数字
+      const bound = (opts?.boundSources || [])
+        .map((s) => String(s || "").trim())
+        .filter(Boolean);
+      const rScope = String(opts?.retrievalScope || "").toLowerCase();
+      if (bound.length) {
+        const srcs = sourcesForMetricInEvidence(ev, token);
+        if (srcs.length) {
+          const inBound = srcs.some((s) =>
+            bound.some((b) => s === b || s.includes(b) || b.includes(s)),
+          );
+          if (!inBound) {
+            if (rScope === "bound_only" || rScope === "bound") {
+              issues.push(
+                `「${t}」中的数字「${token}」来自未绑定文档「${srcs[0]}」；` +
+                  `当前为「仅用所选文档」，禁止整段引用库外材料（如防晒服白皮书）`,
+              );
+              break;
+            }
+            if (
+              (rScope === "kb_supplement" || rScope === "supplement") &&
+              !tipHasSourceAttribution(t)
+            ) {
+              issues.push(
+                `「${t}」中的数字「${token}」仅见于补充文档「${srcs[0]}」，` +
+                  `请标注「（来源：${srcs[0]}）」或改用主文档口径`,
+              );
+              break;
+            }
+          }
+        }
       }
 
       if (!requireNear.length && intent === "generic") continue;
@@ -1030,21 +1265,65 @@ export function validateTipsAgainstEvidence(
   return `页「${title}」数值不忠实：${issues[0]}`;
 }
 
-/** 同页 tips 去重（完全相同或归一化后相同）。
- * colSub/副标 允许弱重复；col: 与正文短条目仍禁止同文两卡。
+/** 同页 tips 去重（完全相同、或去掉价签后短标签核心相同）。
+ * 跨卡/跨栏：去掉 list:/metric: 前缀后全页比对；colSub/副标 允许弱重复。
  */
 export function findDuplicateTips(tips: string[]): string | null {
-  const seen = new Set<string>();
+  const seenExact = new Set<string>();
+  const seenCore = new Set<string>();
   for (const tip of tips || []) {
     const raw = String(tip || "").trim();
     if (!raw) continue;
-    if (/^(?:colSub|columnSub|栏副|副标|layout)\s*[:：]/i.test(raw)) continue;
-    const key = raw.replace(/\s+/g, "").toLowerCase();
-    if (!key || key.length < 4) continue;
-    if (seen.has(key)) {
-      return `存在重复要点「${raw.slice(0, 24)}」，禁止同文填两卡`;
+    if (/^(?:colSub|columnSub|栏副|副标|layout|col|column|栏)\s*[:：]/i.test(raw)) {
+      continue;
     }
-    seen.add(key);
+    const body = raw
+      .replace(/^(?:metric|list)\s*[:：]\s*/i, "")
+      .replace(/\s+/g, "")
+      .toLowerCase();
+    if (!body || body.length < 4) continue;
+    if (seenExact.has(body)) {
+      return `存在重复要点「${raw.slice(0, 24)}」，禁止同文填两卡（含跨卡）`;
+    }
+    seenExact.add(body);
+
+    const core = tipLabelCore(raw);
+    // 短款名核心 ≥4 字且含中文：同款不同价也算跨卡重复
+    if (
+      core.length >= 4 &&
+      /[\u4e00-\u9fff]/.test(core) &&
+      // 纯数字残核跳过
+      !/^\d+$/.test(core)
+    ) {
+      if (seenCore.has(core)) {
+        return (
+          `存在重复短标签「${core.slice(0, 20)}」` +
+          `（已忽略价签差异），禁止同款名填两卡`
+        );
+      }
+      seenCore.add(core);
+    }
+  }
+  return null;
+}
+
+/** 页题与 tip 同文（页题串台成第一条 tip） */
+export function findTitleTipEcho(title: string, tips: string[]): string | null {
+  const t = String(title || "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+  if (!t || t.length < 8) return null;
+  for (const tip of tips || []) {
+    const raw = String(tip || "").trim();
+    if (!raw) continue;
+    if (/^(?:col|column|栏|colSub|栏副|副标|layout)\s*[:：]/i.test(raw)) continue;
+    const body = raw
+      .replace(/^(?:metric|list)\s*[:：]\s*/i, "")
+      .replace(/\s+/g, "")
+      .toLowerCase();
+    if (body === t || (t.length >= 12 && body.includes(t)) || (body.length >= 12 && t.includes(body))) {
+      return `页题与要点同文「${String(title).slice(0, 20)}」，页题须≤16 字短标题，事实放 tips`;
+    }
   }
   return null;
 }

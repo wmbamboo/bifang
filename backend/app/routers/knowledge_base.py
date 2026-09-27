@@ -225,6 +225,39 @@ async def upload_tasks_revectorize(request: Request):
     )
 
 
+@router.get("/list_assets")
+async def list_assets(
+    knowledge_base_name: str = Query(""),
+    file_name: str = Query(""),
+    kinds: str = Query("image,chart"),
+):
+    """列出元素图/图表裁切（默认不含 whole/embedded，图鉴优先商品图）。"""
+    kind_list = [k.strip() for k in (kinds or "").split(",") if k.strip()]
+    return kb_service.list_doc_assets(
+        knowledge_base_name,
+        file_name,
+        kinds=kind_list or ["image", "chart"],
+    )
+
+
+@router.get("/asset_file")
+async def asset_file(
+    knowledge_base_name: str = Query(""),
+    file_name: str = Query(""),
+    asset_id: str = Query(""),
+):
+    path = kb_service.resolve_asset_path(knowledge_base_name, file_name, asset_id)
+    if not path:
+        return fail("资源不存在", 404)
+    media = "image/png"
+    suf = path.suffix.lower()
+    if suf in {".jpg", ".jpeg"}:
+        media = "image/jpeg"
+    elif suf == ".webp":
+        media = "image/webp"
+    return FileResponse(path, media_type=media, filename=path.name)
+
+
 @router.get("/vs_type_conf")
 async def vs_type_conf():
     return kb_service.vs_type_conf()

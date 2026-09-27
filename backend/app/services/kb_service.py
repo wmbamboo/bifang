@@ -383,6 +383,11 @@ def save_uploaded_files(
     return ok({"failed_files": failed}, msg="文件上传完成")
 
 
+def kb_assets_dir(kb_name: str, file_name: str) -> Path:
+    """文档资源根：kb/assets/<stem>/（含 elements/、whole/、内嵌原图）。"""
+    return kb_content_dir(kb_name).parent / "assets" / Path(file_name).stem
+
+
 def _extract_pdf_image_assets(
     path: Path,
     kb_name: str,
@@ -398,9 +403,7 @@ def _extract_pdf_image_assets(
     except Exception:  # noqa: BLE001
         return {}
 
-    settings = get_settings()
-    content = kb_content_dir(kb_name)
-    assets_dir = content.parent / "assets" / Path(file_name).stem
+    assets_dir = kb_assets_dir(kb_name, file_name)
     assets_dir.mkdir(parents=True, exist_ok=True)
     out: dict[int, list[str]] = {}
     try:
@@ -430,6 +433,206 @@ def _extract_pdf_image_assets(
     except Exception:  # noqa: BLE001
         return out
     return out
+
+
+def _collect_element_asset_ids(assets_dir: Path, file_stem: str) -> dict[int, list[str]]:
+    """扫描 OCR 内联裁切产物 elements/<stem>_pN_imgK.png / _chartK.png。"""
+    out: dict[int, list[str]] = {}
+    elem = assets_dir / "elements"
+    if not elem.is_dir():
+        return out
+    pat = re.compile(
+        rf"^{re.escape(file_stem)}_p(\d+)_(img|chart)(\d+)\.png$",
+        re.I,
+    )
+    for p in sorted(elem.glob(f"{file_stem}_p*_*.png")):
+        m = pat.match(p.name)
+        if not m:
+            continue
+        page = int(m.group(1))
+        out.setdefault(page, []).append(f"elements/{p.name}")
+    return out
+
+
+def extract_page_assets(
+    path: Path,
+    kb_name: str,
+    file_name: str,
+    *,
+    include_embedded: bool = True,
+) -> dict[int, list[str]]:
+    """统一抽图入口：元素图（OCR 同次裁切）优先，可选附带内嵌原图。
+
+    上传 / vectorize / revectorize 只应调用本函数，避免两份拷贝漂移。
+    """
+    stem = Path(file_name).stem
+    assets_dir = kb_assets_dir(kb_name, file_name)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    out: dict[int, list[str]] = _collect_element_asset_ids(assets_dir, stem)
+    if include_embedded and path.suffix.lower() == ".pdf":
+        embedded = _extract_pdf_image_assets(path, kb_name, file_name)
+        for page, ids in embedded.items():
+            bucket = out.setdefault(page, [])
+            for aid in ids:
+                if aid not in bucket:
+                    bucket.append(aid)
+    return out
+
+
+def list_doc_assets(
+    kb_name: str,
+    file_name: str = "",
+    *,
+    kinds: Optional[list[str]] = None,
+) -> dict:
+    """列出已裁切元素图 / 整页图（供图鉴选图）。
+
+    file_name 空则扫该库全部文档 assets。
+    """
+    if not kb_name:
+        return fail("知识库名称为空")
+    root = get_settings().kb_root / kb_name / "assets"
+    if not root.is_dir():
+        return ok([])
+    want = {k.lower() for k in (kinds or ["image", "chart", "whole", "embedded"])}
+    if file_name:
+        stems = [Path(file_name).stem]
+    else:
+        stems = sorted(p.name for p in root.iterdir() if p.is_dir())
+
+    rows: list[dict] = []
+    for stem in stems:
+        adir = root / stem
+        if not adir.is_dir():
+            continue
+        elem = adir / "elements"
+        if elem.is_dir() and (want & {"image", "chart"}):
+            # 页级 snippet：来自 extracts，供前端文案对齐
+            page_snip: dict[int, str] = {}
+            extracts = (
+                get_settings().kb_root / kb_name / "extracts" / f"{stem}.jsonl"
+            )
+            if extracts.exists():
+                for line in extracts.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    pg = rec.get("page")
+                    if pg is None:
+                        continue
+                    bits = [str(rec.get("snippet") or "")]
+                    for met in rec.get("metrics") or []:
+                        lab = met.get("attr_label") or met.get("name") or ""
+                        val = met.get("display") or met.get("raw") or met.get("value") or ""
+                        if lab or val:
+                            bits.append(f"{lab} {val}".strip())
+                    page_snip[int(pg)] = " ".join(bits)[:400]
+
+            pat = re.compile(
+                rf"^{re.escape(stem)}_p(\d+)_(img|chart)(\d+)\.(png|jpe?g|webp)$",
+                re.I,
+            )
+            for p in sorted(elem.iterdir()):
+                if not p.is_file():
+                    continue
+                m = pat.match(p.name)
+                if not m:
+                    continue
+                kind = "image" if m.group(2).lower() == "img" else "chart"
+                if kind not in want:
+                    continue
+                page_no = int(m.group(1))
+                asset_id = f"elements/{p.name}"
+                rows.append(
+                    {
+                        "kb_name": kb_name,
+                        "doc": stem,
+                        "file_name": f"{stem}.pdf",
+                        "asset_id": asset_id,
+                        "page": page_no,
+                        "kind": kind,
+                        "idx": int(m.group(3)),
+                        "snippet": page_snip.get(page_no, ""),
+                        "url": (
+                            f"/knowledge_base/asset_file?knowledge_base_name={kb_name}"
+                            f"&file_name={stem}.pdf&asset_id={asset_id}"
+                        ),
+                    }
+                )
+        whole = adir / "whole"
+        if whole.is_dir() and "whole" in want:
+            for p in sorted(whole.glob("page_*.png")):
+                m = re.match(r"page_(\d+)\.png$", p.name, re.I)
+                if not m:
+                    continue
+                asset_id = f"whole/{p.name}"
+                rows.append(
+                    {
+                        "kb_name": kb_name,
+                        "doc": stem,
+                        "file_name": f"{stem}.pdf",
+                        "asset_id": asset_id,
+                        "page": int(m.group(1)),
+                        "kind": "whole",
+                        "idx": 0,
+                        "url": (
+                            f"/knowledge_base/asset_file?knowledge_base_name={kb_name}"
+                            f"&file_name={stem}.pdf&asset_id={asset_id}"
+                        ),
+                    }
+                )
+        if "embedded" in want:
+            for p in sorted(adir.glob(f"{stem}_p*_*.png")):
+                if p.parent != adir:
+                    continue
+                m = re.match(
+                    rf"^{re.escape(stem)}_p(\d+)_(\d+)\.png$", p.name, re.I
+                )
+                if not m:
+                    continue
+                rows.append(
+                    {
+                        "kb_name": kb_name,
+                        "doc": stem,
+                        "file_name": f"{stem}.pdf",
+                        "asset_id": p.name,
+                        "page": int(m.group(1)),
+                        "kind": "embedded",
+                        "idx": int(m.group(2)),
+                        "url": (
+                            f"/knowledge_base/asset_file?knowledge_base_name={kb_name}"
+                            f"&file_name={stem}.pdf&asset_id={p.name}"
+                        ),
+                    }
+                )
+    return ok(rows)
+
+
+def resolve_asset_path(kb_name: str, file_name: str, asset_id: str) -> Optional[Path]:
+    """解析 asset_id 到绝对路径；拒绝路径穿越。"""
+    if not kb_name or not asset_id:
+        return None
+    stem = Path(file_name or "").stem
+    if not stem:
+        # 从 asset 文件名猜 stem
+        base = Path(asset_id.replace("\\", "/")).name
+        stem = base.split("_p")[0] if "_p" in base else ""
+    # stem=".." 时 Path 会退到 assets 上一级（库目录），可读任意文件
+    if not stem or ".." in stem or "/" in stem or "\\" in stem:
+        return None
+    rel = asset_id.replace("\\", "/").lstrip("/")
+    if ".." in rel.split("/"):
+        return None
+    base = (get_settings().kb_root / kb_name / "assets" / stem).resolve()
+    path = (base / rel).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
 
 
 def vectorize_files(
@@ -466,9 +669,16 @@ def vectorize_files(
             continue
         try:
             store.delete_by_source(name)
-            text = load_file_text(path, enable_ocr=settings.ocr_enabled)
-            # 尽量按页切块；并抽出 PDF 内嵌图为 asset（供后续 image_grid）
-            asset_meta = _extract_pdf_image_assets(path, knowledge_base_name, name)
+            stem = Path(name).stem
+            assets_dir = kb_assets_dir(knowledge_base_name, name)
+            text = load_file_text(
+                path,
+                enable_ocr=settings.ocr_enabled,
+                assets_dir=assets_dir if settings.ocr_enabled else None,
+                file_stem=stem if settings.ocr_enabled else None,
+            )
+            # 元素图（OCR 内联）+ 内嵌图；上传/revectorize 共用
+            asset_meta = extract_page_assets(path, knowledge_base_name, name)
             pieces = split_text_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
             if not pieces:
                 failed_files[name] = "未能解析出文本内容（含OCR）"
@@ -635,8 +845,11 @@ def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
         loc = f" 片段{chunk_id}" if chunk_id is not None else ""
         if page is not None:
             loc += f" 第{page}页"
-        # 同 chunk 边界标记，供前端数值+实体同块校验
-        head = f"⟦chunk:{chunk_id}|page:{page if page is not None else ''}⟧"
+        # 同 chunk 边界标记，供前端数值+实体同块校验（含源文档）
+        head = (
+            f"⟦chunk:{chunk_id}|page:{page if page is not None else ''}"
+            f"|src:{source}⟧"
+        )
         contexts.append(f"[文档{i}] 来源：{source}{loc}\n{head}\n{content}")
         ref_docs.append(
             {
@@ -729,6 +942,10 @@ def _slide_query_variants(primary: str) -> list[str]:
         _push("polo衫 男士polo 销量")
     if "价格带" in core:
         _push("价格带 销量占比")
+    # 面料/属性页：勿只推「销量」漂到价格带；优先属性特征 OCR 占比
+    if re.search(r"面料|材质|属性|图案|厚薄|袖型", core):
+        _push("属性特征分析 面料材质 属性销量占比")
+        _push("棉 聚酯纤维 纯色 占比")
 
     return out[:8]
 
@@ -940,6 +1157,10 @@ def plan_writing_retrieval(user_text: str) -> tuple[str, str, list[str]]:
                     extras.append(t)
         if title and "价格带" in title and "价格带" not in extras:
             extras.append("价格带")
+        if title and re.search(r"面料|材质|属性|图案|厚薄|袖型", title):
+            for t in ("属性特征", "面料材质", "属性销量占比"):
+                if t not in extras:
+                    extras.append(t)
         return "slide", title or (extras[0] if extras else _clean_query(text)), extras
 
     if _OUTLINE_RE.search(text):
@@ -1024,8 +1245,15 @@ def retrieve_for_writing(
     top_k: int = 4,
     score_threshold: float = 0.0,
     mode: Optional[str] = None,
+    source_files: Optional[list[str]] = None,
+    retrieval_scope: Optional[str] = None,
 ) -> tuple[list[dict], str]:
-    """先按主题或本页要点检索，再对专名做第二跳，合并去重。"""
+    """先按主题或本页要点检索，再对专名做第二跳，合并去重。
+
+    retrieval_scope:
+      - bound_only：只保留 source_files 内文档
+      - kb_supplement / 空：不按文件硬过滤（可带 source 标记）
+    """
     task, primary, extras = plan_writing_retrieval(user_text)
     if not primary:
         primary = _clean_query(user_text, 200)
@@ -1243,6 +1471,12 @@ def retrieve_for_writing(
             title_penalty.extend(["男士衬衫 价格带"])
         if "价格带" in primary:
             title_boost.append("价格带")
+        # 面料/属性页：抬属性特征，压价格带串窗
+        if re.search(r"面料|材质|属性|图案|厚薄|袖型", primary):
+            title_boost.extend(
+                ["属性特征", "面料材质", "属性销量占比", "图案花纹", "棉"]
+            )
+            title_penalty.extend(["价格带", "本期销量", "¥50", "¥100"])
 
     if prefer_tokens or title_boost or title_penalty:
 
@@ -1277,7 +1511,35 @@ def retrieve_for_writing(
             reverse=True,
         )
 
-    return merged[: settings.writing_context_limit], task
+    limited = merged[: settings.writing_context_limit]
+    limited = _apply_source_scope(limited, source_files, retrieval_scope)
+    return limited, task
+
+
+def _apply_source_scope(
+    docs: list[dict],
+    source_files: Optional[list[str]],
+    retrieval_scope: Optional[str],
+) -> list[dict]:
+    """单文档模式硬过滤；扩库模式把绑定文档排前面。"""
+    names = [str(s).strip() for s in (source_files or []) if str(s).strip()]
+    if not names:
+        return docs
+    allowed = set(names)
+    scope = (retrieval_scope or "").strip().lower()
+    if scope in ("bound_only", "single", "bound"):
+        return [
+            d
+            for d in docs
+            if str((d.get("metadata") or {}).get("source") or "") in allowed
+        ]
+    # kb_supplement：绑定文档优先，其余保留
+    bound: list[dict] = []
+    other: list[dict] = []
+    for d in docs:
+        src = str((d.get("metadata") or {}).get("source") or "")
+        (bound if src in allowed else other).append(d)
+    return bound + other
 
 
 _TASK_SUMMARY = {
@@ -1325,9 +1587,15 @@ _TASK_SUMMARY = {
         "禁止把整段案例故事、背景机会塞进同一个 tip；过长事实留给后续案例页。\n"
         "占比/分布类（面料、价格带、属性销量占比等）：同一表内同类口径列齐，"
         "且必须包含份额最大的一项；禁止只摘中间两项漏掉第一名。\n"
+        "面料/材质/图案/厚薄/袖型页：只用属性标签占比（棉/纯色/落肩袖等），"
+        "禁止用价格带区间（¥100-200）或价带销量占比凑数。\n"
         "主题已点名品类时，规模页优先同页写「大盘 + 该品类」原数字对照。\n"
+        "位次/占大盘页：品类主量 tip 必须带品类名，写成「3.3亿 男士衬衫销售额，占大盘5.6%」；"
+        "禁止「3.3亿 占大盘5.6%」这种漏品类写法（3.3亿是衬衫销售额不是大盘总额）。\n"
         "【口径对齐】同一片段常并排大盘与子类数字：页标题写大盘则只用大盘数，"
         "写衬衫/polo 则只用该品类数；价格带 tip 必须点名价格带。主题有采样窗时只用同窗数字。\n"
+        "跨文档补充：定性趋势/营销节点可写；跨文档原数字须在 tip 内标注"
+        "「（来源：文档名）」或仅用主文档口径，禁止无来源混入口径窗。\n"
         "tips 数组每个元素一行；禁止在单个 tip 字符串里塞 Markdown 多行列表。\n"
         "不要输出 [1]/[2] 引用标注（大纲 tips 阶段不需要）。\n"
     ),

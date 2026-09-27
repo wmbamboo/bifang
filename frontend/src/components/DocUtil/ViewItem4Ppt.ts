@@ -1,4 +1,5 @@
 import OutlineRec,{outlineType} from "@/components/DocUtil/OutlineStore";
+import { resolveTableGrid } from "@/components/DocUtil/templateManifest";
 
 export class PptKeys{
   chapterKey:string;
@@ -379,15 +380,70 @@ export type SlideLayout = 'list' | 'metric' | 'metric_list' | 'columns' | 'metri
 export type TipRole = 'metric' | 'list';
 export type OutlineTip = { role: TipRole; text: string };
 
+/** 图鉴格绑定的 KB 裁切图（持久化为 tip 行 `img: file|asset_id`） */
+export type SlideImageAssetRef = { file_name: string; asset_id: string };
+
 /** 分栏页的一栏 */
 export type ColumnBlock = { title: string; sub: string; items: string[] };
 
 const LAYOUT_LINE =
   /^layout\s*[:：]\s*(metric_columns|metric_list|columns?|metrics?|list|table|image_grid|imagegrid|grid)\s*$/i;
 const TIP_ROLE_LINE = /^(metric|list)\s*[:：]\s*(.+)$/i;
+const IMG_ASSET_LINE = /^img\s*[:：]\s*(.*)$/i;
 const COL_TITLE_LINE = /^(?:col|column|栏)\s*[:：]\s*(.+)$/i;
 const COL_SUB_LINE = /^(?:colSub|columnSub|栏副|副标)\s*[:：]\s*(.+)$/i;
 const METRIC_SIGNAL = /\d+(?:\.\d+)?\s*[%％]|\d+(?:\.\d+)?\s*亿|\d+(?:\.\d+)?\s*万/u;
+
+export function parseImgAssetLine(tip: string): SlideImageAssetRef | null {
+  const m = (tip || "").trim().match(IMG_ASSET_LINE);
+  if (!m) return null;
+  const body = (m[1] || "").trim();
+  if (!body) return { file_name: "", asset_id: "" };
+  const pipe = body.indexOf("|");
+  if (pipe > 0) {
+    return {
+      file_name: body.slice(0, pipe).trim(),
+      asset_id: body.slice(pipe + 1).trim(),
+    };
+  }
+  return { file_name: "", asset_id: body };
+}
+
+export function formatImgAssetLine(ref: SlideImageAssetRef): string {
+  const f = (ref.file_name || "").trim();
+  const a = (ref.asset_id || "").trim();
+  return f ? `img: ${f}|${a}` : `img: ${a}`;
+}
+
+/** 从 subTitle 抽出图鉴绑定（按行序占槽；空 `img:` 保留为占位 null） */
+export function parseSlideImageAssets(subTitle: string): Array<SlideImageAssetRef | null> {
+  const out: Array<SlideImageAssetRef | null> = [];
+  for (const line of String(subTitle || "").split("\n")) {
+    const ref = parseImgAssetLine(line);
+    if (!ref) continue;
+    out.push(ref.asset_id ? ref : null);
+  }
+  return out;
+}
+
+/** 写回图鉴绑定到 subTitle（保留非 img 要点；按槽位写，空槽用 `img:`） */
+export function setSlideImageAssets(
+  slide: { subTitle: string },
+  refs: Array<SlideImageAssetRef | null | undefined>,
+) {
+  const tipLines = String(slide.subTitle || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !parseImgAssetLine(l) && !parseLayoutLine(l));
+  const imgLines = (refs || []).map((r) =>
+    r?.asset_id ? formatImgAssetLine(r) : "img:",
+  );
+  // 去掉尾部连续空槽，避免无意义膨胀；中间空槽保留以对齐格位
+  while (imgLines.length && imgLines[imgLines.length - 1] === "img:") {
+    imgLines.pop();
+  }
+  slide.subTitle = [...tipLines, ...imgLines].join("\n");
+}
 
 export function parseLayoutLine(tip: string): SlideLayout | undefined {
   const m = (tip || "").trim().match(LAYOUT_LINE);
@@ -417,7 +473,7 @@ export function metricTitleOk(title: string): boolean {
 /** 解析单条要点：支持「metric:」「list:」前缀；无前缀时按是否含原数字启发式归类。 */
 export function parseTipLine(raw: string): OutlineTip | undefined {
   const t = (raw || '').trim();
-  if (!t || parseLayoutLine(t)) return undefined;
+  if (!t || parseLayoutLine(t) || parseImgAssetLine(t)) return undefined;
   const m = t.match(TIP_ROLE_LINE);
   if (m) {
     return {
@@ -793,14 +849,20 @@ export function buildMetricListFillVars(
 
 const TABLE_ROWS = 5;
 const TABLE_COLS = 4;
+/** 模板支持的表格规格上限（页 46 = 8×5） */
+const TABLE_ROWS_MAX = 8;
+const TABLE_COLS_MAX = 5;
 
 /**
- * table：5×4 原生表格。要点优先 `|`/`\t` 分行；否则用小项/要点按行主序填格。
+ * table：原生表格。要点优先 `|`/`\t` 分行；否则用小项/要点按行主序填格。
+ * 行列按数据形状选模板规格（5×4 / 6×4 / 6×5 / 8×5），
+ * 返回的 rows/cols 是**模板实际规格**，调用方需原样传给 genNewSlideFileDict_Random。
  */
 export function buildTableFillVars(
   subTitle: string,
   vItem: Dictionary<string>,
-): { vars: Dictionary<string> } {
+  opts?: { rows?: number; cols?: number },
+): { vars: Dictionary<string>; rows: number; cols: number; page: number } {
   const tipTexts = parseSlideTips(subTitle).map((t) => t.text);
   let tableTitle = '';
   const pipeRows: string[][] = [];
@@ -810,26 +872,44 @@ export function buildTableFillVars(
       tableTitle = m[1].trim();
       continue;
     }
-    if (/[|\t]/.test(tip)) {
-      const cells = tip.split(/[|\t]/).map((c) => c.trim());
+    if (/[|\t｜]/.test(tip)) {
+      const cells = tip.split(/[|\t｜]/).map((c) => c.trim());
       while (cells.length < TABLE_COLS) cells.push('');
-      pipeRows.push(cells.slice(0, TABLE_COLS));
+      pipeRows.push(cells.slice(0, TABLE_COLS_MAX));
     }
   }
 
-  const grid: string[][] = Array.from({ length: TABLE_ROWS }, () =>
-    Array.from({ length: TABLE_COLS }, () => ''),
+  const dataRows = Math.max(
+    2,
+    Math.min(TABLE_ROWS_MAX, opts?.rows || pipeRows.length || TABLE_ROWS),
+  );
+  const dataCols = Math.max(
+    2,
+    Math.min(
+      TABLE_COLS_MAX,
+      opts?.cols ||
+        (pipeRows.length
+          ? Math.max(...pipeRows.map((r) => r.length))
+          : TABLE_COLS),
+    ),
+  );
+  const gridSpec = resolveTableGrid(dataRows, dataCols);
+  const ROWS = gridSpec.rows;
+  const COLS = gridSpec.cols;
+
+  const grid: string[][] = Array.from({ length: ROWS }, () =>
+    Array.from({ length: COLS }, () => ''),
   );
 
   if (pipeRows.length) {
-    for (let r = 0; r < Math.min(TABLE_ROWS, pipeRows.length); r++) {
-      for (let c = 0; c < TABLE_COLS; c++) {
-        grid[r][c] = (pipeRows[r][c] || '').slice(0, 28);
+    for (let r = 0; r < Math.min(ROWS, pipeRows.length); r++) {
+      for (let c = 0; c < COLS; c++) {
+        grid[r][c] = (pipeRows[r][c] || '').slice(0, 30);
       }
     }
   } else {
     const cells: string[] = [];
-    for (let i = 1; i <= TABLE_ROWS * TABLE_COLS; i++) {
+    for (let i = 1; i <= ROWS * COLS; i++) {
       const t = (vItem[`item${i}`] || '').trim();
       const d = (vItem[`item${i}_Desc`] || '').trim();
       if (t) cells.push(d ? `${t} ${d}`.trim() : t);
@@ -840,20 +920,20 @@ export function buildTableFillVars(
         if (tip.trim()) cells.push(tip.trim());
       }
     }
-    for (let i = 0; i < TABLE_ROWS * TABLE_COLS; i++) {
-      const r = Math.floor(i / TABLE_COLS);
-      const c = i % TABLE_COLS;
-      grid[r][c] = (cells[i] || '').slice(0, 28);
+    for (let i = 0; i < ROWS * COLS; i++) {
+      const r = Math.floor(i / COLS);
+      const c = i % COLS;
+      grid[r][c] = (cells[i] || '').slice(0, 30);
     }
   }
 
   const vars: Dictionary<string> = { tableTitle: tableTitle.slice(0, 40) };
-  for (let r = 0; r < TABLE_ROWS; r++) {
-    for (let c = 0; c < TABLE_COLS; c++) {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
       vars[`cell_r${r}c${c}`] = grid[r][c];
     }
   }
-  return { vars };
+  return { vars, rows: ROWS, cols: COLS, page: gridSpec.page };
 }
 
 /** image_grid：2×2 图鉴，cap1～cap4 取前 4 条要点/小项。 */
@@ -1055,7 +1135,7 @@ export function buildPptItemFormatPrompt(
       '每行只写一条短词/短句（宜 4～16 字）；横线后可写极短补充（≤16 字）或留空。\n' +
       '错误示例：把「学生党」「预算敏感追潮流」也编成 1. 2. 行。\n' +
       '错误示例：把检索诊断元话语写成条目（见禁令词表）。\n' +
-      '正确：只输出「街头宽松」「低客单套装」「回查属性页」这类栏内短条目。\n' +
+      '正确：只输出含材料事实的短条目（如「棉质占比可核对」「纯色领跑」）；禁止照抄「回查属性页」。\n' +
       '1. 短条目 - 可选补充\n'
     );
   }
@@ -1665,6 +1745,15 @@ export class Ppt{
       if (explicit) {
         slide.layout = explicit;
         explicitLayout.add(slide);
+        return;
+      }
+      const imgRef = parseImgAssetLine(tip);
+      if (imgRef) {
+        const line = imgRef.asset_id ? formatImgAssetLine(imgRef) : 'img:';
+        if (!slide.subTitle) slide.subTitle = line;
+        else if (!imgRef.asset_id || !slide.subTitle.includes(imgRef.asset_id)) {
+          slide.subTitle += '\n' + line;
+        }
         return;
       }
       // 保留 col: / colSub: 原文，便于分栏解析

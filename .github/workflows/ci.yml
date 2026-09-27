@@ -25,8 +25,8 @@ jobs:
         run: |
           npm pkg delete scripts.prepare scripts.postinstall
           npm ci
-      - name: 忠实度金标 + 元话语/栏轴闸（改闸门必看）
-        run: npx jest --ci --runInBand --testPathPattern='(fidelityGold|outlineMetaCoverage|priceBandTokenFidelity)'
+      - name: 忠实度金标 + 元话语/栏轴闸 + 模板表格规格（改闸门/模板必看）
+        run: npx jest --ci --runInBand --testPathPattern='(fidelityGold|outlineMetaCoverage|priceBandTokenFidelity|retrievalScope|templateTable)'
       - name: 全量测试（已忽略未迁移遗留用例）
         run: npx jest --ci --runInBand
 

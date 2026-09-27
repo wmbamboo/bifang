@@ -32,6 +32,7 @@ import {
   setMetricListTips,
   setSlideTips,
 } from "@/components/DocUtil/outlineSerialize";
+import ImageGridAssetPicker from "@/components/DocUtil/ImageGridAssetPicker";
 
 const {Text, Title} = Typography;
 
@@ -41,6 +42,8 @@ type OutlineTreeEditorProps = {
   /** 只读预览；可编辑时显示保存 */
   editable?: boolean;
   onSave?: (title: string, markdown: string) => void;
+  /** 知识库名：图鉴页手选图 / 缩略图加载 */
+  kbName?: string;
 };
 
 type Sel =
@@ -96,6 +99,7 @@ const OutlineTreeEditor: React.FC<OutlineTreeEditorProps> = ({
   markdown,
   editable = false,
   onSave,
+  kbName,
 }) => {
   const [docTitle, setDocTitle] = useState(initTitle || "");
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -225,7 +229,7 @@ const OutlineTreeEditor: React.FC<OutlineTreeEditorProps> = ({
   const updateTip = (chapterKey: string, slideKey: string, index: number, text: string) => {
     const slide = findSlide(chapterKey, slideKey);
     if (!slide) return;
-    const tips = (slide.subTitle || "").split("\n");
+    const tips = parseSlideTips(slide.subTitle || "").map((t) => t.text);
     while (tips.length <= index) tips.push("");
     tips[index] = text;
     setSlideTips(slide, tips);
@@ -258,7 +262,7 @@ const OutlineTreeEditor: React.FC<OutlineTreeEditorProps> = ({
     if (!slide) return;
     const layout = normalizeLayout(slide.layout);
     const { max } = tipLimits(layout);
-    const tips = (slide.subTitle || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    const tips = parseSlideTips(slide.subTitle || "").map((t) => t.text);
     if (tips.length >= max) {
       message.warning(`当前版式最多 ${max} 条要点`);
       return;
@@ -294,7 +298,7 @@ const OutlineTreeEditor: React.FC<OutlineTreeEditorProps> = ({
     if (!slide) return;
     const layout = normalizeLayout(slide.layout);
     const { min } = tipLimits(layout);
-    const tips = (slide.subTitle || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    const tips = parseSlideTips(slide.subTitle || "").map((t) => t.text);
     if (tips.length <= min) {
       message.warning(`当前版式至少 ${min} 条要点`);
       return;
@@ -863,6 +867,21 @@ const OutlineTreeEditor: React.FC<OutlineTreeEditorProps> = ({
             </Button>
           ) : null}
         </div>
+        {layout === "image_grid" ? (
+          <ImageGridAssetPicker
+            kbName={kbName}
+            slideTitle={slide.title || ""}
+            captions={tips}
+            subTitle={slide.subTitle || ""}
+            editable={editable}
+            onChange={(next) => {
+              const sl = findSlide(sel.chapterKey, sel.slideKey);
+              if (!sl) return;
+              sl.subTitle = next;
+              bump(chapters);
+            }}
+          />
+        ) : null}
       </Space>
     );
   };

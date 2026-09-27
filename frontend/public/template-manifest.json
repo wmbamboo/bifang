@@ -45,10 +45,15 @@
     { "page": 41, "layout": "metric_list", "cards": 5, "lists": 3 },
     { "page": 42, "layout": "table", "rows": 5, "cols": 4, "slots": ["slideTitle", "tableTitle", "cell_r0c0", "cell_r0c1", "cell_r0c2", "cell_r0c3", "cell_r1c0", "cell_r1c1", "cell_r1c2", "cell_r1c3", "cell_r2c0", "cell_r2c1", "cell_r2c2", "cell_r2c3", "cell_r3c0", "cell_r3c1", "cell_r3c2", "cell_r3c3", "cell_r4c0", "cell_r4c1", "cell_r4c2", "cell_r4c3"] },
     { "page": 43, "layout": "image_grid", "cards": 4, "slots": ["slideTitle", "cap1", "cap2", "cap3", "cap4"] },
+    { "page": 44, "layout": "table", "rows": 6, "cols": 4 },
+    { "page": 45, "layout": "table", "rows": 6, "cols": 5 },
+    { "page": 46, "layout": "table", "rows": 8, "cols": 5 },
     { "page": 47, "layout": "tail", "slots": ["title", "company", "author", "department", "curDate"] }
   ],
-  "reserved": [44, 45, 46],
+  "reserved": [],
+  "futureLayouts": ["chart"],
   "downgrade": {
-    "metric_columns": "无精确组合时：栏数>2 且卡数<5 → 降为 2 栏同卡数；仍无则 metric_list"
+    "metric_columns": "无精确组合时：栏数>2 且卡数<5 → 降为 2 栏同卡数；仍无则 metric_list",
+    "table": "按 (rows, cols) 取最小够用规格；42=5×4 / 44=6×4 / 45=6×5 / 46=8×5；都装不下取 46"
   }
 }

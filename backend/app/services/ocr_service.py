@@ -4,11 +4,14 @@
 回退：rapidocr-onnxruntime（轻量中英 OCR）。
 
 按页判断：原生文字过少或页面含图时再 OCR，并与文字层合并。
+属性/条形图页：VL 常把 chart_box 嵌成 <img>，再用 RapidOCR 裁切补「标签+占比」。
 """
 from __future__ import annotations
 
 import io
+import logging
 import os
+import re
 import tempfile
 import threading
 from pathlib import Path
@@ -20,6 +23,25 @@ _ocr_lock = threading.Lock()
 _ocr_engine = None
 _ocr_engine_name: Optional[str] = None
 _ocr_init_error: Optional[str] = None
+_rapidocr_engine = None
+_logger = logging.getLogger("bifang.ocr")
+
+# VL Markdown 里版面检出的图块：imgs/img_in_chart_box_{x1}_{y1}_{x2}_{y2}.jpg
+_CHART_BOX_RE = re.compile(
+    r"img_in_chart_box_(\d+)_(\d+)_(\d+)_(\d+)\.(?:jpg|jpeg|png)",
+    re.I,
+)
+# 商品/图鉴区：imgs/img_in_image_box_{x0}_{y0}_{x1}_{y1}.jpg（坐标=同次 get_pixmap 页图）
+_IMAGE_BOX_RE = re.compile(
+    r"img_in_image_box_(\d+)_(\d+)_(\d+)_(\d+)\.(?:jpg|jpeg|png)",
+    re.I,
+)
+_ATTR_PAIR_INLINE_RE = re.compile(
+    r"(?<![A-Za-z0-9])([\u4e00-\u9fffA-Za-z]{1,12})\s*"
+    r"(\d+(?:\.\d+)?)\s*[%％]"
+)
+_LABEL_ONLY_RE = re.compile(r"^[\u4e00-\u9fffA-Za-z]{1,12}$")
+_PCT_ONLY_RE = re.compile(r"^\d+(?:\.\d+)?\s*[%％]$")
 
 
 def _vl_result_to_text(res) -> str:
@@ -184,12 +206,246 @@ def _ocr_with_rapidocr(engine, image_bytes: bytes) -> str:
     return "\n".join(lines)
 
 
+def _get_rapidocr_engine():
+    """独立 RapidOCR 实例（与主引擎并行：主引擎常为 VL）。"""
+    global _rapidocr_engine
+    if _rapidocr_engine is not None:
+        return _rapidocr_engine
+    with _ocr_lock:
+        if _rapidocr_engine is None:
+            _rapidocr_engine = _init_rapidocr()
+    return _rapidocr_engine
+
+
+def pair_label_pct_lines(text: str) -> str:
+    """RapidOCR 常输出「棉\\n72.18%」分行；合成「棉 72.18%」供属性抽取。"""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        cur = lines[i]
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if _LABEL_ONLY_RE.fullmatch(cur) and _PCT_ONLY_RE.fullmatch(nxt):
+            out.append(f"{cur} {nxt}")
+            i += 2
+            continue
+        out.append(cur)
+        i += 1
+    return "\n".join(out)
+
+
+def enrich_vl_chart_boxes(md: str, page_image_bytes: bytes) -> str:
+    """VL 把条形/占比图嵌成 chart_box 时，裁切后 RapidOCR 补标签+占比。
+
+    若正文已有足够「标签+占比」对则跳过，避免重复。
+    """
+    if not md or not page_image_bytes:
+        return md or ""
+    if "img_in_chart_box_" not in md:
+        return md
+    if len(_ATTR_PAIR_INLINE_RE.findall(md)) >= 4:
+        return md
+
+    from PIL import Image
+
+    try:
+        page = Image.open(io.BytesIO(page_image_bytes)).convert("RGB")
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("chart_box enrich: open page image failed: %s", e)
+        return md
+
+    try:
+        rapid = _get_rapidocr_engine()
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("chart_box enrich: rapidocr init failed: %s", e)
+        return md
+
+    extras: list[str] = []
+    seen_box: set[tuple[int, int, int, int]] = set()
+    for m in _CHART_BOX_RE.finditer(md):
+        box = tuple(int(m.group(i)) for i in range(1, 5))
+        if box in seen_box:
+            continue
+        seen_box.add(box)
+        x1, y1, x2, y2 = box
+        x1 = max(0, min(x1, page.width))
+        x2 = max(0, min(x2, page.width))
+        y1 = max(0, min(y1, page.height))
+        y2 = max(0, min(y2, page.height))
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            continue
+        crop = page.crop((x1, y1, x2, y2))
+        buf = io.BytesIO()
+        crop.save(buf, format="PNG")
+        try:
+            raw = _ocr_with_rapidocr(rapid, buf.getvalue())
+        except Exception as e:  # noqa: BLE001
+            _logger.warning("chart_box enrich OCR failed box=%s: %s", box, e)
+            continue
+        paired = pair_label_pct_lines(raw)
+        if not paired.strip():
+            continue
+        if not _ATTR_PAIR_INLINE_RE.search(paired):
+            continue
+        extras.append(paired.strip())
+
+    if not extras:
+        return md
+    block = "\n\n".join(extras)
+    _logger.info(
+        "chart_box enrich boxes=%s pairs=%s",
+        len(extras),
+        len(_ATTR_PAIR_INLINE_RE.findall(block)),
+    )
+    return md.rstrip() + "\n\n[图表OCR]\n" + block
+
+
 def ocr_image_bytes(image_bytes: bytes) -> str:
     """对 PNG/JPEG 字节做 OCR，返回纯文本（PaddleOCR-VL 时多为 Markdown）。"""
     engine, name = _get_engine()
     if name == "paddleocr_vl":
-        return _ocr_with_paddleocr_vl(engine, image_bytes)
+        md = _ocr_with_paddleocr_vl(engine, image_bytes)
+        return enrich_vl_chart_boxes(md, image_bytes)
     return _ocr_with_rapidocr(engine, image_bytes)
+
+
+def render_page_png(
+    path: Path,
+    page_no: int,
+    scale: Optional[float] = None,
+) -> bytes:
+    """按与 OCR 相同的 Matrix(scale) 渲染 PDF 单页为 PNG 字节。
+
+    page_no 为 1-based。CLI 存量回填与流水线必须共用此函数，禁止 Image.resize 换算。
+    """
+    import pymupdf as fitz
+
+    settings = get_settings()
+    s = float(scale if scale is not None else settings.ocr_dpi_scale)
+    doc = fitz.open(str(path))
+    try:
+        if page_no < 1 or page_no > doc.page_count:
+            raise ValueError(f"page_no out of range: {page_no}/{doc.page_count}")
+        page = doc.load_page(page_no - 1)
+        pix = page.get_pixmap(matrix=fitz.Matrix(s, s), alpha=False)
+        return pix.tobytes("png")
+    finally:
+        doc.close()
+
+
+def parse_vl_box_refs(md: str) -> list[tuple[str, tuple[int, int, int, int]]]:
+    """从 VL Markdown 解析 (kind, (x0,y0,x1,y1))；kind 为 image|chart。"""
+    out: list[tuple[str, tuple[int, int, int, int]]] = []
+    seen: set[tuple[str, int, int, int, int]] = set()
+    for kind, pat in (("image", _IMAGE_BOX_RE), ("chart", _CHART_BOX_RE)):
+        for m in pat.finditer(md or ""):
+            box = tuple(int(m.group(i)) for i in range(1, 5))
+            key = (kind, *box)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((kind, box))  # type: ignore[arg-type]
+    return out
+
+
+def crop_element_assets_from_page(
+    page_image_bytes: bytes,
+    ocr_md: str,
+    *,
+    assets_dir: Path,
+    file_stem: str,
+    page_no: int,
+    save_whole: bool = True,
+) -> list[dict]:
+    """用与 VL 同一次的页图裁切 image_box/chart_box，落盘 elements/（及可选 whole/）。
+
+    返回 [{asset_id, kind, page, box, path}, ...]；asset_id 相对 assets_dir。
+    """
+    from PIL import Image
+
+    assets_dir = Path(assets_dir)
+    elements_dir = assets_dir / "elements"
+    elements_dir.mkdir(parents=True, exist_ok=True)
+    infos: list[dict] = []
+
+    try:
+        page = Image.open(io.BytesIO(page_image_bytes)).convert("RGB")
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("crop elements: open page failed: %s", e)
+        return infos
+
+    if save_whole:
+        whole_dir = assets_dir / "whole"
+        whole_dir.mkdir(parents=True, exist_ok=True)
+        whole_name = f"page_{page_no}.png"
+        whole_path = whole_dir / whole_name
+        try:
+            page.save(whole_path, format="PNG")
+            infos.append(
+                {
+                    "asset_id": f"whole/{whole_name}",
+                    "kind": "whole",
+                    "page": page_no,
+                    "box": (0, 0, page.width, page.height),
+                    "path": str(whole_path),
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            _logger.warning("crop elements: save whole failed: %s", e)
+
+    kind_counts: dict[str, int] = {"image": 0, "chart": 0}
+    for kind, box in parse_vl_box_refs(ocr_md):
+        x0, y0, x1, y1 = box
+        # 坐标必须落在本页图像素内；越界说明 bbox 来自另一分辨率画布，禁止硬裁
+        if (
+            x0 < 0
+            or y0 < 0
+            or x1 > page.width + 2
+            or y1 > page.height + 2
+            or x1 - x0 < 8
+            or y1 - y0 < 8
+        ):
+            _logger.warning(
+                "crop skip out-of-canvas box=%s page=%sx%s kind=%s",
+                box,
+                page.width,
+                page.height,
+                kind,
+            )
+            continue
+        x0 = max(0, min(x0, page.width))
+        x1 = max(0, min(x1, page.width))
+        y0 = max(0, min(y0, page.height))
+        y1 = max(0, min(y1, page.height))
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        idx = kind_counts[kind]
+        short = "img" if kind == "image" else "chart"
+        fname = f"{file_stem}_p{page_no}_{short}{idx}.png"
+        dest = elements_dir / fname
+        try:
+            page.crop((x0, y0, x1, y1)).save(dest, format="PNG")
+        except Exception as e:  # noqa: BLE001
+            _logger.warning("crop elements: save %s failed: %s", fname, e)
+            continue
+        infos.append(
+            {
+                "asset_id": f"elements/{fname}",
+                "kind": kind,
+                "page": page_no,
+                "box": (x0, y0, x1, y1),
+                "path": str(dest),
+            }
+        )
+
+    if any(k != "whole" for k in (i.get("kind") for i in infos)):
+        _logger.info(
+            "crop elements page=%s image=%s chart=%s stem=%s",
+            page_no,
+            kind_counts.get("image", 0),
+            kind_counts.get("chart", 0),
+            file_stem,
+        )
+    return infos
 
 
 def _merge_page_text(native: str, ocr: str) -> str:
@@ -241,10 +497,13 @@ def extract_pdf_text(
     dpi_scale: Optional[float] = None,
     on_progress: ProgressCb = None,
     should_continue: ContinueCb = None,
+    assets_dir: Optional[Path] = None,
+    file_stem: Optional[str] = None,
 ) -> tuple[str, dict]:
     """按页抽取 PDF 文本；必要时 OCR。
 
-    返回 (text, meta)，meta 含 page_count / ocr_pages / used_ocr / ocr_engine。
+    返回 (text, meta)，meta 含 page_count / ocr_pages / used_ocr / ocr_engine /
+    element_assets（若提供 assets_dir：OCR 同次页图裁切的元素图 id 列表）。
     """
     import logging
     import time
@@ -256,6 +515,8 @@ def extract_pdf_text(
     min_chars = min_chars_per_page if min_chars_per_page is not None else settings.ocr_min_chars_per_page
     scale = dpi_scale if dpi_scale is not None else settings.ocr_dpi_scale
     force_all = settings.ocr_force_all_pages
+    stem = file_stem or Path(path).stem
+    do_crop = assets_dir is not None
 
     doc = fitz.open(str(path))
     page_count = doc.page_count
@@ -263,6 +524,7 @@ def extract_pdf_text(
     ocr_pages = 0
     used_ocr = False
     engine_name = ""
+    element_assets: dict[int, list[str]] = {}
 
     try:
         # 提前加载模型，避免「卡在第 1 页」其实是在下/载模型
@@ -298,6 +560,30 @@ def extract_pdf_text(
                     if not engine_name:
                         _, engine_name = _get_engine()
                     page_text = _merge_page_text(native, ocr_text)
+                    # 同一次页图裁切 VL bbox → elements/ + whole/（零换算）
+                    if do_crop:
+                        try:
+                            infos = crop_element_assets_from_page(
+                                png,
+                                ocr_text,
+                                assets_dir=Path(assets_dir),  # type: ignore[arg-type]
+                                file_stem=stem,
+                                page_no=i + 1,
+                                save_whole=True,
+                            )
+                            ids = [
+                                str(x["asset_id"])
+                                for x in infos
+                                if x.get("kind") in ("image", "chart")
+                            ]
+                            if ids:
+                                element_assets[i + 1] = ids
+                        except Exception as crop_ex:  # noqa: BLE001
+                            logger.warning(
+                                "element crop page %s failed: %s",
+                                i + 1,
+                                crop_ex,
+                            )
                     ocr_pages += 1
                     used_ocr = True
                     logger.info(
@@ -337,6 +623,7 @@ def extract_pdf_text(
         if (engine_name or settings.ocr_engine or "").startswith("paddleocr")
         else "",
         "ocr_dpi_scale_used": scale,
+        "element_assets": element_assets,
     }
     return text, meta
 

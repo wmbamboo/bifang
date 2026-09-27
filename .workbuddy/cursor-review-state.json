@@ -1,0 +1,32 @@
+{
+  "lastReviewedHead": "58432e4",
+  "lastReviewedAt": "2026-09-26T01:55+08:00",
+  "reviewedFiles": [
+    "frontend/src/components/DocUtil/outlineMetaDiagnostic.ts",
+    "frontend/src/components/DocUtil/outlineCoverage.ts",
+    "frontend/src/components/DocUtil/outlineJson.ts",
+    "frontend/src/components/DocUtil/PptProductGate.ts",
+    "frontend/src/components/DocUtil/ViewItem4Ppt.ts",
+    "frontend/src/components/ChatUtil/ChatWithSpeech4Ppt.tsx",
+    "frontend/src/components/ChatUtil/OutlinePromptComposer.tsx",
+    "frontend/tests/outlineMetaCoverage.test.ts"
+  ],
+  "openIssues": [
+    {
+      "severity": "P0",
+      "issue": "frontend/.gitignore 垃圾行（/tests/、/jest.config.js、/hezl/ x3）把全部 jest 测试与 jest.config.js 挡在仓库外；远端 CI frontend-tests job checkout 后找不到 tests/fidelityGold.test.ts 必然失败，金标 CI 从未真正跑过",
+      "fix": "删 .gitignore 中 /tests/ 与 /jest.config.js（/hezl/ x3 一并删；/data/ 确认是否刻意），git add frontend/tests frontend/jest.config.js 提交推送并确认 CI 绿"
+    },
+    {
+      "severity": "中",
+      "issue": "OutlinePromptComposer columns 正例（col: 高举高打/精种准打/聚流快打）教模型写域外营销轴，与 checkColumnAxisEvidence 的证据痕迹要求互斥，服装域必拒→降 list→白耗重试",
+      "fix": "正例换成域内轴（属性/价格带/品类对照），或标注为域外示意"
+    },
+    {
+      "severity": "中",
+      "issue": "outlineCoverage.ts 内 columnAxisSupportedByEvidence/findUnsupportedActionSlideTitles 硬编码品类词（衬衫/polo/大盘）与材料轴词表，跨域需多处改；与『品类词受控化（中期）』同源",
+      "fix": "后续与品类词表一并受控化"
+    }
+  ],
+  "localTestResult": "jest outlineMetaCoverage + fidelityGold：2 suites / 8 tests 全过（Windows node 直跑 WSL 路径）"
+}

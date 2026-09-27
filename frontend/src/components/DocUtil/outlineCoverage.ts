@@ -194,3 +194,232 @@ function columnAxisSupportedByEvidence(axis: string, evidence: string): boolean 
   if (chunks.some((c) => ev.includes(c))) return true;
   return false;
 }
+
+/**
+ * 属性轴互斥词表（不含「常规」——厚薄/袖型共用）。
+ * 卡题含轴 A 时，同卡数据不得主要是轴 B 的专属标签。
+ */
+export const ATTR_AXIS_LEXICON: ReadonlyArray<{
+  axis: string;
+  /** 轴名命中用 */
+  titleHints: readonly string[];
+  /** 专属标签（用于正文归属） */
+  labels: readonly string[];
+}> = [
+  {
+    axis: '袖型',
+    titleHints: ['袖型', '袖'],
+    labels: ['落肩袖', '灯笼袖', '常规袖', '插肩袖', '短袖', '长袖'],
+  },
+  {
+    axis: '厚薄',
+    titleHints: ['厚薄'],
+    labels: ['薄款', '厚款', '加厚', '超薄'],
+  },
+  {
+    axis: '面料',
+    titleHints: ['面料', '材质'],
+    labels: ['棉', '涤纶', '聚酯纤维', '粘胶纤维', '醋酯纤维', '锦纶'],
+  },
+  {
+    axis: '图案',
+    titleHints: ['图案', '花纹'],
+    labels: ['纯色', '条纹', '几何图案', '字母', '动物图案'],
+  },
+];
+
+function countExclusiveLabels(text: string, labels: readonly string[]): number {
+  const s = String(text || '');
+  let n = 0;
+  for (const lab of labels) {
+    if (lab && s.includes(lab)) n += 1;
+  }
+  return n;
+}
+
+/** 从页题或 tip 行解析属性轴（优先长轴名） */
+export function detectAttrAxisInText(text: string): string | null {
+  const s = String(text || '');
+  if (!s.trim()) return null;
+  // 长轴优先：袖型 > 厚薄 > 面料/材质 > 图案
+  for (const row of ATTR_AXIS_LEXICON) {
+    if (row.titleHints.some((h) => h.length >= 2 && s.includes(h))) {
+      // 「袖」单独过宽（领袖撞色）；仅当无「袖型」时不靠单字「袖」定轴
+      if (row.axis === '袖型' && !s.includes('袖型') && !/落肩袖|灯笼袖|插肩袖|短袖|长袖|常规袖/.test(s)) {
+        continue;
+      }
+      return row.axis;
+    }
+  }
+  return null;
+}
+
+/** 从页题解析全部属性轴（多轴标题如「厚薄与款式」） */
+export function detectAllAttrAxesInText(text: string): string[] {
+  const s = String(text || '');
+  if (!s.trim()) return [];
+  const out: string[] = [];
+  for (const row of ATTR_AXIS_LEXICON) {
+    if (!row.titleHints.some((h) => h.length >= 2 && s.includes(h))) continue;
+    if (
+      row.axis === '袖型' &&
+      !s.includes('袖型') &&
+      !/落肩袖|灯笼袖|插肩袖|短袖|长袖|常规袖/.test(s)
+    ) {
+      continue;
+    }
+    out.push(row.axis);
+  }
+  return out;
+}
+
+/**
+ * 轴标签计数：「常规」在厚薄/袖型两柱都会出现，仅当正文已点名该轴时计入本轴。
+ */
+function countAxisLabels(axis: string, text: string, axisMentioned: boolean): number {
+  const row = ATTR_AXIS_LEXICON.find((r) => r.axis === axis);
+  if (!row) return 0;
+  let n = countExclusiveLabels(text, row.labels);
+  if (
+    axisMentioned &&
+    (axis === '袖型' || axis === '厚薄') &&
+    /常规/.test(text) &&
+    !/常规袖/.test(text)
+  ) {
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * 填充阶段·卡题轴：页题或 tip 卡头的属性轴，须与同卡数据标签一致，且证据有该轴痕迹。
+ * 专治「袖型」卡装厚薄、「图案验证」卡只堆面料占比。
+ */
+export function checkCardTitleAxisEvidence(
+  title: string,
+  tips: string[],
+  evidence: string,
+): {ok: boolean; hint: string} {
+  const tipList = (tips || []).map((t) => String(t || '').trim()).filter(Boolean);
+  if (!tipList.length) return {ok: true, hint: ''};
+
+  type Check = {axis: string; body: string; where: string};
+  const checks: Check[] = [];
+
+  const pageAxes = detectAllAttrAxesInText(title);
+  // 单轴页题才做整页聚合校验；「厚薄与款式」等复合属性标题只查各 tip，避免邻轴互杀
+  const multiAttrTitle =
+    pageAxes.length > 1 ||
+    (/厚薄|面料|图案|袖型/.test(String(title || '')) &&
+      /款式|属性/.test(String(title || '')) &&
+      /与|及|、/.test(String(title || '')));
+  if (pageAxes.length === 1 && !multiAttrTitle) {
+    checks.push({
+      axis: pageAxes[0],
+      body: tipList.join('\n'),
+      where: `页题「${String(title).slice(0, 16)}」`,
+    });
+  }
+
+  // tip 自身像卡头（含轴名 + 短）或「轴名：数据」同行
+  for (const tip of tipList) {
+    const axis = detectAttrAxisInText(tip);
+    if (!axis) continue;
+    const afterColon = tip.split(/[:：]/).slice(1).join('：').trim();
+    const tipHasOwnMetric = /[%％]/.test(tip);
+    // 本 tip 已带轴名+占比时，只用本 tip 正文，禁止拿同页邻轴 tip 当「要点」误杀
+    // （如「袖型常规 79.76%：…」数字在冒号前，旧逻辑会误用厚薄兄弟 tip）
+    const body =
+      afterColon && /[%％\d]/.test(afterColon)
+        ? afterColon
+        : tipHasOwnMetric
+          ? tip
+          : tipList.filter((t) => t !== tip).join('\n') || tip;
+    // 仅当 tip 点名轴、且另有数据可核时才查（避免「面料页」总览误杀）
+    if (
+      !/[%％]/.test(body) &&
+      countExclusiveLabels(
+        body,
+        ATTR_AXIS_LEXICON.flatMap((r) => [...r.labels]),
+      ) < 2
+    ) {
+      continue;
+    }
+    checks.push({
+      axis,
+      body,
+      where: `卡头「${tip.slice(0, 18)}」`,
+    });
+  }
+
+  const ev = String(evidence || '');
+  for (const c of checks) {
+    const row = ATTR_AXIS_LEXICON.find((r) => r.axis === c.axis);
+    if (!row) continue;
+    const axisMentioned =
+      c.body.includes(c.axis) ||
+      c.where.includes(c.axis) ||
+      String(title || '').includes(c.axis);
+    // 面料/材质/图案等属性轴：禁止把价格带区间占比挂到本页（串窗）
+    if (
+      /面料|材质|图案|厚薄|袖型/.test(c.axis) &&
+      /[￥¥]\s*\d+(?:\.\d+)?\s*[-~～至到]\s*\d+/.test(c.body)
+    ) {
+      const selfHitsEarly = countAxisLabels(c.axis, c.body, axisMentioned);
+      if (selfHitsEarly === 0) {
+        return {
+          ok: false,
+          hint:
+            `${c.where}点名「${c.axis}」，但要点含价格带区间且无该轴标签` +
+            `（如${row.labels.slice(0, 3).join('、')}）；禁止用¥价带占比充面料/属性页`,
+        };
+      }
+    }
+    const selfHits = countAxisLabels(c.axis, c.body, axisMentioned);
+    let bestOther: {axis: string; n: number} | null = null;
+    for (const other of ATTR_AXIS_LEXICON) {
+      if (other.axis === c.axis) continue;
+      const otherMentioned =
+        c.body.includes(other.axis) || String(title || '').includes(other.axis);
+      const n = countAxisLabels(other.axis, c.body, otherMentioned);
+      if (!bestOther || n > bestOther.n) bestOther = {axis: other.axis, n};
+    }
+    // 正文几乎全是别轴专属标签、本轴专属几乎没有 → 张冠李戴
+    if (bestOther && bestOther.n >= 2 && selfHits === 0) {
+      return {
+        ok: false,
+        hint:
+          `${c.where}点名「${c.axis}」，但要点标签属「${bestOther.axis}」` +
+          `（如${ATTR_AXIS_LEXICON.find((r) => r.axis === bestOther!.axis)?.labels.slice(0, 3).join('、')}）；` +
+          `请改标题对齐数据，或改写为材料中该轴的占比`,
+      };
+    }
+    if (bestOther && bestOther.n >= 2 && selfHits > 0 && bestOther.n >= selfHits + 2) {
+      return {
+        ok: false,
+        hint:
+          `${c.where}点名「${c.axis}」，但要点更像「${bestOther.axis}」分布；` +
+          `请勿把邻列属性数据挂到本卡标题下`,
+      };
+    }
+    // 有证据时：轴名或专属标签须在证据出现（袖型页不得只召回厚薄段）
+    if (ev.trim()) {
+      const axisInEv =
+        ev.includes(c.axis) ||
+        row.labels.some((lab) => lab.length >= 2 && ev.includes(lab)) ||
+        // 袖型/厚薄柱常见「常规 xx%」
+        ((c.axis === '袖型' || c.axis === '厚薄') &&
+          ev.includes(c.axis) &&
+          /常规\s*\d/.test(ev));
+      if (!axisInEv) {
+        return {
+          ok: false,
+          hint:
+            `${c.where}点名「${c.axis}」，但本页检索证据无该轴痕迹；` +
+            `请换有「${c.axis}」占比的材料，或改标题/并入有证据的页`,
+        };
+      }
+    }
+  }
+  return {ok: true, hint: ''};
+}

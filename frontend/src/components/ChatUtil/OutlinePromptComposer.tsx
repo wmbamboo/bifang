@@ -1,6 +1,13 @@
-import React, {useMemo, useState} from 'react';
-import {Alert, Button, Collapse, Form, Input, Modal, Select, Space, Typography, message} from 'antd';
+import React, {useEffect, useMemo, useState} from 'react';
+import {Alert, Button, Collapse, Form, Input, Modal, Radio, Select, Space, Typography, message} from 'antd';
 import {metaDiagnosticBanClause} from '@/components/DocUtil/outlineMetaDiagnostic';
+import {
+  defaultRetrievalScope,
+  retrievalScopeLabel,
+  type RetrievalScope,
+} from '@/components/DocUtil/retrievalScope';
+import {listDocs} from '@/services/chatchat/kb';
+import {ALL_KB_NAME} from '@/components/DocUtil/kbSelectorModal';
 
 const {Text, Paragraph} = Typography;
 
@@ -88,7 +95,7 @@ export const PPT_OUTLINE_LAYOUT_CATALOG =
   '- metric_columns：上半要数字卡，下半还要分轴对照。仅支持 2～5 卡+2 栏，或 5 卡+3 栏；其它组合改 metric_list/columns。\n' +
   '- metric_list：上半数字卡，下半判断清单（不分栏）。\n' +
   '- list：同一主题下的平铺要点/枚举答案；一页只回答一个名单或一套动作时优先。\n' +
-  '- table：价格带/榜单等对照表，tips 用「维度|数值|增速|口径」竖线分行；image_grid：2×2 图鉴，tips 为 2～4 条短图注。\n' +
+  '- table：价格带/榜单等对照表，tips 每行用「|」分格（表头行 + 记录行，2～8 行、2～5 列；4 列「维度|数值|增速|口径」或 5 列「排名|店铺/单品|销量|销售额|同比」）；image_grid：2×2 图鉴，tips 为 2～4 条短图注。\n' +
   '【columns vs list】columns 的栏标题必须是「分组轴」；若页标题问「有哪些/是什么」或答案是对等叶子项，用 list。\n' +
   '【混合】本章若有原数字，至少 1 页 metric*；若有多轴对照，至少 1 页 columns*。禁止本章几乎全是 list。\n';
 
@@ -105,17 +112,34 @@ export const PPT_OUTLINE_FILL_CORE =
   '1) 总览→展开：总览短标签对照（栏数=顶层轴数；轴下玩法只做该栏短标签或写进对应轴展开页）。案例页写更深事实节点（可带原数字）。\n' +
   '2) 大盘→细分：主题已点名品类时，规模页优先同页写「大盘 + 该品类」原数字对照；纯细分页写该品类内容，勿整段粘贴大盘叙述。\n' +
   '   「品类位置/对照」（intent=category-position）：可用大盘总销量作对照，但 tip 须显式写明「大盘」或品类名，禁止裸数字对照；同页必须另有衬衫或 polo 的品类数字。\n' +
+  '   位次/占大盘份额 tip：必须「品类名 + 主量 + 占大盘x%」，如「3.3亿 男士衬衫销售额，占大盘5.6%」；禁止只写「3.3亿 占大盘5.6%」（漏品类会被拒）。\n' +
   '3) 占比/分布类（面料、价格带等）：同一表内同类口径列齐，且必须含份额最大的一项；禁止只摘中间两项漏掉第一名。\n' +
   '4) 自检：删掉本页标题后若仍像在讲别的页 → 重写。\n' +
   '【口径对齐·最重要】同一材料片段常并排「男装大盘」与「衬衫/polo」数字。tip 里的数字必须与口径实体、页标题一致：\n' +
   '- 标题含「大盘」：只用标注为男装大盘的数字（采样窗内常见为千万级销量、数十亿销售额），禁止把同页衬衫/polo 子类销量（通常百万级）写成大盘。\n' +
   '- 标题含「衬衫」或「polo」：只用该品类数字，口径写清品类名；禁止互串。\n' +
   '- 价格带页：每条 tip 口径须点名价格带（如「￥50-100 销量」），禁止多条都只写「同比增速」，禁止只输出「100」「200」碎片。\n' +
+  '- 双品类主题的「价格带筛选」table：行须同时覆盖衬衫与 polo（至少各 1 行），禁止整表只有单一品类；若材料只够一边，标题须改成该品类专用。\n' +
+  '- 属性/面料/图案/厚薄/袖型页：tips 须含材料原数字（占比/销量）；材料无数字则并入有证据的页，禁止只写计划语。\n' +
+  '- 卡题轴对齐：标题或卡头点名「袖型/厚薄/面料/图案」时，同卡数据必须是该轴标签（袖型≠薄款/加厚；图案验证≠只堆面料占比）。禁止把邻列属性挂到错题下。\n' +
+  '- 同页禁止重复短标签：款名核心相同（即使价签不同，如「腰腹加宽/高弹衬衫 ¥129」与「¥119」）禁止填两卡。\n' +
+  '- 禁止半句截断：日期须写全日（勿「至2024-04-」），勿留「均为各价格」残词或句尾「的/与/为」。\n' +
+  '- 禁止把图表坐标轴/刻度（¥50/¥100、TOP款口径、销量席位）当 tip；须写成含口径的短句。\n' +
   '- 主题写明采样时间时，优先采用材料中同一采样区间的数字；其它周期（其它月份单品文）的大盘数一律不用。\n' +
   '- 同一数字禁止填进同页两条 tip；材料没有的数字禁止编造。\n' +
+  '- slide.title 保持≤16 字短标题；禁止把 tip 长句/口径说明写进 title。\n' +
+  '- 跨文档数字：仅当检索为「扩展知识库」时，非主文档数字须写「（来源：文档名）」；定性趋势词可无来源。单文档模式禁止引用库外数字，禁止整页跑题到未绑定品类（如防晒服）。\n' +
+  '- 禁止把检索引注「[文档1]」写进 tips 或成品文案。\n' +
   '【短写】tips 短；材料没有的数字与周期禁止编造。\n';
 
-type FillLayoutKey = 'list' | 'metric' | 'columns' | 'metric_columns' | 'metric_list';
+type FillLayoutKey =
+  | 'list'
+  | 'metric'
+  | 'columns'
+  | 'metric_columns'
+  | 'metric_list'
+  | 'table'
+  | 'image_grid';
 
 /** 按 layout 拆开的 tips 语法：调用时只拼本页用到的块（勿写领域词表） */
 export const PPT_OUTLINE_LAYOUT_RULES: Record<FillLayoutKey, string> = {
@@ -151,6 +175,17 @@ export const PPT_OUTLINE_LAYOUT_RULES: Record<FillLayoutKey, string> = {
   list:
     '【本页 layout=list】tips 3～5 条平铺要点；每条「短标题（4～12 字）：短说明（≤22 字）」或单句 ≤22 字。\n' +
     '适合回答「有哪些/是什么」的对等枚举；不要为了「好看」改成空的 columns。\n',
+  table:
+    '【本页 layout=table】tips 是表格行：每个 tip 一行，单元格用竖线 | 分隔（不要 Markdown 表格线、不要行号）。\n' +
+    '- 首行必须是表头（列名），其后每行一条记录；整表 **2～8 行**（含表头）、**2～5 列**。\n' +
+    '- 列规格（按内容选一种，同一页不要混）：4 列「维度|数值|增速|口径」，或带排名的 5 列「排名|店铺/单品|销量|销售额|同比」。\n' +
+    '- 单元格短（≤14 字）；数字用材料原数字，禁止自造合计/平均。\n' +
+    '- 价格带表：行须覆盖衬衫与 polo（至少各 1 行），否则把标题改成该品类专用。\n' +
+    '正例：["价格带|本期销量(占比)|销量同比|本期销售额(占比)","￥50以下|1200.5万(12.3%)|+8.2%|3.6亿(11.0%)"]\n' +
+    '反例：["¥50","¥100","¥200"]（价格带碎片当行）；["价格带|销量"]（只有表头没有记录行）。\n',
+  image_grid:
+    '【本页 layout=image_grid】2×2 图鉴：tips 2～4 条短图注（每条 4～16 字），一条对应一格。\n' +
+    '图注须写材料事实（品类/属性/卖点），不要写「见图」「图1」这类指代，也不要写计划语。\n',
 };
 
 /** 把若干 layout 的 tips 细则拼进 system（去重保序） */
@@ -174,7 +209,7 @@ export function layoutRulesFor(layouts: Array<string | undefined>): string {
 export const PPT_OUTLINE_FILL_SKELETON =
   PPT_OUTLINE_FILL_CORE +
   PPT_OUTLINE_LAYOUT_CATALOG +
-  layoutRulesFor(['metric', 'columns', 'metric_columns', 'metric_list', 'list']) +
+  layoutRulesFor(['metric', 'columns', 'metric_columns', 'metric_list', 'list', 'table', 'image_grid']) +
   '【输出格式·整章】\n' +
   '{"title":"…","chapters":[{"title":"…","subtitle":"…","slides":[' +
   '{"title":"规模与增速口径","layout":"metric_list","tips":["metric: 586亿 某口径销售额","metric: +42.3% 同比增速","list: 核心子类多数超大盘","list: 领涨子类可核对"]},' +
@@ -464,15 +499,29 @@ export function buildPptOutlineSystemPrompt(pack: PptDomainPack = 'generic'): st
 export function composePptOutlineUserMessage(
   topic: string,
   vars?: Partial<PptOutlineVars>,
+  retrieval?: {scope?: RetrievalScope; boundFiles?: string[]},
 ): string {
   const t = topic.trim();
   const role = (vars?.role || '').trim() || '读者';
   const object = (vars?.object || '').trim() || t;
   const scope = sanitizeOutlineScope((vars?.scope || '').trim());
   const scopePart = scope ? `，范围「${scope}」` : '';
+  const files = (retrieval?.boundFiles || []).filter(Boolean);
+  const rScope =
+    retrieval?.scope || defaultRetrievalScope(files);
+  let retrievePart = '';
+  if (files.length) {
+    const names = files.slice(0, 3).join('、') + (files.length > 3 ? '…' : '');
+    retrievePart =
+      rScope === 'bound_only'
+        ? `，检索「仅用所选文档：${names}」`
+        : `，检索「扩展知识库补充（主文档：${names}；跨文档数字须标注来源）」`;
+  } else if (rScope === 'kb_supplement') {
+    retrievePart = '，检索「知识库补充」';
+  }
   return (
     `撰写PPT大纲，主题是【${t}】。` +
-    `面向「${role}」，对象「${object}」${scopePart}。` +
+    `面向「${role}」，对象「${object}」${scopePart}${retrievePart}。` +
     `请按「${role}」的决策顺序组织，不要照搬素材原目录。`
   );
 }
@@ -504,6 +553,10 @@ export type OutlineSendPayload = {
   domainPack?: PptDomainPack;
   /** 列表/# 标题用短名；缺省则用主题或对象 */
   displayTitle?: string;
+  /** 绑定的源文档文件名（库内） */
+  boundSourceFiles?: string[];
+  /** 检索范围：有绑定默认仅用所选文档，无绑定默认扩库 */
+  retrievalScope?: RetrievalScope;
 };
 
 interface OutlinePromptComposerProps {
@@ -519,6 +572,8 @@ interface OutlinePromptComposerProps {
   mode?: 'ppt' | 'doc';
   /** 递增时打开定框弹框（欢迎区样例用）；0 表示未触发 */
   openPreviewSignal?: number;
+  /** 当前知识库名；具体库时可绑定源文档。缺省/全库则无文件选择 */
+  kbName?: string;
 }
 
 /** 主题 → 确认变量（可选）→ 短用户消息 + system 骨架开构思 */
@@ -531,6 +586,7 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
   inferVars,
   mode = 'ppt',
   openPreviewSignal = 0,
+  kbName,
 }) => {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [role, setRole] = useState(initialVars?.role ?? '');
@@ -543,6 +599,59 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
   const [inferring, setInferring] = useState(false);
   const [inferNote, setInferNote] = useState('');
   const lastPreviewSignal = React.useRef(0);
+  const [kbFileOptions, setKbFileOptions] = useState<
+    Array<{label: string; value: string}>
+  >([]);
+  const [boundSourceFiles, setBoundSourceFiles] = useState<string[]>([]);
+  const [retrievalScope, setRetrievalScope] = useState<RetrievalScope>(
+    'kb_supplement',
+  );
+  const [filesLoading, setFilesLoading] = useState(false);
+
+  const canBindFiles =
+    Boolean(kbName) && kbName !== ALL_KB_NAME && mode === 'ppt' && showVars;
+
+  // 绑定关系 → 默认 scope（用户改过也可因清空绑定而回落）
+  useEffect(() => {
+    setRetrievalScope(defaultRetrievalScope(boundSourceFiles));
+  }, [boundSourceFiles]);
+
+  useEffect(() => {
+    if (!previewOpen || !canBindFiles || !kbName) {
+      setKbFileOptions([]);
+      return;
+    }
+    let cancelled = false;
+    setFilesLoading(true);
+    listDocs(kbName)
+      .then((res: any) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res?.data)
+          ? res.data
+          : Array.isArray(res)
+            ? res
+            : [];
+        const opts = rows
+          .map((r: any) => String(r?.file_name || '').trim())
+          .filter(Boolean)
+          .map((name: string) => ({label: name, value: name}));
+        setKbFileOptions(opts);
+      })
+      .catch(() => {
+        if (!cancelled) setKbFileOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewOpen, canBindFiles, kbName]);
+
+  // 换库清空绑定
+  useEffect(() => {
+    setBoundSourceFiles([]);
+  }, [kbName]);
 
   const openPreview = async () => {
     const t = topic.trim();
@@ -624,14 +733,23 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
       const pack = vars.domainPack || inferPptDomainPack(t, vars);
       const shortTitle =
         displayTitle.trim() || suggestPptDocTitle(t, vars);
+      const files = canBindFiles ? boundSourceFiles : [];
+      const effectiveScope: RetrievalScope =
+        files.length === 0 ? 'kb_supplement' : retrievalScope;
       onSend({
-        userMessage: composePptOutlineUserMessage(t, {
-          ...vars,
-          scope: sanitizeOutlineScope(vars.scope),
-        }),
+        userMessage: composePptOutlineUserMessage(
+          t,
+          {
+            ...vars,
+            scope: sanitizeOutlineScope(vars.scope),
+          },
+          {scope: effectiveScope, boundFiles: files},
+        ),
         systemPrompt: buildPptOutlineStructureSystemPrompt(pack),
         domainPack: pack,
         displayTitle: shortTitle,
+        boundSourceFiles: files,
+        retrievalScope: effectiveScope,
       });
     }
     setPreviewOpen(false);
@@ -642,17 +760,37 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
     setDisplayTitle('');
     setDomainPack('generic');
     setInferNote('');
+    // 保留 boundSourceFiles / retrievalScope，便于同库连续构思
   };
 
   const bubblePreview = useMemo(
     () =>
-      composePptOutlineUserMessage(topic.trim() || '（主题）', {
-        role,
-        object,
-        scope,
-        domainPack,
-      }),
-    [topic, role, object, scope, domainPack],
+      composePptOutlineUserMessage(
+        topic.trim() || '（主题）',
+        {
+          role,
+          object,
+          scope,
+          domainPack,
+        },
+        {
+          scope:
+            boundSourceFiles.length === 0
+              ? 'kb_supplement'
+              : retrievalScope,
+          boundFiles: canBindFiles ? boundSourceFiles : [],
+        },
+      ),
+    [
+      topic,
+      role,
+      object,
+      scope,
+      domainPack,
+      boundSourceFiles,
+      retrievalScope,
+      canBindFiles,
+    ],
   );
 
   return (
@@ -722,6 +860,60 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
                   />
                 </Form.Item>
               </Space>
+              {canBindFiles ? (
+                <>
+                  <Form.Item
+                    label={<Text strong>源文档（可选）</Text>}
+                    extra="选定后默认「仅用所选文档」；不选则默认从知识库补充。"
+                    style={{marginBottom: 8}}
+                  >
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      showSearch
+                      loading={filesLoading}
+                      placeholder="选择库内文档作为本次证据承诺"
+                      options={kbFileOptions}
+                      value={boundSourceFiles}
+                      onChange={(v) => setBoundSourceFiles(v)}
+                      optionFilterProp="label"
+                      maxTagCount="responsive"
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={<Text strong>检索范围</Text>}
+                    extra={
+                      boundSourceFiles.length
+                        ? `当前默认：${retrievalScopeLabel(defaultRetrievalScope(boundSourceFiles))}（可改）`
+                        : '未绑定文档时只能扩展知识库'
+                    }
+                    style={{marginBottom: 8}}
+                  >
+                    <Radio.Group
+                      value={
+                        boundSourceFiles.length === 0
+                          ? 'kb_supplement'
+                          : retrievalScope
+                      }
+                      onChange={(e) =>
+                        setRetrievalScope(e.target.value as RetrievalScope)
+                      }
+                      disabled={boundSourceFiles.length === 0}
+                      options={[
+                        {label: '仅用所选文档', value: 'bound_only'},
+                        {label: '扩展知识库补充', value: 'kb_supplement'},
+                      ]}
+                    />
+                  </Form.Item>
+                </>
+              ) : showVars && mode === 'ppt' ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{marginBottom: 8}}
+                  message="当前为全库或未选具体知识库：检索默认「知识库补充」。选定具体库后可绑定源文档。"
+                />
+              ) : null}
               <Collapse
                 ghost
                 size="small"

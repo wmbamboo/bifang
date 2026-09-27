@@ -452,14 +452,18 @@ def _title_scopes(title: str) -> list[str]:
     return _detect_scopes(title or "")
 
 
+_ATTR_TITLE_RE = re.compile(r"面料|材质|属性|图案|厚薄|袖型|花纹")
+
+
 def filter_extracts_for_query(
     records: list[dict[str, Any]],
     user_query: str,
 ) -> list[dict[str, Any]]:
-    """按本页标题实体收窄：大盘页抬 macro，衬衫页抬衬衫指标。"""
+    """按本页标题实体收窄：大盘页抬 macro，衬衫页抬衬衫指标；面料/属性页抬 attribute。"""
     m = re.search(r"【本页标题】\s*([^\n【]{2,80})", user_query or "")
     title = m.group(1).strip() if m else ""
     want = _title_scopes(title)
+    attr_page = bool(_ATTR_TITLE_RE.search(title))
     if not want and not title:
         return records[:12]
     scored: list[tuple[int, dict]] = []
@@ -470,11 +474,18 @@ def filter_extracts_for_query(
             pruned = [
                 met
                 for met in metrics
-                if met.get("name") in want or met.get("name") in {"价格带", "指标"}
+                if met.get("name") in want
+                or met.get("name") in {"价格带", "指标"}
+                # 属性标签指标：OCR 曾错挂邻节品类名，仍保留给面料/图案页用
+                or (attr_page and met.get("attr_label"))
             ]
             if pruned:
                 metrics = pruned
                 rec = {**rec, "metrics": metrics}
+        # 面料/属性页：结构化注入直接丢掉价带条，避免模型采 ¥100-200 占比
+        if attr_page:
+            metrics = [met for met in metrics if not met.get("price_band")]
+            rec = {**rec, "metrics": metrics}
         score = 0
         if want:
             if any(w in scopes for w in want):
@@ -482,6 +493,16 @@ def filter_extracts_for_query(
             for met in metrics:
                 if met.get("name") in want:
                     score += 3
+                if attr_page and met.get("attr_label"):
+                    score += 2
+        if attr_page:
+            if rec.get("page_type") == "attribute":
+                score += 8
+            # 面料页禁止价格带串窗：降权价带页/价带指标
+            if rec.get("page_type") == "price_band":
+                score -= 6
+            if any(met.get("price_band") for met in metrics):
+                score -= 4
         if "大盘" in title and "衬衫" not in title and "polo" not in title.lower():
             if rec.get("page_type") == "price_band" and "男装大盘" not in scopes:
                 score -= 3
@@ -493,6 +514,19 @@ def filter_extracts_for_query(
         if re.search(r"polo", title, re.I):
             if any(met.get("name") == "polo衫" for met in metrics):
                 score += 4
+        # 位次/占大盘页：抬带份额的品类 KPI，压属性页（避免棉/图案抢首位）
+        if re.search(r"位次|位置|在大盘|占大盘|品类位置", title):
+            if rec.get("page_type") == "category_kpi":
+                score += 10
+            if any(
+                met.get("share") and met.get("name") in {"男士衬衫", "polo衫"}
+                for met in metrics
+            ):
+                score += 8
+            if rec.get("page_type") == "attribute":
+                score -= 12
+            if rec.get("page_type") == "product_grid":
+                score -= 4
         if metrics:
             score += 1
         scored.append((score, rec))
@@ -500,6 +534,25 @@ def filter_extracts_for_query(
     picked = [r for s, r in scored if s > 0][:10]
     if not picked:
         picked = [r for r in records if r.get("metrics")][:8]
+    # 面料/属性页：若已有 attribute 页带标签指标，只保留该类，避免图鉴/价带销量抢镜
+    if attr_page:
+        attr_only = [
+            r
+            for r in picked
+            if r.get("page_type") == "attribute"
+            and any(m.get("attr_label") for m in (r.get("metrics") or []))
+        ]
+        if attr_only:
+            picked = attr_only[:6]
+        else:
+            picked = [
+                r for r in picked if r.get("page_type") != "price_band"
+            ] or picked
+    # 位次页：优先 category_kpi（含占大盘份额），去掉属性噪声
+    elif re.search(r"位次|位置|在大盘|占大盘|品类位置", title):
+        kpi = [r for r in picked if r.get("page_type") == "category_kpi"]
+        if kpi:
+            picked = kpi[:8]
     return picked
 
 
@@ -508,7 +561,9 @@ def format_extracts_block(records: list[dict[str, Any]]) -> str:
         return ""
     lines = [
         "【结构化指标库·优先采信】下列指标已从材料页按单元格/KPI 块抽出。"
-        "写 tips 时数字与口径实体必须成对取自同一条；禁止跨条拼装，禁止改成 TOP 合计。",
+        "写 tips 时数字与口径实体必须成对取自同一条；禁止跨条拼装，禁止改成 TOP 合计。"
+        "属性/面料页优先用带属性标签的占比（如「棉 72.18%」），禁止用价格带占比凑数。"
+        "位次页写份额时须带品类名：如「3.3亿 男士衬衫 占比5.6%（占大盘）」。",
     ]
     for i, rec in enumerate(records, 1):
         page = rec.get("page")
@@ -533,12 +588,24 @@ def format_extracts_block(records: list[dict[str, Any]]) -> str:
                 extra += f" 同比{met['yoy']}"
             if met.get("mom"):
                 extra += f" 环比{met['mom']}"
+            if met.get("share"):
+                # 品类份额对大盘：写清「占比x%（占大盘）」，避免模型写成裸「3.3亿 占大盘」漏品类名
+                if name not in {"男装大盘", "大盘", "总销量", "总销售额"}:
+                    extra += f" 占比{met['share']}（占大盘）"
+                else:
+                    extra += f" 占比{met['share']}"
             if met.get("rate_unlabeled"):
                 # 无标签速率：只跟数字，禁止补写「同比/环比」
                 extra += f" {met['rate_unlabeled']}"
             if met.get("price_band"):
                 extra += f" {met['price_band']}"
-            lines.append(f"  - {met.get('value')}{unit} {name}{extra}")
+            # 属性条：标签在前，便于面料页采信「棉 72.18% polo衫」
+            if met.get("attr_label"):
+                lines.append(
+                    f"  - {met['attr_label']} {met.get('value')}{unit} {name}{extra}"
+                )
+            else:
+                lines.append(f"  - {met.get('value')}{unit} {name}{extra}")
             shown += 1
             if shown >= 16:
                 break
@@ -583,7 +650,15 @@ def extracts_as_pseudo_docs(
             unit = met.get("unit") or ""
             name = met.get("name") or ""
             badge = met.get("rank_badge") or ""
-            lines.append(f"{badge} {met.get('value')}{unit} {name}".strip())
+            attr = met.get("attr_label") or ""
+            band = met.get("price_band") or ""
+            share = met.get("share") or ""
+            # 属性条须带标签，否则面料页证据只剩「72.18% 男士衬衫」无法采信
+            head = f"{badge} {attr} {met.get('value')}{unit} {name} {band}".strip()
+            head = re.sub(r"\s+", " ", head)
+            lines.append(head)
+            if share:
+                lines.append(f"{share} {name} {band}占比".strip())
             if met.get("yoy"):
                 lines.append(f"{met['yoy']} {name}同比".strip())
             if met.get("mom"):

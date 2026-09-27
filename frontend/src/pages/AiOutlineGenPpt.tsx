@@ -5,7 +5,7 @@ import {Button, Flex, message, Progress, Spin} from 'antd';
 import React, {useCallback, useState} from "react";
 import axios from "axios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT} from "@/components/DocUtil/parseChatCompletion";
-import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars} from "@/components/DocUtil/ViewItem4Ppt";
+import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets} from "@/components/DocUtil/ViewItem4Ppt";
 import OutlineRec, {outlineTypeAiPPT, outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {PptOutlinePrompt} from "@/components/DocUtil/OutlinePromptPpt";
@@ -14,6 +14,7 @@ import SlideDrawer from "@/components/DocUtil/SliderDrawer";
 import PptTemplate from "@/components/DocUtil/PptTemplate";
 import { downgradeMetricColumns } from "@/components/DocUtil/outlineTipSlots";
 import { layoutForRender } from "@/components/DocUtil/outlineJson";
+import { loadImageGridBytes } from "@/components/DocUtil/kbImageAssets";
 import {CompassTwoTone, FilePptTwoTone, FolderOpenTwoTone, RocketTwoTone} from "@ant-design/icons";
 import SlideTemplateDrawer from "@/components/DocUtil/SlideTemplateDrawer";
 import {opStackStyle, opBtnStyle} from "@/components/DocUtil/kbSelectorModal";
@@ -141,6 +142,7 @@ const AiOutlineGenPpt: React.FC = () => {
   init_chapters=init_chapters?init_chapters:[];
   const [chapters,setChapters] = useState(init_chapters);
   const [title, setTitle] = useState<string>(init_title);
+  const [kbName, setKbName] = useState<string>(init_kbName || "samples");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const theme = useTheme();
   const { initialState } = useModel('@@initialState');
@@ -154,7 +156,7 @@ const AiOutlineGenPpt: React.FC = () => {
     const [newTitle,_,newKbName,newChapters]=Ppt.get_chapters_from_outlineRecs(olRecs,outlineTypeAiPPT,id,formatPrompt)
     if(newTitle&&newKbName&&newChapters) {
       setChapters(newChapters);
-      // setKbName(newKbName);
+      setKbName(newKbName);
       setTitle(newTitle);   //(or?or.outlineName:"");
       setDownloadable(false);
       message.info(`selectOutline:ID:${id},${title},${chapters.length}`);
@@ -269,6 +271,7 @@ const AiOutlineGenPpt: React.FC = () => {
     await pptTemplate.genNewSlideFileDict_Random("catalog",slideVar_catalog,2,chapters.length);
     let page = 3;
     let svIndex = 0;
+    const usedAssetIds = new Set<string>();
     for (const chapter of chapters) {
       await pptTemplate.genNewSlideFileDict_Random("chapterCover", {
         chapterTitle: stripChapterOrdinalPrefix(chapter.title),
@@ -323,21 +326,42 @@ const AiOutlineGenPpt: React.FC = () => {
           continue;
         }
         if (slide.layout === 'table') {
-          const { vars } = buildTableFillVars(slide.subTitle || '', sv.vItem || {});
+          const { vars, rows, cols } = buildTableFillVars(
+            slide.subTitle || '',
+            sv.vItem || {},
+          );
           await pptTemplate.genNewSlideFileDict_Random(
             'table',
             { ...sv, ...vars },
             page,
+            rows,
+            cols,
           );
           page++;
           continue;
         }
         if (slide.layout === 'image_grid') {
           const { vars } = buildImageGridFillVars(slide.subTitle || '', sv.vItem || {});
+          let imageBuffers: ArrayBuffer[] = [];
+          try {
+            const captions = parseSlideTips(slide.subTitle || '').map((t) => t.text);
+            const manual = parseSlideImageAssets(slide.subTitle || '');
+            const picked = await loadImageGridBytes(kbName, 4, usedAssetIds, {
+              title: slide.title || '',
+              captions,
+              manual,
+            });
+            imageBuffers = picked.map((p) => p.bytes);
+          } catch (e) {
+            console.warn('image_grid assets load failed', e);
+          }
           await pptTemplate.genNewSlideFileDict_Random(
             'image_grid',
             { ...sv, ...vars },
             page,
+            undefined,
+            undefined,
+            imageBuffers.length ? imageBuffers : undefined,
           );
           page++;
           continue;
@@ -773,6 +797,7 @@ const AiOutlineGenPpt: React.FC = () => {
         </ProCard>
       </ProCard>
       <OutlineSelectDrawer type={"select"} open={drawerOpen} outlineRecs={olRecs} outlineType={outlineTypeAiPPT}
+                           kbName={kbName}
                            selFn={onOutlineRecSelect} delFn={onOutlineRecDelete}
                            closeFn={drawerClose} cb4ImportOutline={cb4ImportOutline}/>
       <SlideDrawer key={editSlideKey} slide={editSlide} open={slideDrawerOpen} closeFn={slideDrawerClose} fn={resultSlideEditDrawerSave} />

@@ -27,3 +27,6 @@ def test_list_polo_element_assets():
 def test_resolve_asset_rejects_traversal(tmp_path: Path):
     assert resolve_asset_path("服装", "x.pdf", "../etc/passwd") is None
     assert resolve_asset_path("服装", "x.pdf", "elements/../../x") is None
+    # stem=".." 会把 base 退到库目录，须硬拒
+    assert resolve_asset_path("服装", "..", "any.png") is None
+    assert resolve_asset_path("服装", "../x.pdf", "any.png") is None

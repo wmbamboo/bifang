@@ -81,6 +81,41 @@ export function isOrphanNumberFragment(line: string): boolean {
 }
 
 /**
+ * 价带边界数被 PPT 拆 run 后会单独成行（如「¥100-」+「200」）。
+ * 同页已有完整价带语境时放行，避免误杀。
+ */
+export function isPriceBandEdgeFragment(
+  line: string,
+  prev: string,
+  next: string,
+  slideFlat: string,
+): boolean {
+  const s = String(line || "").trim();
+  if (!/^(?:50|100|200|300|400|500|600|800|1000)$/.test(s)) return false;
+  const left = String(prev || "").trim();
+  const right = String(next || "").trim();
+  // 邻行拼出 ¥100-200 / 100-200元
+  if (/[￥¥]?\s*\d+\s*[-~～至到]$/.test(left)) return true;
+  if (/^[-~～至到]\s*\d+/.test(right) || /^(?:元|万)/.test(right)) return true;
+  if (left === "-" || /[-~～至到]$/.test(left)) return true;
+  const win = `${left}${s}${right}`;
+  if (/[￥¥]\s*\d+\s*[-~～至到]\s*\d+/.test(win)) return true;
+  if (/\d+\s*[-~～至到]\s*\d+\s*元/.test(win)) return true;
+  // 同页拼接（去换行）后该数落在价带区间内
+  const flat = String(slideFlat || "").replace(/\s+/g, "");
+  const esc = s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (
+    new RegExp(`[￥¥]\\d{1,4}[-~～至到]${esc}|${esc}[-~～至到]\\d{1,4}`).test(flat)
+  ) {
+    return true;
+  }
+  if (new RegExp(`[￥¥]${esc}(?:元|以下|以上)?|${esc}元(?:以下|以上)?`).test(flat)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * 句尾孤儿数字：整行不是孤立碎片，但汉字后粘了坏字符「0」
  * 例：618超会买0
  */
@@ -224,8 +259,20 @@ function scanOnePage(
     .split(/\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  for (const line of lines) {
+  const slideFlat = lines.join("");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (isOrphanNumberFragment(line)) {
+      if (
+        isPriceBandEdgeFragment(
+          line,
+          lines[i - 1] || "",
+          lines[i + 1] || "",
+          slideFlat,
+        )
+      ) {
+        continue;
+      }
       issues.push({
         page,
         slideName,
@@ -244,6 +291,13 @@ function scanOnePage(
       break;
     }
     if (isTruncatedSlideLine(line)) {
+      // 价带左半「¥100-」后接边界数 → PPT 拆 run，不是半句截断
+      if (
+        /[￥¥]?\s*\d+\s*[-~～至到]$/.test(line) &&
+        /^\d{2,4}/.test(lines[i + 1] || "")
+      ) {
+        continue;
+      }
       issues.push({
         page,
         slideName,

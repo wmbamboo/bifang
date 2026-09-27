@@ -7,6 +7,15 @@
  *（把「数字↔实体」单元格归属直接入库，用 id 比对替代文本距离）。
  */
 
+import {
+  PRICE_BAND_TOKEN_RE,
+  PRICE_BAND_ATOM_RE,
+  isPriceBandAtom,
+  extractPriceBandAtoms,
+} from "@/components/DocUtil/priceBandAtom";
+
+export { PRICE_BAND_TOKEN_RE, isPriceBandAtom, extractPriceBandAtoms };
+
 /** 与大纲 metric 口径一致 */
 export const EVIDENCE_METRIC_RE =
   /(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s*([%％亿万]|元)?/gu;
@@ -55,9 +64,6 @@ function indexDapanOutsideShareIdiom(
 }
 /** tip 点名品类口径 */
 export const CATEGORY_CLAIM_RE = /衬衫|polo|Polo|T恤/i;
-/** tip 点名价格带区间（￥50-100 / ¥50以下 / 200元以上） */
-export const PRICE_BAND_TOKEN_RE =
-  /[￥¥]\s*\d+(?:\.\d+)?\s*[-~～至到]\s*\d+(?:\.\d+)?\s*元?|[￥¥]\s*\d+(?:\.\d+)?\s*元?\s*(?:以下|以上)|(?:^|[^\d])\d+(?:\.\d+)?\s*元\s*(?:以下|以上)/;
 
 /** 品类命中词 → labels（较长词优先；由 lastIndex 选最近，不再二次扫描兜底 ALL） */
 const CATEGORY_HIT_WORDS: Array<{word: string; labels: readonly string[]}> = [
@@ -274,8 +280,8 @@ function numberInsideDateSpan(
   return false;
 }
 
-/** tip 内价格带区间跨度（与 PRICE_BAND_TOKEN_RE 同形，全局扫） */
-const PRICE_BAND_SPAN_RE = new RegExp(PRICE_BAND_TOKEN_RE.source, "g");
+/** tip 内价格带区间跨度（价带原子整段） */
+const PRICE_BAND_SPAN_RE = new RegExp(PRICE_BAND_ATOM_RE.source, "g");
 
 function numberInsidePriceBandSpan(
   tip: string,

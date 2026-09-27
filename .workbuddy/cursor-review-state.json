@@ -1,32 +1,64 @@
 {
-  "lastReviewedHead": "58432e4",
-  "lastReviewedAt": "2026-09-26T01:55+08:00",
+  "lastReviewedHead": "0b74188",
+  "lastReviewedAt": "2026-09-27T08:10+08:00",
   "reviewedFiles": [
-    "frontend/src/components/DocUtil/outlineMetaDiagnostic.ts",
     "frontend/src/components/DocUtil/outlineCoverage.ts",
+    "frontend/src/components/DocUtil/outlineEvidenceValidate.ts",
     "frontend/src/components/DocUtil/outlineJson.ts",
+    "frontend/src/components/DocUtil/outlineMetaDiagnostic.ts",
     "frontend/src/components/DocUtil/PptProductGate.ts",
+    "frontend/src/components/DocUtil/PptTemplate.ts",
+    "frontend/src/components/DocUtil/kbImageAssets.ts",
+    "frontend/src/components/DocUtil/outlineSerialize.ts",
     "frontend/src/components/DocUtil/ViewItem4Ppt.ts",
-    "frontend/src/components/ChatUtil/ChatWithSpeech4Ppt.tsx",
+    "frontend/src/components/DocUtil/retrievalScope.ts",
     "frontend/src/components/ChatUtil/OutlinePromptComposer.tsx",
-    "frontend/tests/outlineMetaCoverage.test.ts"
+    "frontend/src/components/ChatUtil/ChatWithSpeech4Ppt.tsx",
+    "frontend/src/pages/KbOutlineGenPpt.tsx",
+    "frontend/src/pages/AiOutlineGenPpt.tsx",
+    "frontend/src/services/chatchat/kb.ts",
+    "backend/app/services/kb_service.py",
+    "backend/app/services/ocr_service.py",
+    "backend/app/services/document_loader.py",
+    "backend/app/routers/knowledge_base.py",
+    "backend/app/scripts/backfill_element_assets.py"
   ],
   "openIssues": [
     {
       "severity": "P0",
-      "issue": "frontend/.gitignore 垃圾行（/tests/、/jest.config.js、/hezl/ x3）把全部 jest 测试与 jest.config.js 挡在仓库外；远端 CI frontend-tests job checkout 后找不到 tests/fidelityGold.test.ts 必然失败，金标 CI 从未真正跑过",
-      "fix": "删 .gitignore 中 /tests/ 与 /jest.config.js（/hezl/ x3 一并删；/data/ 确认是否刻意），git add frontend/tests frontend/jest.config.js 提交推送并确认 CI 绿"
+      "issue": "提交 0b74188（未 push）夹带 frontend/hezl/ 个人目录：sslConfig（含 output_password=hezl）、pm2/systemd 服务、内网 IP 192.168.0.106/0.195/0.201、部署文档、836KB png；另含 .workbuddy/backup 2×1.5MB pptx、tools/*.txt 输出、output-test.pptx。根因：07:58 段把 .gitignore 里 /hezl/ 忽略行当『误粘贴』删了",
+      "fix": "push 前：git rm -r --cached frontend/hezl .workbuddy/backup .workbuddy/tools/*.txt frontend/public/output-test.pptx；.gitignore 加回 frontend/hezl/、.workbuddy/backup/、output-test.pptx；提交信息补记五段内容"
     },
     {
       "severity": "中",
-      "issue": "OutlinePromptComposer columns 正例（col: 高举高打/精种准打/聚流快打）教模型写域外营销轴，与 checkColumnAxisEvidence 的证据痕迹要求互斥，服装域必拒→降 list→白耗重试",
-      "fix": "正例换成域内轴（属性/价格带/品类对照），或标注为域外示意"
+      "issue": "resolve_asset_path 的 stem 来自 file_name 参数未过滤 '..'：file_name='..' 时 base 退到 kb 目录，可读该库任意文件（内网自用影响有限）",
+      "fix": "stem 若含 .. 或为空即 return None"
     },
     {
       "severity": "中",
-      "issue": "outlineCoverage.ts 内 columnAxisSupportedByEvidence/findUnsupportedActionSlideTitles 硬编码品类词（衬衫/polo/大盘）与材料轴词表，跨域需多处改；与『品类词受控化（中期）』同源",
-      "fix": "后续与品类词表一并受控化"
+      "issue": "PptProductGate 的 isTruncatedSlideLine/isChartAxisFragmentLine 与填充阶段 isTruncatedTip/isChartAxisFragmentTip 复制粘贴双份（注释自认避免循环依赖），违反 outlineMetaDiagnostic 单点导出原则，将来必漂移",
+      "fix": "搬进 outlineEvidenceValidate.ts 或独立共享模块，两处 import"
+    },
+    {
+      "severity": "中",
+      "issue": "kbImageAssets.ts 运行时 import @/services/chatchat/kb（umi request→pino thread-stream worker），Windows/UNC 下 jest 必炸（ERR_INVALID_FILE_URL_PATH），本地全量回归跑不了；CI Linux 可跑但无本地验证",
+      "fix": "纯函数拆到 kbImageAssetsCore.ts（不 import 服务层），测试改测 core；或测试里 jest.mock('@/services/chatchat/kb')"
+    },
+    {
+      "severity": "中",
+      "issue": "crop_element_assets_from_page save_whole=True 默认且存 PNG：whole/ 每页 ~1.56MB，全库已 25MB 且每次 revectorize 追加不清理；此前已建议 JPEG q85 或关 whole",
+      "fix": "save_whole 传 False（或 JPEG q85）；重向量化前清旧 whole/"
+    },
+    {
+      "severity": "低",
+      "issue": "checkCardTitleAxisEvidence 价带互斥按整卡计数（selfHitsEarly>0 即放行错配条目）→ 单条价带错配溜到数值闸兜底（2026-09-27 晨 18.80% 案路径）；数值闸已有 attrAxisPage 逐条拒+方向 hint 缓解，但闸序在卡题轴之后",
+      "fix": "价带互斥下沉到逐条 tip（每条含 ¥区间且无本轴标签即拒）"
+    },
+    {
+      "severity": "低",
+      "issue": "outlineJson 标题过长阈值 18 但文案写『须≤16 字』；evidenceHasMetric 无尾零归一化（18.80≠18.8）；_apply_source_scope bound_only 过滤后空证据无回退（数值闸整体跳过）；findDuplicateTips 短标签核心去重对 table 页同品类多行可能误杀；list_doc_assets url 未 URL 编码中文/斜杠；rels 顺序=视觉槽位顺序未验证",
+      "fix": "见审查报告，逐项小修"
     }
   ],
-  "localTestResult": "jest outlineMetaCoverage + fidelityGold：2 suites / 8 tests 全过（Windows node 直跑 WSL 路径）"
+  "localTestResult": "工作区代码（含 07:50-08:03 三段未提交改动）：outlineMetaCoverage 21/21、fidelityGold、priceBandTokenFidelity、retrievalScope、templateTableSpec、templateTableRender、priceBandAtom 全过；kbImageAssets 套件本地 UNC 环境跑不了（环境问题非代码问题）"
 }

@@ -25,6 +25,7 @@ import {
   findCrossCardDuplicateLine,
   hasTrailingOrphanDigit,
   isOrphanNumberFragment,
+  isPriceBandEdgeFragment,
   scanFilledSlides,
   stripDocCiteMarkers,
   stripProgressMarkers,
@@ -113,6 +114,24 @@ describe("meta diagnostic + column coverage gates", () => {
     expect(isOrphanNumberFragment("01")).toBe(false);
     expect(isOrphanNumberFragment("18")).toBe(false);
     expect(isOrphanNumberFragment("30")).toBe(true);
+    expect(isOrphanNumberFragment("200")).toBe(true);
+  });
+
+  it("product gate allows price-band edge 200 split across runs", () => {
+    expect(
+      isPriceBandEdgeFragment("200", "¥100-", "75.9万", "polo¥100-20075.9万"),
+    ).toBe(true);
+    expect(isPriceBandEdgeFragment("200", "销量", "同比", "销量200同比")).toBe(
+      false,
+    );
+    const xml = `
+      <a:t>男士polo衫</a:t>
+      <a:t>¥100-</a:t>
+      <a:t>200</a:t>
+      <a:t>75.9万</a:t>`;
+    const r = scanFilledSlides([{slideName: "s", fileContent: xml}]);
+    expect(r.ok).toBe(true);
+    expect(r.errors).toHaveLength(0);
   });
 
   it("stripProgressMarkers eats progress1-3 whole (no leftover -3)", () => {

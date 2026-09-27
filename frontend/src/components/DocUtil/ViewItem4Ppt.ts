@@ -1,5 +1,6 @@
 import OutlineRec,{outlineType} from "@/components/DocUtil/OutlineStore";
 import { resolveTableGrid } from "@/components/DocUtil/templateManifest";
+import { splitTitleDescProtectingPriceBands } from "@/components/DocUtil/priceBandAtom";
 
 export class PptKeys{
   chapterKey:string;
@@ -866,16 +867,33 @@ export function buildTableFillVars(
   const tipTexts = parseSlideTips(subTitle).map((t) => t.text);
   let tableTitle = '';
   const pipeRows: string[][] = [];
+  const pushPipeLine = (line: string) => {
+    if (!/[|\t｜]/.test(line)) return;
+    const cells = line.split(/[|\t｜]/).map((c) => c.trim());
+    while (cells.length < TABLE_COLS) cells.push('');
+    pipeRows.push(cells.slice(0, TABLE_COLS_MAX));
+  };
   for (const tip of tipTexts) {
     const m = tip.match(/^(?:tableTitle|表题|副标)\s*[:：]\s*(.+)$/i);
     if (m) {
       tableTitle = m[1].trim();
       continue;
     }
-    if (/[|\t｜]/.test(tip)) {
-      const cells = tip.split(/[|\t｜]/).map((c) => c.trim());
-      while (cells.length < TABLE_COLS) cells.push('');
-      pipeRows.push(cells.slice(0, TABLE_COLS_MAX));
+    pushPipeLine(tip);
+  }
+  // 大纲无管道时：从生成小项恢复（含价带被「标题-描述」误拆）
+  if (!pipeRows.length) {
+    for (let i = 1; i <= 16; i++) {
+      const t = (vItem[`item${i}`] || '').trim();
+      const d = (vItem[`item${i}_Desc`] || '').trim();
+      if (!t) continue;
+      let line = t;
+      if (d && /[￥¥]\s*\d+$/.test(t) && /^\d+/.test(d)) {
+        line = `${t}-${d}`;
+      } else if (!/[|｜]/.test(t)) {
+        continue;
+      }
+      pushPipeLine(line);
     }
   }
 
@@ -912,7 +930,12 @@ export function buildTableFillVars(
     for (let i = 1; i <= ROWS * COLS; i++) {
       const t = (vItem[`item${i}`] || '').trim();
       const d = (vItem[`item${i}_Desc`] || '').trim();
-      if (t) cells.push(d ? `${t} ${d}`.trim() : t);
+      if (!t) continue;
+      if (d && /[￥¥]\s*\d+$/.test(t) && /^\d+/.test(d)) {
+        cells.push(`${t}-${d}`.replace(/\s+/g, ''));
+      } else {
+        cells.push(d ? `${t} ${d}`.trim() : t);
+      }
     }
     if (!cells.length) {
       for (const tip of tipTexts) {
@@ -1162,11 +1185,12 @@ export function buildPptItemFormatPrompt(
       : '输出与大纲表格行数一致的行，禁止增删。\n';
     return (
       '\n\n【输出格式】\n' +
-      '本页是表格页（最多 5 行 × 4 列）。\n' +
+      '本页是表格页（最多 8 行 × 5 列）。\n' +
       countLine +
-      '每行用竖线分隔单元格，例如：维度|金额|增速|口径\n' +
-      '单元格宜短（≤12 字）；数字须来自检索原文，禁止编造。\n' +
-      '1. 维度|数值|增速|说明\n'
+      '每行输出完整管道行（可与大纲列一致），例如：\n' +
+      '1. 男士衬衫|¥50-100|129.4万(43.69%)|+15.67%|1.0亿(31.15%)\n' +
+      '禁止写成「概括标题 - 具体描述」；禁止把 ¥50-100 / ¥100-200 从中间的连字符拆成两行。\n' +
+      '单元格宜短；数字须来自检索/大纲原文，禁止编造。\n'
     );
   }
   if (layout === 'image_grid') {
@@ -1287,7 +1311,11 @@ export function validateSlideViewItems(
     for (let i = 0; i < rows.length; i++) {
       const { title } = rows[i];
       if (!title) return `第 ${i + 1} 条需要填写。`;
-      if (title.length > 40) return `第 ${i + 1} 条过长（宜 ≤28 字）。`;
+      // 表格管道行可较长（品类|价带|销量|同比|销售额）
+      const maxLen = layout === 'table' ? 120 : 40;
+      if (title.length > maxLen) {
+        return `第 ${i + 1} 条过长（宜 ≤${layout === 'table' ? 80 : 28} 字，当前 ${title.length} 字）。`;
+      }
     }
     return null;
   }
@@ -1379,30 +1407,49 @@ export class ViewItem4Ppt {
         };
 
         // 标题与描述之间的分隔符：- / -- / — / —— / – / －（全角）
+        // 价带原子内的连字符不参与拆分（见 splitTitleDescProtectingPriceBands）
         const SEP = '(?:-{1,2}|—{1,2}|–+|－+)';
-        const SEP_OR_COLON = `(?:${SEP}|[:：])`;
 
         const tryMatchLine = (line: string): boolean => {
-            // 1. 概括 - 描述 / 1、概括 —— 描述 / 1. 概括 -- 描述
-            let m =
-                line.match(new RegExp(`^\\d{1,2}\\s*[\\.．、]\\s*(.+?)\\s*${SEP}\\s*(.+)$`, 'u')) ||
-                // 1. 概括：描述 / 1. 概括: 描述
-                line.match(/^\d{1,2}\s*[\.．、]\s*(.+?)\s*[:：]\s*(.+)$/u) ||
-                // 1. [概括]-[描述] / 1. [概括]——[描述]
-                line.match(new RegExp(`^\\d{1,2}\\s*[\\.．、]\\s*\\[(.+?)\\]\\s*${SEP}\\s*\\[(.+?)\\]`, 'u')) ||
-                // 1. **概括** - 描述
-                line.match(new RegExp(`^\\d{1,2}\\s*[\\.．、]\\s*\\*\\*(.+?)\\*\\*\\s*${SEP_OR_COLON}\\s*(.+)$`, 'u')) ||
-                // - 概括：描述 / * 概括 —— 描述
-                line.match(new RegExp(`^[-*•]\\s*(.+?)\\s*${SEP_OR_COLON}\\s*(.+)$`, 'u')) ||
-                // 第1点：概括 - 描述
-                line.match(new RegExp(`^第\\s*\\d{1,2}\\s*[点项条]\\s*[:：.．、]?\\s*(.+?)\\s*${SEP_OR_COLON}\\s*(.+)$`, 'u')) ||
-                // 一、概括。描述 / （1）概括：描述
-                line.match(/^[一二三四五六七八九十]+[、.．]\s*(.+?)[。．:：]\s*(.+)$/u) ||
-                line.match(new RegExp(`^[（(]\\s*\\d{1,2}\\s*[)）]\\s*(.+?)\\s*${SEP_OR_COLON}\\s*(.+)$`, 'u')) ||
-                // 1）概括 - 描述（无开括号）
-                line.match(new RegExp(`^\\d{1,2}\\s*[)）]\\s*(.+?)\\s*${SEP_OR_COLON}\\s*(.+)$`, 'u'));
-            if (m) {
-                pushItem(m[1], m[2], true);
+            // 表格行：1. 品类|价格带|… —— 禁止按 ¥50-100 内的连字符拆成标题/描述
+            const pipeRow = line.match(
+                /^\d{1,2}\s*[\.．、)）]\s*(.+\|.+)$/u,
+            ) || line.match(/^[-*•]\s*(.+\|.+)$/u);
+            if (pipeRow) {
+                pushItem(pipeRow[1].trim(), '表格行', true);
+                return true;
+            }
+
+            // 先剥编号，再在「标题 - 描述」上拆；价带原子内的 - 不参与拆分
+            const numbered = line.match(
+                /^(?:\d{1,2}\s*[\.．、)）]|第\s*\d{1,2}\s*[点项条]\s*[:：.．、]?|[-*•]|[（(]\s*\d{1,2}\s*[)）])\s*(.+)$/u,
+            );
+            if (numbered) {
+                const body = numbered[1];
+                const byDash = splitTitleDescProtectingPriceBands(
+                    body,
+                    new RegExp(`\\s*${SEP}\\s*`),
+                );
+                if (byDash) {
+                    pushItem(byDash.title, byDash.desc, true);
+                    return true;
+                }
+                const byColon = splitTitleDescProtectingPriceBands(
+                    body,
+                    /\s*[:：]\s*/,
+                );
+                if (byColon) {
+                    pushItem(byColon.title, byColon.desc, true);
+                    return true;
+                }
+            }
+
+            // 一、概括。描述（中文顿号序，无价带冲突时保留）
+            const cnOrd = line.match(
+                /^[一二三四五六七八九十]+[、.．]\s*(.+?)[。．:：]\s*(.+)$/u,
+            );
+            if (cnOrd) {
+                pushItem(cnOrd[1], cnOrd[2], true);
                 return true;
             }
             // 数据卡常见：1. 586亿 上半年销售额（空格分隔，无横线）
@@ -2006,7 +2053,7 @@ export class Ppt{
                 : slide.layout === 'metric_columns'
                   ? `请把「${slide.title || '本页'}」写成「上数据卡+下分栏」：先输出原数字+短口径，再只输出各栏短条目（不要输出栏标题行）。不要复述章节名与本页标题。`
                   : slide.layout === 'table'
-                    ? `请把「${slide.title || '本页'}」写成表格行：每行用竖线分隔单元格（维度|数值|增速|口径），数字须来自检索原文，单元格宜短。`
+                    ? `请把「${slide.title || '本页'}」写成表格行：每行一条完整管道记录，列顺序与【大纲要点】一致（如 品类|价格带|销量(占比)|同比|销售额(占比)）。数字须来自大纲/检索原文；禁止把 ¥50-100 等价格带从连字符拆开。`
                     : slide.layout === 'image_grid'
                       ? `请把「${slide.title || '本页'}」写成 2×2 图鉴图注：输出 2～4 行短图注（每行 4～16 字），对应四格图片说明。`
                       : buildSlideTaskInstruction(slide.title);
@@ -2061,8 +2108,8 @@ export class Ppt{
                   ? `本页是上数据卡+下分栏：前 ${metrics.length || '若干'} 行为数据卡，其后按栏输出短条目（不要输出 col:）。`
                   : slide.layout === 'table'
                     ? (outlineTips.length
-                      ? `本页是表格，大纲共 ${outlineTips.length} 行。必须且只能输出 ${outlineTips.length} 行，每行用 | 分隔单元格。`
-                      : '本页是表格，每行用 | 分隔单元格（维度|数值|增速|口径）。')
+                      ? `本页是表格，大纲共 ${outlineTips.length} 行。必须且只能输出 ${outlineTips.length} 行；优先原样保留大纲管道列，仅可微调措辞，禁止改成「标题 - 描述」。`
+                      : '本页是表格，每行用 | 分隔单元格，列与材料口径一致。')
                     : slide.layout === 'image_grid'
                       ? (outlineTips.length
                         ? `本页是 2×2 图鉴，大纲共 ${Math.min(4, outlineTips.length)} 条图注。必须输出对应行数短图注。`

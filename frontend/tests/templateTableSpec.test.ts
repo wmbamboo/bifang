@@ -121,4 +121,31 @@ describe("buildTableFillVars 动态行列", () => {
     expect(vars["tableTitle"]).toBe("男装衬衫polo价格带成交对照总表");
     expect(String(vars["cell_r1c1"]).length).toBeLessThanOrEqual(30);
   });
+
+  test("价带管道行不被横线拆开；误拆小项可恢复", () => {
+    const { ViewItem4Ppt } = require("@/components/DocUtil/ViewItem4Ppt") as typeof import("@/components/DocUtil/ViewItem4Ppt");
+    const items = ViewItem4Ppt.genViewItemByRegex(
+      "1. 男士衬衫|¥50-100|129.4万(43.69%)|+15.67%|1.0亿(31.15%)\n" +
+        "2. polo衫|¥100-200|75.9万(18.8%)|+18.57%|1.11亿(28.19%)\n" +
+        "3. ¥50-100 销量占比 - 机会价带可核对",
+    );
+    expect(items?.length).toBe(3);
+    expect(items![0].title).toContain("¥50-100");
+    expect(items![0].title).not.toMatch(/^男士衬衫\|¥50$/);
+    expect(items![1].title).toContain("¥100-200");
+    expect(items![2].title).toBe("¥50-100 销量占比");
+    expect(items![2].content).toBe("机会价带可核对");
+
+    // 旧误拆：title=男士衬衫|¥50  desc=100|129.4万…
+    const vItem = {
+      item1: "男士衬衫|¥50",
+      item1_Desc: "100|129.4万(43.69%)|+15.67%|1.0亿(31.15%)",
+      item2: "polo衫|¥100",
+      item2_Desc: "200|75.9万(18.8%)|+18.57%|1.11亿(28.19%)",
+    };
+    const { vars, cols } = buildTableFillVars("", vItem);
+    expect(cols).toBe(5);
+    expect(vars["cell_r0c1"]).toBe("¥50-100");
+    expect(vars["cell_r1c1"]).toBe("¥100-200");
+  });
 });

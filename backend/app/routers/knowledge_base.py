@@ -258,6 +258,36 @@ async def asset_file(
     return FileResponse(path, media_type=media, filename=path.name)
 
 
+@router.get("/corpus_profile")
+async def get_corpus_profile(knowledge_base_name: str = Query("")):
+    """KB 语料画像：assets/profile.json，无则回退内置 apparel。"""
+    from app.services.corpus_profile_service import load_kb_corpus_profile
+
+    if not knowledge_base_name:
+        return fail("knowledge_base_name 必填", 400)
+    return ok(load_kb_corpus_profile(knowledge_base_name))
+
+
+@router.post("/corpus_profile/mine")
+async def mine_corpus_profile(request: Request):
+    """从 extracts 粗挖画像草稿并可选写入 assets/profile.json。"""
+    from app.services.corpus_profile_service import (
+        mine_profile_from_extracts,
+        save_kb_corpus_profile,
+    )
+
+    body = await _read_json(request)
+    kb = body.get("knowledge_base_name") or ""
+    if not kb:
+        return fail("knowledge_base_name 必填", 400)
+    draft = mine_profile_from_extracts(kb)
+    saved = None
+    if body.get("save"):
+        path = save_kb_corpus_profile(kb, draft)
+        saved = str(path)
+    return ok({"profile": draft, "saved": saved})
+
+
 @router.get("/vs_type_conf")
 async def vs_type_conf():
     return kb_service.vs_type_conf()

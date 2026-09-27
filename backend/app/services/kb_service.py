@@ -564,8 +564,8 @@ def list_doc_assets(
                 )
         whole = adir / "whole"
         if whole.is_dir() and "whole" in want:
-            for p in sorted(whole.glob("page_*.png")):
-                m = re.match(r"page_(\d+)\.png$", p.name, re.I)
+            for p in sorted(whole.glob("page_*.*")):
+                m = re.match(r"page_(\d+)\.(png|jpe?g|webp)$", p.name, re.I)
                 if not m:
                     continue
                 asset_id = f"whole/{p.name}"
@@ -1158,6 +1158,12 @@ def plan_writing_retrieval(user_text: str) -> tuple[str, str, list[str]]:
         if title and "价格带" in title and "价格带" not in extras:
             extras.append("价格带")
         if title and re.search(r"面料|材质|属性|图案|厚薄|袖型", title):
+            # 属性页：丢掉主题串里蹭来的价格带 extras，避免串窗
+            extras = [
+                e
+                for e in extras
+                if "价格带" not in e and "价位" not in e and "¥" not in e
+            ]
             for t in ("属性特征", "面料材质", "属性销量占比"):
                 if t not in extras:
                     extras.append(t)

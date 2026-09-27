@@ -19,6 +19,8 @@ import {CompassTwoTone, FilePptTwoTone, FolderOpenTwoTone, RocketTwoTone} from "
 import SlideTemplateDrawer from "@/components/DocUtil/SlideTemplateDrawer";
 import KnowledgeBaseSelector, {opStackStyle, opBtnStyle, opKbTagStyle, ALL_KB_NAME, kbLabel} from "@/components/DocUtil/kbSelectorModal";
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
+import {fetchCorpusProfile} from "@/services/chatchat/kb";
+import {loadCorpusProfileJson, resetCorpusProfile} from "@/components/DocUtil/corpusProfile";
 interface Dictionary {
   [key: string]: string;
 }
@@ -167,6 +169,19 @@ const KbOutlineGenPpt: React.FC = () => {
       setChapters([]);
       setTitle('');
       setDownloadable(false);
+    }
+    // 换库加载语料画像（词面闸/覆盖清单）
+    if (kbName && kbName !== ALL_KB_NAME && kbName !== 'all' && kbName !== '__all__') {
+      fetchCorpusProfile(kbName)
+        .then((res) => {
+          const data = (res as any)?.data ?? res;
+          if (data && typeof data === 'object' && (data as any).id) {
+            loadCorpusProfileJson(data);
+          }
+        })
+        .catch(() => resetCorpusProfile());
+    } else {
+      resetCorpusProfile();
     }
   }, [kbName]);
 

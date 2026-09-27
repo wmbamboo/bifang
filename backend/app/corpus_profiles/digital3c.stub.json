@@ -1,0 +1,44 @@
+{
+  "id": "digital3c",
+  "label": "3C 数码（脚手架空画像——词面闸应哑掉，勿误杀）",
+  "version": 1,
+  "macroGroupId": "macro",
+  "shareOfMacroIdioms": [],
+  "entityGroups": [
+    {
+      "id": "macro",
+      "labelZh": "大盘",
+      "words": ["品类大盘", "大盘", "总销量"],
+      "caseInsensitive": false
+    },
+    {
+      "id": "phone",
+      "labelZh": "手机",
+      "words": ["智能手机", "手机"],
+      "caseInsensitive": false
+    },
+    {
+      "id": "earphone",
+      "labelZh": "耳机",
+      "words": ["真无线耳机", "耳机", "TWS"],
+      "caseInsensitive": true
+    }
+  ],
+  "categoryGroupIds": ["phone", "earphone"],
+  "attrAxes": [
+    {
+      "axis": "续航",
+      "titleHints": ["续航"],
+      "labels": ["长续航", "快充"]
+    },
+    {
+      "axis": "降噪",
+      "titleHints": ["降噪"],
+      "labels": ["主动降噪", "通透模式"]
+    }
+  ],
+  "attrPageTitleHints": ["续航", "降噪", "属性"],
+  "priceBandPageHints": ["价格带", "价位段"],
+  "coverageDetectHints": ["手机", "耳机", "3C", "数码"],
+  "coverageItems": []
+}

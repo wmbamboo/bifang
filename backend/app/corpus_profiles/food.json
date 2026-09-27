@@ -1,0 +1,44 @@
+{
+  "id": "food",
+  "label": "食品电商（第二域金标）",
+  "version": 1,
+  "macroGroupId": "dapan",
+  "shareOfMacroIdioms": ["占大盘"],
+  "entityGroups": [
+    {
+      "id": "dapan",
+      "labelZh": "大盘",
+      "words": ["休闲食品大盘", "大盘", "总销量"],
+      "caseInsensitive": false
+    },
+    {
+      "id": "snack",
+      "labelZh": "坚果",
+      "words": ["坚果礼盒", "坚果", "每日坚果"],
+      "caseInsensitive": false
+    },
+    {
+      "id": "candy",
+      "labelZh": "糖果",
+      "words": ["糖果", "软糖", "巧克力"],
+      "caseInsensitive": false
+    }
+  ],
+  "categoryGroupIds": ["snack", "candy"],
+  "attrAxes": [
+    {
+      "axis": "口味",
+      "titleHints": ["口味"],
+      "labels": ["原味", "海盐", "焦糖", "麻辣"]
+    },
+    {
+      "axis": "包装",
+      "titleHints": ["包装"],
+      "labels": ["独立小包", "礼盒", "罐装"]
+    }
+  ],
+  "attrPageTitleHints": ["口味", "包装", "属性"],
+  "priceBandPageHints": ["价格带", "价位段"],
+  "coverageDetectHints": ["坚果", "糖果", "休闲食品", "食品"],
+  "coverageItems": []
+}

@@ -453,6 +453,7 @@ def _title_scopes(title: str) -> list[str]:
 
 
 _ATTR_TITLE_RE = re.compile(r"面料|材质|属性|图案|厚薄|袖型|花纹")
+_BIAS_RE = re.compile(r"【检索偏向】\s*([^\n【]{2,160})")
 
 
 def filter_extracts_for_query(
@@ -462,8 +463,12 @@ def filter_extracts_for_query(
     """按本页标题实体收窄：大盘页抬 macro，衬衫页抬衬衫指标；面料/属性页抬 attribute。"""
     m = re.search(r"【本页标题】\s*([^\n【]{2,80})", user_query or "")
     title = m.group(1).strip() if m else ""
+    bias_m = _BIAS_RE.search(user_query or "")
+    bias = bias_m.group(1).strip() if bias_m else ""
     want = _title_scopes(title)
-    attr_page = bool(_ATTR_TITLE_RE.search(title))
+    attr_page = bool(
+        _ATTR_TITLE_RE.search(title) or _ATTR_TITLE_RE.search(bias)
+    )
     if not want and not title:
         return records[:12]
     scored: list[tuple[int, dict]] = []
@@ -599,6 +604,8 @@ def format_extracts_block(records: list[dict[str, Any]]) -> str:
                 extra += f" {met['rate_unlabeled']}"
             if met.get("price_band"):
                 extra += f" {met['price_band']}"
+            if met.get("axis"):
+                extra += f" axis={met['axis']}"
             # 属性条：标签在前，便于面料页采信「棉 72.18% polo衫」
             if met.get("attr_label"):
                 lines.append(
@@ -653,12 +660,18 @@ def extracts_as_pseudo_docs(
             attr = met.get("attr_label") or ""
             band = met.get("price_band") or ""
             share = met.get("share") or ""
+            axis = met.get("axis") or ""
             # 属性条须带标签，否则面料页证据只剩「72.18% 男士衬衫」无法采信
             head = f"{badge} {attr} {met.get('value')}{unit} {name} {band}".strip()
+            if axis:
+                head = f"{head} axis={axis}".strip()
             head = re.sub(r"\s+", " ", head)
             lines.append(head)
             if share:
-                lines.append(f"{share} {name} {band}占比".strip())
+                share_line = f"{share} {name} {band}占比".strip()
+                if axis:
+                    share_line = f"{share_line} axis={axis}"
+                lines.append(share_line)
             if met.get("yoy"):
                 lines.append(f"{met['yoy']} {name}同比".strip())
             if met.get("mom"):
@@ -669,7 +682,17 @@ def extracts_as_pseudo_docs(
         body = "\n".join(lines)
         page = rec.get("page")
         src = rec.get("source") or ""
-        content = f"⟦chunk:extract-p{page}|page:{page}⟧\n{body}"
+        axes = sorted(
+            {
+                str(m.get("axis")).strip()
+                for m in metrics
+                if m.get("axis")
+            }
+        )
+        content = f"⟦chunk:extract-p{page}|page:{page}"
+        if axes:
+            content += f"|axes:{','.join(axes)}"
+        content += f"⟧\n{body}"
         block_recs.append(
             {
                 "page_content": content,
@@ -679,6 +702,7 @@ def extracts_as_pseudo_docs(
                     "chunk": f"extract-{page}",
                     "page": page,
                     "kind": "extract",
+                    **({"axes": axes} if axes else {}),
                 },
                 "score": 1.0,
                 "vector_score": 1.0,

@@ -1,0 +1,92 @@
+{
+  "id": "apparel",
+  "label": "服装电商（衬衫/polo 单品）",
+  "version": 1,
+  "macroGroupId": "dapan",
+  "shareOfMacroIdioms": ["占大盘"],
+  "entityGroups": [
+    {
+      "id": "dapan",
+      "labelZh": "大盘",
+      "words": ["男装大盘", "大盘", "总销量", "总销售额"],
+      "caseInsensitive": false
+    },
+    {
+      "id": "shirt",
+      "labelZh": "衬衫",
+      "words": ["商务男装衬衫", "男士衬衫", "衬衫"],
+      "caseInsensitive": false
+    },
+    {
+      "id": "polo",
+      "labelZh": "polo",
+      "words": ["男士polo", "polo衫", "Polo", "polo"],
+      "caseInsensitive": true
+    },
+    {
+      "id": "tee",
+      "labelZh": "T恤",
+      "words": ["T恤"],
+      "caseInsensitive": true
+    }
+  ],
+  "categoryGroupIds": ["shirt", "polo", "tee"],
+  "attrAxes": [
+    {
+      "axis": "袖型",
+      "titleHints": ["袖型", "袖"],
+      "labels": ["落肩袖", "灯笼袖", "常规袖", "插肩袖", "短袖", "长袖"],
+      "shortHintNeedsLabel": true
+    },
+    {
+      "axis": "厚薄",
+      "titleHints": ["厚薄"],
+      "labels": ["薄款", "厚款", "加厚", "超薄"]
+    },
+    {
+      "axis": "面料",
+      "titleHints": ["面料", "材质"],
+      "labels": ["棉", "涤纶", "聚酯纤维", "粘胶纤维", "醋酯纤维", "锦纶"]
+    },
+    {
+      "axis": "图案",
+      "titleHints": ["图案", "花纹"],
+      "labels": ["纯色", "条纹", "几何图案", "字母", "动物图案"]
+    }
+  ],
+  "attrPageTitleHints": ["面料", "材质", "图案", "厚薄", "袖型", "属性"],
+  "priceBandPageHints": ["价格带"],
+  "coverageDetectHints": ["衬衫", "polo", "Polo", "男装", "选品", "爆款", "抖音", "价格带", "大盘"],
+  "coverageItems": [
+    {
+      "id": "macro",
+      "label": "男装/品类大盘规模",
+      "titleHints": ["大盘", "规模", "销量", "销售额"],
+      "required": true
+    },
+    {
+      "id": "shirt_kpi",
+      "label": "衬衫销量/销售额",
+      "titleHints": ["衬衫"],
+      "requiredIfTopicHints": ["衬衫"]
+    },
+    {
+      "id": "polo_kpi",
+      "label": "polo 销量/销售额",
+      "titleHints": ["polo", "Polo"],
+      "requiredIfTopicHints": ["polo", "Polo"]
+    },
+    {
+      "id": "price_band",
+      "label": "价格带",
+      "titleHints": ["价格带", "价位", "客单"],
+      "required": true
+    },
+    {
+      "id": "attr",
+      "label": "属性/面料/款式特征",
+      "titleHints": ["属性", "面料", "款式", "图案", "颜色", "卖点"],
+      "required": true
+    }
+  ]
+}

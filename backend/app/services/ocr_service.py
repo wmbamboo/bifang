@@ -377,21 +377,45 @@ def crop_element_assets_from_page(
     if save_whole:
         whole_dir = assets_dir / "whole"
         whole_dir.mkdir(parents=True, exist_ok=True)
-        whole_name = f"page_{page_no}.png"
-        whole_path = whole_dir / whole_name
         try:
-            page.save(whole_path, format="PNG")
-            infos.append(
-                {
-                    "asset_id": f"whole/{whole_name}",
-                    "kind": "whole",
-                    "page": page_no,
-                    "box": (0, 0, page.width, page.height),
-                    "path": str(whole_path),
-                }
-            )
-        except Exception as e:  # noqa: BLE001
-            _logger.warning("crop elements: save whole failed: %s", e)
+            from app.config import get_settings
+
+            fmt = (get_settings().ocr_whole_format or "jpeg").lower()
+            quality = int(getattr(get_settings(), "ocr_whole_jpeg_quality", 85) or 85)
+        except Exception:  # noqa: BLE001
+            fmt, quality = "jpeg", 85
+        if fmt in {"jpg", "jpeg"}:
+            whole_name = f"page_{page_no}.jpg"
+            whole_path = whole_dir / whole_name
+            try:
+                page.save(whole_path, format="JPEG", quality=quality, optimize=True)
+                infos.append(
+                    {
+                        "asset_id": f"whole/{whole_name}",
+                        "kind": "whole",
+                        "page": page_no,
+                        "box": (0, 0, page.width, page.height),
+                        "path": str(whole_path),
+                    }
+                )
+            except Exception as e:  # noqa: BLE001
+                _logger.warning("crop elements: save whole jpeg failed: %s", e)
+        else:
+            whole_name = f"page_{page_no}.png"
+            whole_path = whole_dir / whole_name
+            try:
+                page.save(whole_path, format="PNG")
+                infos.append(
+                    {
+                        "asset_id": f"whole/{whole_name}",
+                        "kind": "whole",
+                        "page": page_no,
+                        "box": (0, 0, page.width, page.height),
+                        "path": str(whole_path),
+                    }
+                )
+            except Exception as e:  # noqa: BLE001
+                _logger.warning("crop elements: save whole failed: %s", e)
 
     kind_counts: dict[str, int] = {"image": 0, "chart": 0}
     for kind, box in parse_vl_box_refs(ocr_md):
@@ -569,7 +593,7 @@ def extract_pdf_text(
                                 assets_dir=Path(assets_dir),  # type: ignore[arg-type]
                                 file_stem=stem,
                                 page_no=i + 1,
-                                save_whole=True,
+                                save_whole=bool(get_settings().ocr_save_whole),
                             )
                             ids = [
                                 str(x["asset_id"])

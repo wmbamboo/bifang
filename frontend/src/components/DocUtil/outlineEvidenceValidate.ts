@@ -9,12 +9,51 @@
 
 import {
   PRICE_BAND_TOKEN_RE,
-  PRICE_BAND_ATOM_RE,
   isPriceBandAtom,
   extractPriceBandAtoms,
+  hasPriceBand,
+  numberInsidePriceBand,
 } from "@/components/DocUtil/priceBandAtom";
+import {
+  isTruncatedPlainLine,
+  isChartAxisFragmentPlain,
+} from "@/components/DocUtil/outlineTextFragments";
+import {
+  ENTITY_DAPAN,
+  ENTITY_SHIRT,
+  ENTITY_POLO,
+  ENTITY_CATEGORY_ALL,
+  CATEGORY_TITLE_RE,
+  CATEGORY_CLAIM_RE,
+  DAPAN_CLAIM_RE,
+  SHARE_OF_MACRO_RE,
+  tipClaimsBareDapan,
+  getCategoryHitWords,
+  getDapanHitWords,
+  getEntityClassWords,
+  getEntityClassLabelZh,
+  getActiveCorpusProfile,
+  isAttrAxisPageTitle,
+  isPriceBandPageTitle,
+  wordsForEntityGroup,
+  type EntityClass,
+} from "@/components/DocUtil/corpusProfile";
 
 export { PRICE_BAND_TOKEN_RE, isPriceBandAtom, extractPriceBandAtoms };
+
+/** 实体/品类词表来自语料画像（corpusProfile）；换域=换 JSON */
+export {
+  ENTITY_DAPAN,
+  ENTITY_SHIRT,
+  ENTITY_POLO,
+  ENTITY_CATEGORY_ALL,
+  CATEGORY_TITLE_RE,
+  CATEGORY_CLAIM_RE,
+  DAPAN_CLAIM_RE,
+  SHARE_OF_MACRO_RE,
+  tipClaimsBareDapan,
+};
+export type { EntityClass };
 
 /** 与大纲 metric 口径一致 */
 export const EVIDENCE_METRIC_RE =
@@ -27,57 +66,21 @@ export const WINDOW_LOOSE = 96;
 /** tip 已点名口径且 chunk 实体纯净时：整 chunk 作用域（传给 metricNearEntity） */
 export const CHUNK_SCOPE = -1;
 
-// ─── 共用实体词表（titleEntityHints / tip 校验 / outlineJson 跑题共用）───
-
-export const ENTITY_DAPAN = ["男装大盘", "大盘", "总销量", "总销售额"] as const;
-export const ENTITY_SHIRT = ["衬衫", "男士衬衫", "商务男装衬衫"] as const;
-export const ENTITY_POLO = ["polo", "Polo", "polo衫", "男士polo"] as const;
-export const ENTITY_CATEGORY_ALL = [
-  ...ENTITY_SHIRT,
-  ...ENTITY_POLO,
-  "T恤",
-] as const;
-
-/** 标题/tip 是否点名品类 */
-export const CATEGORY_TITLE_RE = /衬衫|polo|Polo|T恤/i;
-/** tip 自称大盘口径 */
-export const DAPAN_CLAIM_RE = /大盘|总销量|总销售额/;
-/** 「占大盘」是品类份额附属语，不是把主量标成大盘总盘 */
-export const SHARE_OF_MACRO_RE = /占大盘/;
-
-/** 去掉「占大盘」后再判是否点名大盘总盘口径 */
-export function tipClaimsBareDapan(tip: string): boolean {
-  const stripped = String(tip || "").replace(/占大盘/g, "");
-  return /大盘|总销量|总销售额/.test(stripped);
-}
-
-/** 扫描窗内找大盘词：忽略落在「占大盘」里的「大盘」 */
+/** 扫描窗内找大盘词：忽略落在份额附属语（如「占大盘」）里的宏词 */
 function indexDapanOutsideShareIdiom(
   s: string,
   fromEnd: boolean,
 ): number {
   if (!s) return -1;
-  const mask = s.replace(/占大盘/g, (m) => "＿".repeat(m.length));
-  return fromEnd
-    ? lastIndexAny(mask, DAPAN_HIT_WORDS)
-    : firstIndexAny(mask, DAPAN_HIT_WORDS);
+  const idioms = getActiveCorpusProfile().raw.shareOfMacroIdioms || [];
+  let mask = s;
+  for (const idiom of idioms) {
+    if (!idiom) continue;
+    mask = mask.split(idiom).join("＿".repeat(idiom.length));
+  }
+  const words = getDapanHitWords();
+  return fromEnd ? lastIndexAny(mask, words) : firstIndexAny(mask, words);
 }
-/** tip 点名品类口径 */
-export const CATEGORY_CLAIM_RE = /衬衫|polo|Polo|T恤/i;
-
-/** 品类命中词 → labels（较长词优先；由 lastIndex 选最近，不再二次扫描兜底 ALL） */
-const CATEGORY_HIT_WORDS: Array<{word: string; labels: readonly string[]}> = [
-  {word: "商务男装衬衫", labels: ENTITY_SHIRT},
-  {word: "男士衬衫", labels: ENTITY_SHIRT},
-  {word: "男士polo", labels: ENTITY_POLO},
-  {word: "polo衫", labels: ENTITY_POLO},
-  {word: "衬衫", labels: ENTITY_SHIRT},
-  {word: "Polo", labels: ENTITY_POLO},
-  {word: "polo", labels: ENTITY_POLO},
-  {word: "T恤", labels: ["T恤"]},
-];
-
-const DAPAN_HIT_WORDS = ["总销售额", "总销量", "男装大盘", "大盘"] as const;
 
 export type OutlineSlideIntent =
   | "category-position"
@@ -85,8 +88,6 @@ export type OutlineSlideIntent =
   | "category-detail"
   | "price-band"
   | "generic";
-
-export type EntityClass = "dapan" | "shirt" | "polo" | "tee";
 
 const INTENT_ALIASES: Record<string, OutlineSlideIntent> = {
   "category-position": "category-position",
@@ -119,8 +120,8 @@ export function resolveSlideIntent(
   if (raw && INTENT_ALIASES[raw]) return INTENT_ALIASES[raw];
 
   const t = String(title || "");
-  if (/大盘/.test(t) && !CATEGORY_TITLE_RE.test(t)) return "macro-market";
-  if (/价格带/.test(t)) return "price-band";
+  if (DAPAN_CLAIM_RE.test(t) && !CATEGORY_TITLE_RE.test(t)) return "macro-market";
+  if (isPriceBandPageTitle(t)) return "price-band";
   if (
     CATEGORY_TITLE_RE.test(t) &&
     /位置|在大盘|占大盘|品类位置|相对大盘/.test(t)
@@ -280,24 +281,12 @@ function numberInsideDateSpan(
   return false;
 }
 
-/** tip 内价格带区间跨度（价带原子整段） */
-const PRICE_BAND_SPAN_RE = new RegExp(PRICE_BAND_ATOM_RE.source, "g");
-
 function numberInsidePriceBandSpan(
   tip: string,
   index: number,
   len: number,
 ): boolean {
-  const s = String(tip || "");
-  if (!s || index < 0) return false;
-  PRICE_BAND_SPAN_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = PRICE_BAND_SPAN_RE.exec(s))) {
-    const start = m.index;
-    const end = start + m[0].length;
-    if (index >= start && index + len <= end) return true;
-  }
-  return false;
+  return numberInsidePriceBand(tip, index, len);
 }
 
 /** colSub/短句：采样时间窗说明（非整页指标） */
@@ -353,28 +342,32 @@ export function evidenceHasMetric(evidence: string, token: string): boolean {
   return false;
 }
 
-/** 页标题 → 期望实体词（用于「数字附近须贴实体」） */
+/** 页标题 → 期望实体词（用于「数字附近须贴实体」）；品类来自当前语料画像 */
 export function titleEntityHints(title: string): {
   requireNear: string[];
   forbidNear: string[];
 } {
   const t = String(title || "");
-  if (/大盘/.test(t) && !CATEGORY_TITLE_RE.test(t)) {
+  if (DAPAN_CLAIM_RE.test(t) && !CATEGORY_TITLE_RE.test(t)) {
     return {requireNear: [...ENTITY_DAPAN], forbidNear: []};
   }
-  if (/polo|Polo/i.test(t) && !/衬衫/.test(t)) {
-    return {requireNear: [...ENTITY_POLO], forbidNear: []};
+  const hitIds: string[] = [];
+  const profile = getActiveCorpusProfile();
+  for (const id of profile.categoryGroupIds) {
+    const words = wordsForEntityGroup(id);
+    if (words.some((w) => w && t.toLowerCase().includes(w.toLowerCase()))) {
+      hitIds.push(id);
+    }
   }
-  if (/衬衫/.test(t) && !/polo|Polo/i.test(t)) {
-    return {requireNear: [...ENTITY_SHIRT], forbidNear: []};
+  if (hitIds.length === 1) {
+    return {requireNear: [...wordsForEntityGroup(hitIds[0])], forbidNear: []};
   }
-  if (/衬衫/.test(t) && /polo|Polo/i.test(t)) {
-    return {
-      requireNear: [...ENTITY_SHIRT, ...ENTITY_POLO],
-      forbidNear: [],
-    };
+  if (hitIds.length > 1) {
+    const requireNear: string[] = [];
+    for (const id of hitIds) requireNear.push(...wordsForEntityGroup(id));
+    return {requireNear, forbidNear: []};
   }
-  if (/价格带/.test(t)) {
+  if (isPriceBandPageTitle(t)) {
     return {
       requireNear: ["价格带", "￥", "元", "主力", "机会"],
       forbidNear: [],
@@ -392,37 +385,33 @@ function blockHasEntity(evidence: string, entities: readonly string[]): boolean 
   );
 }
 
-/** 证据块内出现的实体类（大盘/衬衫/polo 分立） */
+/** 证据块内出现的实体类（按当前画像 entityGroups 分立） */
 export function chunkEntityClasses(body: string): Set<EntityClass> {
   const classes = new Set<EntityClass>();
-  if (blockHasEntity(body, ENTITY_DAPAN)) classes.add("dapan");
-  if (blockHasEntity(body, ENTITY_SHIRT)) classes.add("shirt");
-  if (blockHasEntity(body, ENTITY_POLO)) classes.add("polo");
-  if (/T恤/i.test(body)) classes.add("tee");
+  for (const {cls, words} of getEntityClassWords()) {
+    if (blockHasEntity(body, words)) classes.add(cls);
+  }
   return classes;
 }
 
 export function entityClassOfLabels(
   labels: readonly string[],
 ): EntityClass | "unknown" {
-  const hasD = labels.some(
-    (l) =>
-      (ENTITY_DAPAN as readonly string[]).includes(l) || DAPAN_CLAIM_RE.test(l),
-  );
-  const hasS = labels.some(
-    (l) => (ENTITY_SHIRT as readonly string[]).includes(l) || /衬衫/.test(l),
-  );
-  const hasP = labels.some(
-    (l) =>
-      (ENTITY_POLO as readonly string[]).includes(l) || /polo/i.test(l),
-  );
-  const hasT = labels.some((l) => /T恤/i.test(l));
-  const n = [hasD, hasS, hasP, hasT].filter(Boolean).length;
-  if (n !== 1) return "unknown";
-  if (hasD) return "dapan";
-  if (hasS) return "shirt";
-  if (hasP) return "polo";
-  return "tee";
+  const hits: EntityClass[] = [];
+  for (const {cls, words, caseInsensitive} of getEntityClassWords()) {
+    const hit = labels.some((l) => {
+      const s = String(l || "");
+      if ((words as readonly string[]).includes(s)) return true;
+      if (caseInsensitive) {
+        const low = s.toLowerCase();
+        return words.some((w) => w && low.includes(w.toLowerCase()));
+      }
+      return words.some((w) => w && s.includes(w));
+    });
+    if (hit) hits.push(cls);
+  }
+  if (hits.length !== 1) return "unknown";
+  return hits[0];
 }
 
 /** chunk 仅含期望的一类实体 → 纯净（金标/调试用；对齐主路径已改就近实体类） */
@@ -436,14 +425,6 @@ export function chunkIsPureForEntities(
   return classes.size === 1 && classes.has(want);
 }
 
-/** 各类实体检索词（较长优先，避免「衬衫」盖住「男士衬衫」类差异——同类即可） */
-const ENTITY_CLASS_WORDS: Array<{cls: EntityClass; words: string[]}> = [
-  {cls: "dapan", words: ["总销售额", "总销量", "男装大盘", "大盘"]},
-  {cls: "shirt", words: ["商务男装衬衫", "男士衬衫", "衬衫"]},
-  {cls: "polo", words: ["男士polo", "polo衫", "polo"]},
-  {cls: "tee", words: ["T恤"]},
-];
-
 function bodyHasAnyEntityWord(body: string): boolean {
   return chunkEntityClasses(body).size > 0;
 }
@@ -453,10 +434,10 @@ function collectEntityHits(
 ): Array<{cls: EntityClass; pos: number; len: number}> {
   const hits: Array<{cls: EntityClass; pos: number; len: number}> = [];
   const textLow = text.toLowerCase();
-  for (const {cls, words} of ENTITY_CLASS_WORDS) {
+  for (const {cls, words, caseInsensitive} of getEntityClassWords()) {
     for (const w of words) {
-      const needle = cls === "polo" ? w.toLowerCase() : w;
-      const hay = cls === "polo" ? textLow : text;
+      const needle = caseInsensitive ? w.toLowerCase() : w;
+      const hay = caseInsensitive ? textLow : text;
       let f = 0;
       while (f < hay.length) {
         const i = hay.indexOf(needle, f);
@@ -538,13 +519,6 @@ export function nearestEntityClassToNumber(
   if (!set.size) return null;
   return set.values().next().value as EntityClass;
 }
-
-const ENTITY_CLASS_LABEL_ZH: Record<EntityClass, string> = {
-  dapan: "大盘",
-  shirt: "衬衫",
-  polo: "polo",
-  tee: "T恤",
-};
 
 /**
  * CHUNK_SCOPE 对齐：含数字 chunk；若块内零实体词则拼接前后邻块再就近判定
@@ -723,14 +697,18 @@ function firstIndexAny(s: string, words: readonly string[]): number {
   return best === Infinity ? -1 : best;
 }
 
-/** 最近品类命中词及其 labels（不做 ALL 兜底） */
+/** 最近品类命中词及其 labels（不做 ALL 兜底；词表来自画像） */
 function lastCategoryHit(
   s: string,
 ): {at: number; labels: readonly string[]} | null {
   let best = -1;
   let labels: readonly string[] | null = null;
-  for (const {word, labels: lab} of CATEGORY_HIT_WORDS) {
-    const i = s.lastIndexOf(word);
+  const hay = s;
+  const hayLow = s.toLowerCase();
+  for (const {word, labels: lab, groupId} of getCategoryHitWords()) {
+    const ci = !!getEntityClassWords().find((g) => g.cls === groupId)
+      ?.caseInsensitive;
+    const i = ci ? hayLow.lastIndexOf(word.toLowerCase()) : hay.lastIndexOf(word);
     if (i > best) {
       best = i;
       labels = lab;
@@ -744,8 +722,12 @@ function firstCategoryHit(
 ): {at: number; labels: readonly string[]} | null {
   let best = Infinity;
   let labels: readonly string[] | null = null;
-  for (const {word, labels: lab} of CATEGORY_HIT_WORDS) {
-    const i = s.indexOf(word);
+  const hay = s;
+  const hayLow = s.toLowerCase();
+  for (const {word, labels: lab, groupId} of getCategoryHitWords()) {
+    const ci = !!getEntityClassWords().find((g) => g.cls === groupId)
+      ?.caseInsensitive;
+    const i = ci ? hayLow.indexOf(word.toLowerCase()) : hay.indexOf(word);
     if (i >= 0 && i < best) {
       best = i;
       labels = lab;
@@ -822,9 +804,7 @@ export function entitiesClaimedNearNumberInTip(
   return (
     fromBefore() ||
     fromAfter() ||
-    (PRICE_BAND_TOKEN_RE.test(tipFlat)
-      ? {kind: "price-band", labels: ["价格带"]}
-      : null)
+    (hasPriceBand(tipFlat) ? {kind: "price-band", labels: ["价格带"]} : null)
   );
 }
 
@@ -883,58 +863,14 @@ export function tipLabelCore(tip: string): string {
  * 例：…至2024-04- / …均为各价格 / 同比+
  */
 export function isTruncatedTip(tip: string): boolean {
-  const s = tipBodyPlain(tip);
-  if (!s || s.length < 3) return false;
-  // 完整采样窗放行（isSamplingWindowTip 另跳过忠实度；此处仍拦明显截断）
-  if (/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}\s*$/.test(s)) return false;
-  // 日期截断：缺日或尾随分隔符
-  if (/20\d{2}[.\-/]\d{1,2}[.\-/]?\s*$/.test(s)) return true;
-  if (/至\s*20\d{2}[.\-/]\d{1,2}[.\-/]?\s*$/.test(s)) return true;
-  if (/[.\-/~～—–]\s*$/.test(s)) return true;
-  // 句尾悬挂虚词/介词（成句未完）
-  if (s.length >= 5 && /[的与和及为至于按]$/.test(s)) return true;
-  // 价格带残词
-  if (/各价格$|均为各价格$/.test(s)) return true;
-  // 须带未完成符号：单纯「销量同比」表头放行
-  if (/同比[+\-＋－]\s*$|环比[+\-＋－]\s*$|增速[+\-＋－]\s*$/.test(s)) return true;
-  // 「2024-03-19至2024-04-」无日
-  if (/至\s*20\d{2}[.\-/]\d{1,2}[.\-/]\s*$/.test(s)) return true;
-  return false;
+  return isTruncatedPlainLine(tipBodyPlain(tip));
 }
 
 /**
  * 图表轴/图例碎片：价位刻度串、坐标轴黑话，不成句。
- * 例：¥50 / ¥100 / ¥200；TOP款口径；销量席位
  */
 export function isChartAxisFragmentTip(tip: string): boolean {
-  const s = tipBodyPlain(tip);
-  if (!s) return false;
-  // 裸价位刻度（可带斜杠/顿号连接）
-  if (
-    /^(?:[￥¥]?\s*\d{2,4}\s*[\/\|、]\s*){1,}[￥¥]?\s*\d{2,4}$/.test(s.replace(/\s+/g, ""))
-  ) {
-    return true;
-  }
-  if (/^[￥¥]\s*\d{2,4}$/.test(s)) return true;
-  // 轴/图例黑话（无占比/销量成句）
-  if (
-    /^(?:TOP款?口径|销量席位|横轴|纵轴|图例|坐标轴|单位[:：]?万?件?|刻度)$/i.test(
-      s,
-    )
-  ) {
-    return true;
-  }
-  // 「¥50 / ¥100 / TOP款口径 / 销量席位」混排
-  const parts = s.split(/\s*[\/\|、]\s*/).map((p) => p.trim()).filter(Boolean);
-  if (parts.length >= 3) {
-    const crumb = parts.filter(
-      (p) =>
-        /^[￥¥]?\s*\d{2,4}$/.test(p) ||
-        /^(?:TOP款?口径|销量席位|横轴|纵轴|图例)$/i.test(p),
-    );
-    if (crumb.length >= 3 && crumb.length >= parts.length - 1) return true;
-  }
-  return false;
+  return isChartAxisFragmentPlain(tipBodyPlain(tip));
 }
 
 /** 页内 ≥2 条图表碎片且几乎无成句指标 → 拒收 */
@@ -1000,6 +936,50 @@ export function sourcesForMetricInEvidence(
   return [...found];
 }
 
+/**
+ * 证据中该数字所在块的语义轴（ingest 写入的 axis= / |axes:）。
+ * 有则查表，无则空——闸门可据此拒「价带数进面料页」，不必再猜词面。
+ */
+export function axesForMetricInEvidence(
+  evidence: string,
+  token: string,
+): string[] {
+  const ev = String(evidence || "");
+  const tok = normalizeMetricToken(token);
+  if (!tok) return [];
+  const parts = ev.split(/(?=⟦chunk:)/);
+  const found = new Set<string>();
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    const head = part.match(/^⟦chunk:([^\]]*)⟧/);
+    const body = head ? part.slice(head[0].length) : part;
+    if (!evidenceHasMetric(body, tok) && !evidenceHasMetric(part, tok)) continue;
+    const axesHead = (head?.[1] || "").match(/(?:^|\|)axes:([^|\]]+)/);
+    if (axesHead?.[1]) {
+      for (const a of axesHead[1].split(",")) {
+        const t = a.trim();
+        if (t) found.add(t);
+      }
+    }
+    // 行内 axis=价格带（format_extracts / 伪 doc）
+    const lineRe = /axis\s*[=：]\s*([^\s|，,；;]+)/g;
+    let lm: RegExpExecArray | null;
+    while ((lm = lineRe.exec(body))) {
+      // 仅收数字邻近行的轴：同段或同一行
+      const lineStart = body.lastIndexOf("\n", lm.index) + 1;
+      const lineEnd = body.indexOf("\n", lm.index);
+      const line = body.slice(
+        lineStart,
+        lineEnd < 0 ? body.length : lineEnd,
+      );
+      if (evidenceHasMetric(line, tok) || evidenceHasMetric(body, tok)) {
+        found.add(lm[1].trim());
+      }
+    }
+  }
+  return [...found];
+}
+
 export function tipHasSourceAttribution(tip: string): boolean {
   return /来源\s*[:：]|出处\s*[:：]|（来源[：:]/.test(String(tip || ""));
 }
@@ -1019,10 +999,13 @@ export function claimFromAxisTitle(
   const cat = lastCategoryHit(s);
   if (cat) return {kind: "category", labels: [...cat.labels]};
   if (CATEGORY_CLAIM_RE.test(s)) {
-    // 命中正则但 lastCategoryHit 未中（极少）— 按词拆
-    if (/衬衫/.test(s)) return {kind: "category", labels: [...ENTITY_SHIRT]};
-    if (/polo|Polo/i.test(s)) return {kind: "category", labels: [...ENTITY_POLO]};
-    if (/T恤/i.test(s)) return {kind: "category", labels: ["T恤"]};
+    // 命中正则但 lastCategoryHit 未中 — 按画像 category 组拆
+    for (const id of getActiveCorpusProfile().categoryGroupIds) {
+      const words = wordsForEntityGroup(id);
+      if (words.some((w) => w && s.toLowerCase().includes(w.toLowerCase()))) {
+        return {kind: "category", labels: [...words]};
+      }
+    }
   }
   return null;
 }
@@ -1048,8 +1031,16 @@ export function validateTipsAgainstEvidence(
   const titleIsDapan = intent === "macro-market";
   const {requireNear} = titleEntityHints(title);
   const issues: string[] = [];
-  /** 面料/材质/图案等属性页：禁止价带区间 tip（与卡题轴闸双保险） */
-  const attrAxisPage = /面料|材质|图案|厚薄|袖型|属性/.test(String(title || ""));
+  /** 属性轴页：禁止价带区间 tip（轴名/标签来自画像） */
+  const attrAxisPage = isAttrAxisPageTitle(String(title || ""));
+  const attrLabelAlts = getActiveCorpusProfile()
+    .attrAxes.flatMap((a) => a.labels)
+    .map((w) => String(w || "").trim())
+    .filter(Boolean)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const attrLabelRe = attrLabelAlts.length
+    ? new RegExp(attrLabelAlts.join("|"))
+    : /(?!)/;
 
   /** 当前分栏轴口径（遇下一个 col: 更新；colSub 不打断） */
   let colClaim: TipLocalClaim | null = null;
@@ -1058,15 +1049,24 @@ export function validateTipsAgainstEvidence(
     const t = String(tip || "").trim();
     if (!t) continue;
 
-    if (
-      attrAxisPage &&
-      PRICE_BAND_TOKEN_RE.test(t) &&
-      !/棉|涤纶|聚酯|粘胶|醋酯|锦纶|纯色|条纹|几何|落肩袖|薄款|厚款/.test(t)
-    ) {
+    if (attrAxisPage && hasPriceBand(t) && !attrLabelRe.test(t)) {
       issues.push(
         `「${t}」含价格带区间，但本页是属性/面料轴；请改用棉/纯色等属性标签占比，禁止用¥价带销量凑数`,
       );
       continue;
+    }
+    // 查表：证据已标 axis=价格带 的数字，不得进属性页（18.80% 类串窗）
+    if (attrAxisPage && !attrLabelRe.test(t) && !hasPriceBand(t)) {
+      const toks = uniqueMetricTokens(extractMetricTokens(t));
+      const priceAxisTok = toks.find((tok) =>
+        axesForMetricInEvidence(ev, tok).includes("价格带"),
+      );
+      if (priceAxisTok) {
+        issues.push(
+          `「${t}」数字「${priceAxisTok}」在证据中标注 axis=价格带，不能写入属性/面料页；请改用棉/纯色等属性标签占比`,
+        );
+        continue;
+      }
     }
 
     const colM = t.match(/^(?:col|column|栏)\s*[:：]\s*(.+)$/i);
@@ -1179,11 +1179,7 @@ export function validateTipsAgainstEvidence(
       const local =
         entitiesClaimedNearNumberInTip(t, numOnly) || colClaim;
       // 价格带 tip 已点名区间（含 ¥50以下/以上）：只验证据存在
-      if (
-        local?.kind === "price-band" ||
-        (intent === "price-band" && PRICE_BAND_TOKEN_RE.test(t)) ||
-        (intent === "price-band" && /[￥¥]/.test(t) && /以下|以上|[-~～至到]/.test(t))
-      ) {
+      if (local?.kind === "price-band" || (intent === "price-band" && hasPriceBand(t))) {
         continue;
       }
       // tip 已点名品类/大盘 + 同条有万/亿主量时：占比/同比% 只验存在，不单独就近
@@ -1225,10 +1221,9 @@ export function validateTipsAgainstEvidence(
         const want = aligned.want;
         const nearest = [...aligned.nearest];
         if (want !== "unknown" && nearest.length && !aligned.nearest.has(want)) {
-          const got = nearest
-            .map((c) => ENTITY_CLASS_LABEL_ZH[c] || c)
-            .join("/");
-          const wantZh = ENTITY_CLASS_LABEL_ZH[want] || want;
+          const zh = getEntityClassLabelZh();
+          const got = nearest.map((c) => zh[c] || c).join("/");
+          const wantZh = zh[want] || want;
           issues.push(
             `「${t}」点名${wantZh}，但数字「${token}」在证据中最近实体是${got}，禁止串用`,
           );

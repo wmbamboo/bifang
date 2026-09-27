@@ -27,6 +27,7 @@ import {
   checkColumnAxisEvidence,
   findUnsupportedActionSlideTitles,
 } from "@/components/DocUtil/outlineCoverage";
+import {judgeThemeAlignRule} from "@/components/DocUtil/outlineThemeJudge";
 
 export {
   findMetaDiagnosticTips,
@@ -780,6 +781,10 @@ export function validateFilledSlideInChapter(
   const chartFrag = findChartAxisFragmentPage(tips);
   if (chartFrag) {
     return `页「${title}」${chartFrag}`;
+  }
+  const theme = judgeThemeAlignRule(titleTrim, tips);
+  if (!theme.ok) {
+    return `页「${title}」${theme.reason}`;
   }
 
   // 属性/面料/图案/厚薄/袖型页：须有原数字，否则空转过程话

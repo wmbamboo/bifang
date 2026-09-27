@@ -5,6 +5,15 @@
  */
 
 import type { OutlineStructureJson } from '@/components/DocUtil/outlineJson';
+import {
+  ATTR_AXIS_LEXICON,
+  buildCoverageItemsFromProfile,
+  type CorpusAttrAxis,
+} from '@/components/DocUtil/corpusProfile';
+import { hasPriceBand } from '@/components/DocUtil/priceBandAtom';
+
+export { ATTR_AXIS_LEXICON };
+export type { CorpusAttrAxis };
 
 export type CoverageItem = {
   id: string;
@@ -21,47 +30,9 @@ export type CoverageReport = {
   hint: string;
 };
 
-/** 从主题/范围推断衬衫/polo 类必选清单；其它主题返回空（不过闸） */
+/** 从当前语料画像推断必选清单；主题未命中画像 detectHints 则返回空（不过闸） */
 export function buildCoverageChecklist(topicBlob: string): CoverageItem[] {
-  const t = String(topicBlob || '');
-  const isApparel =
-    /衬衫|polo|Polo|男装|选品|爆款|抖音/.test(t) &&
-    /衬衫|polo|男装|选品|价格带|大盘/.test(t);
-  if (!isApparel) return [];
-
-  const items: CoverageItem[] = [
-    {
-      id: 'macro',
-      label: '男装/品类大盘规模',
-      titleHints: ['大盘', '规模', '销量', '销售额'],
-      required: true,
-    },
-    {
-      id: 'shirt_kpi',
-      label: '衬衫销量/销售额',
-      titleHints: ['衬衫'],
-      required: /衬衫/.test(t),
-    },
-    {
-      id: 'polo_kpi',
-      label: 'polo 销量/销售额',
-      titleHints: ['polo', 'Polo'],
-      required: /polo|Polo/i.test(t),
-    },
-    {
-      id: 'price_band',
-      label: '价格带',
-      titleHints: ['价格带', '价位', '客单'],
-      required: true,
-    },
-    {
-      id: 'attr',
-      label: '属性/面料/款式特征',
-      titleHints: ['属性', '面料', '款式', '图案', '颜色', '卖点'],
-      required: true,
-    },
-  ];
-  return items.filter((x) => x.required);
+  return buildCoverageItemsFromProfile(topicBlob);
 }
 
 export function checkStructureCoverage(
@@ -196,37 +167,9 @@ function columnAxisSupportedByEvidence(axis: string, evidence: string): boolean 
 }
 
 /**
- * 属性轴互斥词表（不含「常规」——厚薄/袖型共用）。
+ * 属性轴互斥：词表见 corpusProfile / apparel.json（ATTR_AXIS_LEXICON 为 live binding）。
  * 卡题含轴 A 时，同卡数据不得主要是轴 B 的专属标签。
  */
-export const ATTR_AXIS_LEXICON: ReadonlyArray<{
-  axis: string;
-  /** 轴名命中用 */
-  titleHints: readonly string[];
-  /** 专属标签（用于正文归属） */
-  labels: readonly string[];
-}> = [
-  {
-    axis: '袖型',
-    titleHints: ['袖型', '袖'],
-    labels: ['落肩袖', '灯笼袖', '常规袖', '插肩袖', '短袖', '长袖'],
-  },
-  {
-    axis: '厚薄',
-    titleHints: ['厚薄'],
-    labels: ['薄款', '厚款', '加厚', '超薄'],
-  },
-  {
-    axis: '面料',
-    titleHints: ['面料', '材质'],
-    labels: ['棉', '涤纶', '聚酯纤维', '粘胶纤维', '醋酯纤维', '锦纶'],
-  },
-  {
-    axis: '图案',
-    titleHints: ['图案', '花纹'],
-    labels: ['纯色', '条纹', '几何图案', '字母', '动物图案'],
-  },
-];
 
 function countExclusiveLabels(text: string, labels: readonly string[]): number {
   const s = String(text || '');
@@ -237,19 +180,21 @@ function countExclusiveLabels(text: string, labels: readonly string[]): number {
   return n;
 }
 
-/** 从页题或 tip 行解析属性轴（优先长轴名） */
+/** 轴名/长 hint 命中；shortHintNeedsLabel 时无完整轴名则须专属 label（防「袖」误触） */
+function axisHintMatches(row: CorpusAttrAxis, s: string): boolean {
+  if (s.includes(row.axis)) return true;
+  const longHint = row.titleHints.some((h) => h.length >= 2 && s.includes(h));
+  if (!longHint) return false;
+  if (!row.shortHintNeedsLabel) return true;
+  return row.labels.some((lab) => lab && s.includes(lab));
+}
+
+/** 从页题或 tip 行解析属性轴（优先画像中靠前的轴） */
 export function detectAttrAxisInText(text: string): string | null {
   const s = String(text || '');
   if (!s.trim()) return null;
-  // 长轴优先：袖型 > 厚薄 > 面料/材质 > 图案
   for (const row of ATTR_AXIS_LEXICON) {
-    if (row.titleHints.some((h) => h.length >= 2 && s.includes(h))) {
-      // 「袖」单独过宽（领袖撞色）；仅当无「袖型」时不靠单字「袖」定轴
-      if (row.axis === '袖型' && !s.includes('袖型') && !/落肩袖|灯笼袖|插肩袖|短袖|长袖|常规袖/.test(s)) {
-        continue;
-      }
-      return row.axis;
-    }
+    if (axisHintMatches(row, s)) return row.axis;
   }
   return null;
 }
@@ -260,15 +205,7 @@ export function detectAllAttrAxesInText(text: string): string[] {
   if (!s.trim()) return [];
   const out: string[] = [];
   for (const row of ATTR_AXIS_LEXICON) {
-    if (!row.titleHints.some((h) => h.length >= 2 && s.includes(h))) continue;
-    if (
-      row.axis === '袖型' &&
-      !s.includes('袖型') &&
-      !/落肩袖|灯笼袖|插肩袖|短袖|长袖|常规袖/.test(s)
-    ) {
-      continue;
-    }
-    out.push(row.axis);
+    if (axisHintMatches(row, s)) out.push(row.axis);
   }
   return out;
 }
@@ -363,7 +300,7 @@ export function checkCardTitleAxisEvidence(
     // 面料/材质/图案等属性轴：禁止把价格带区间占比挂到本页（串窗）
     if (
       /面料|材质|图案|厚薄|袖型/.test(c.axis) &&
-      /[￥¥]\s*\d+(?:\.\d+)?\s*[-~～至到]\s*\d+/.test(c.body)
+      hasPriceBand(c.body)
     ) {
       const selfHitsEarly = countAxisLabels(c.axis, c.body, axisMentioned);
       if (selfHitsEarly === 0) {

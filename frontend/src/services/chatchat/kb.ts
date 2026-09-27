@@ -163,6 +163,17 @@ export async function fetchAssetBytes(params: {
   return blob.arrayBuffer();
 }
 
+/** KB 语料画像（assets/profile.json 或内置回退） */
+export async function fetchCorpusProfile(knowledge_base_name: string) {
+  return request<KBResponse<Record<string, unknown>>>(
+    `/knowledge_base/corpus_profile`,
+    {
+      method: 'GET',
+      params: {knowledge_base_name},
+    },
+  );
+}
+
 export async function queryKbList(options?: { [key: string]: any }) {
   return request<API.KbListItem>('/knowledge_base/list_knowledge_bases', {
     method: 'GET',

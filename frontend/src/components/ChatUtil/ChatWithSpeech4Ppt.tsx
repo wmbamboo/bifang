@@ -44,6 +44,7 @@ import {
   type OutlineStructureJson,
 } from "@/components/DocUtil/outlineJson";
 import {inferSlideIntentOrUndefined} from "@/components/DocUtil/outlineEvidenceValidate";
+import {retrievalBiasLineForTitle} from "@/components/DocUtil/corpusProfile";
 import {
   buildCoverageChecklist,
   checkStructureCoverage,
@@ -781,9 +782,11 @@ const Chat=(props:ChatProps)=> {
                 siblingTitles,
                 lockedSlide,
               );
+              const biasLine = retrievalBiasLineForTitle(slTitle);
               const fillUser =
-                `【本页标题】\n${slTitle}\n\n` +
-                `${lastUser}\n` +
+                `【本页标题】\n${slTitle}\n` +
+                (biasLine ? `${biasLine}\n` : "") +
+                `\n${lastUser}\n` +
                 `只填充这一页 tips（layout 已锁定为 ${layout}）。` +
                 `输出 {"title":"${slTitle}","layout":"${layout}","tips":[…]}，tips 至少 2 条非空字符串。` +
                 `遵守系统里该 layout 的 tips 契约；贴本页标题，勿抢兄弟页；禁止输出空 tips。` +
@@ -906,21 +909,22 @@ const Chat=(props:ChatProps)=> {
               ok: !!filledSlide,
             });
             if (!filledSlide) {
-              failProgress();
-              logTimingSummary('fill-failed');
-              const errText =
-                `大纲填充失败：章「${ch.title}」页「${slTitle}」（${layout}）多次重试仍不合格` +
-                (fillErr ? `（${fillErr}）` : '') +
-                `。请换具体知识库后重试，或简化该页主题后再生成。`;
-              console.warn('ppt-outline-slide-fill-failed', ch.title, slTitle, fillErr);
-              return new Response(
-                new ReadableStream({
-                  start(controller) {
-                    controller.enqueue(encoder.encode(errText));
-                    controller.close();
-                  },
-                }),
+              // P3：重试耗尽不整单失败 — 占位页继续，标待人工确认
+              console.warn(
+                'ppt-outline-slide-fill-degraded',
+                ch.title,
+                slTitle,
+                fillErr,
               );
+              filledSlide = {
+                title: slTitle,
+                layout: 'list',
+                tips: [
+                  `list: 【待人工确认】本页填充未过闸（${String(fillErr || '校验失败').slice(0, 80)}）`,
+                  'list: 请对照知识库改写本页，或删页后重试；后续页已继续生成',
+                ],
+              };
+              layouts![si] = 'list';
             }
             slidesOut[si] = filledSlide;
             layouts![si] = normalizeSlideLayout(filledSlide.layout);

@@ -3,6 +3,17 @@
  * 拦 B 类（槽残留、progress、孤立数字）；跨卡同文 → warning（不阻断下载）。
  */
 
+import {
+  findPriceBands,
+  hasPriceBand,
+  numberIsPriceBandEdge,
+  parsePriceBand,
+} from '@/components/DocUtil/priceBandAtom';
+import {
+  isTruncatedPlainLine,
+  isChartAxisFragmentPlain,
+} from '@/components/DocUtil/outlineTextFragments';
+
 export type ProductGateIssue = {
   page: number;
   slideName: string;
@@ -82,7 +93,7 @@ export function isOrphanNumberFragment(line: string): boolean {
 
 /**
  * 价带边界数被 PPT 拆 run 后会单独成行（如「¥100-」+「200」）。
- * 同页已有完整价带语境时放行，避免误杀。
+ * 用类型化 parsePriceBand / findPriceBands：邻行拼出对象，或同页已有含该边界的价带。
  */
 export function isPriceBandEdgeFragment(
   line: string,
@@ -90,29 +101,35 @@ export function isPriceBandEdgeFragment(
   next: string,
   slideFlat: string,
 ): boolean {
-  const s = String(line || "").trim();
-  if (!/^(?:50|100|200|300|400|500|600|800|1000)$/.test(s)) return false;
-  const left = String(prev || "").trim();
-  const right = String(next || "").trim();
-  // 邻行拼出 ¥100-200 / 100-200元
-  if (/[￥¥]?\s*\d+\s*[-~～至到]$/.test(left)) return true;
-  if (/^[-~～至到]\s*\d+/.test(right) || /^(?:元|万)/.test(right)) return true;
-  if (left === "-" || /[-~～至到]$/.test(left)) return true;
-  const win = `${left}${s}${right}`;
-  if (/[￥¥]\s*\d+\s*[-~～至到]\s*\d+/.test(win)) return true;
-  if (/\d+\s*[-~～至到]\s*\d+\s*元/.test(win)) return true;
-  // 同页拼接（去换行）后该数落在价带区间内
-  const flat = String(slideFlat || "").replace(/\s+/g, "");
-  const esc = s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (
-    new RegExp(`[￥¥]\\d{1,4}[-~～至到]${esc}|${esc}[-~～至到]\\d{1,4}`).test(flat)
-  ) {
+  const s = String(line || '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(s)) return false;
+  const left = String(prev || '').trim();
+  const right = String(next || '').trim();
+  // 邻行拼成完整价带对象
+  const candidates = [
+    `${left}${s}${right}`,
+    `${left}${s}`,
+    `${s}${right}`,
+    left.endsWith('-') || /[-~至到]$/.test(left) ? `${left}${s}` : '',
+    /^[-~至到]/.test(right) ? `${s}${right}` : '',
+  ];
+  for (const c of candidates) {
+    if (c && parsePriceBand(c)) return true;
+    if (c && findPriceBands(c).some((b) => b.min === Number(s) || b.max === Number(s))) {
+      return true;
+    }
+  }
+  // 左半「¥100-」悬空 + 本行边界数
+  if (/[￥¥]?\s*\d+\s*[-~至到]$/.test(left) && parsePriceBand(`${left}${s}`)) {
     return true;
   }
-  if (new RegExp(`[￥¥]${esc}(?:元|以下|以上)?|${esc}元(?:以下|以上)?`).test(flat)) {
-    return true;
+  if (left === '-' || /[-~至到]$/.test(left)) {
+    const rebuilt = `${left.replace(/[-~至到]+$/, '')}-${s}`;
+    if (hasPriceBand(`¥${rebuilt}`) || hasPriceBand(rebuilt + '元')) return true;
   }
-  return false;
+  // 同页扁平文本里该数是某价带 min/max
+  const flat = String(slideFlat || '').replace(/\s+/g, '');
+  return numberIsPriceBandEdge(s, flat);
 }
 
 /**
@@ -179,46 +196,14 @@ export function findCrossCardDuplicateLine(lines: string[]): string | null {
   return null;
 }
 
-/** 成品闸：半句截断（与填充 isTruncatedTip 同口径，就地实现避免循环依赖） */
+/** 成品闸：半句截断（与填充 isTruncatedTip 同口径，见 outlineTextFragments） */
 export function isTruncatedSlideLine(line: string): boolean {
-  const s = String(line || '').trim();
-  if (!s || s.length < 3) return false;
-  if (/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}\s*$/.test(s)) return false;
-  if (/20\d{2}[.\-/]\d{1,2}[.\-/]?\s*$/.test(s)) return true;
-  if (/至\s*20\d{2}[.\-/]\d{1,2}[.\-/]?\s*$/.test(s)) return true;
-  if (/[.\-/~～—–]\s*$/.test(s)) return true;
-  if (s.length >= 5 && /[的与和及为至于按]$/.test(s)) return true;
-  if (/各价格$|均为各价格$/.test(s)) return true;
-  if (/同比[+\-＋－]\s*$|环比[+\-＋－]\s*$|增速[+\-＋－]\s*$/.test(s)) return true;
-  return false;
+  return isTruncatedPlainLine(line);
 }
 
 /** 成品闸：图表轴/刻度碎片 */
 export function isChartAxisFragmentLine(line: string): boolean {
-  const s = String(line || '').trim();
-  if (!s) return false;
-  const compact = s.replace(/\s+/g, '');
-  if (
-    /^(?:[￥¥]?\d{2,4}[\/\|、]){1,}[￥¥]?\d{2,4}$/.test(compact)
-  ) {
-    return true;
-  }
-  if (/^[￥¥]\s*\d{2,4}$/.test(s)) return true;
-  if (
-    /^(?:TOP款?口径|销量席位|横轴|纵轴|图例|坐标轴)$/i.test(s)
-  ) {
-    return true;
-  }
-  const parts = s.split(/\s*[\/\|、]\s*/).map((p) => p.trim()).filter(Boolean);
-  if (parts.length >= 3) {
-    const crumb = parts.filter(
-      (p) =>
-        /^[￥¥]?\s*\d{2,4}$/.test(p) ||
-        /^(?:TOP款?口径|销量席位|横轴|纵轴|图例)$/i.test(p),
-    );
-    if (crumb.length >= 3 && crumb.length >= parts.length - 1) return true;
-  }
-  return false;
+  return isChartAxisFragmentPlain(line);
 }
 
 function scanOnePage(
@@ -291,11 +276,9 @@ function scanOnePage(
       break;
     }
     if (isTruncatedSlideLine(line)) {
-      // 价带左半「¥100-」后接边界数 → PPT 拆 run，不是半句截断
-      if (
-        /[￥¥]?\s*\d+\s*[-~～至到]$/.test(line) &&
-        /^\d{2,4}/.test(lines[i + 1] || "")
-      ) {
+      // 价带左半「¥100-」+ 下行边界数 → 拼成对象则放行
+      const nextLine = String(lines[i + 1] || '').trim();
+      if (nextLine && parsePriceBand(`${line}${nextLine}`)) {
         continue;
       }
       issues.push({

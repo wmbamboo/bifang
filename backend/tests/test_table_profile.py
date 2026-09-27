@@ -68,6 +68,26 @@ def test_price_band_schema_overrides_kpi_page_type():
     assert "50" in m172["price_band"]
 
 
+def test_price_band_metric_gets_axis_tag():
+    """价带行 metric 须带 axis=价格带（列头/行键来源，非事后词面猜）。"""
+    text = _load("polo_p2.md")
+    tables = extract_tables(text)
+    assert tables
+    mets, _ = metrics_from_table(tables[0], page_type="category_kpi")
+    banded = [m for m in mets if m.get("price_band")]
+    assert banded, mets[:3]
+    assert all(m.get("axis") == "价格带" for m in banded)
+
+
+def test_axis_from_header_maps_price_and_sales():
+    from app.services.table_structure import axis_from_header
+
+    assert axis_from_header("本期销量", price_band="¥50-100") == "价格带"
+    assert axis_from_header("", row_header="主力价格带") == "价格带"
+    assert axis_from_header("本期销量") == "销量"
+    assert axis_from_header("本期销售额") == "销售额"
+
+
 def test_row_key_price_band_reverse_locate():
     row = [
         Cell("主力价格带", 0, 0),

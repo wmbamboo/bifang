@@ -2,15 +2,15 @@ import {
   selectImageGridByCaptions,
   selectImageGridCandidates,
   scoreAssetAgainstCaption,
-} from "@/components/DocUtil/kbImageAssets";
-import type { KbAssetItem } from "@/services/chatchat/kb";
+} from "@/components/DocUtil/kbImageAssetsCore";
+import type {KbAssetLike} from "@/components/DocUtil/kbImageAssetsCore";
 
 function asset(
   page: number,
   idx: number,
   kind: string = "image",
   snippet = "",
-): KbAssetItem {
+): KbAssetLike {
   return {
     kb_name: "服装",
     doc: "polo",

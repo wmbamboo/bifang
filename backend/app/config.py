@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     ocr_dpi_scale: float = 2.0
     # True=每页都 OCR（更慢，适合整本扫描）
     ocr_force_all_pages: bool = False
+    # 是否落盘 whole/ 页图；默认开，格式见 ocr_whole_format
+    ocr_save_whole: bool = True
+    # png | jpeg（jpeg q85 显著小于 png，防 whole/ 膨胀）
+    ocr_whole_format: str = "jpeg"
+    ocr_whole_jpeg_quality: int = 85
 
     @property
     def data_path(self) -> Path:

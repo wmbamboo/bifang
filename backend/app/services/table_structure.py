@@ -440,6 +440,50 @@ def classify_attached_rate(rate_text: str, col_header: str = "") -> str:
     return "unlabeled"
 
 
+def axis_from_header(
+    col_header: str = "",
+    *,
+    row_header: str = "",
+    price_band: Optional[str] = None,
+) -> Optional[str]:
+    """列头/行键 → 语义轴名（可写入 metric.axis，供检索/闸门查表）。
+
+    与 table_profile.header_axis（行/列方向）不同：这里是「价格带/面料/销量」等业务轴。
+    """
+    if price_band:
+        return "价格带"
+    blob = f"{col_header or ''} {row_header or ''}"
+    if re.search(r"价格带|价位段|价位", blob):
+        return "价格带"
+    if re.search(r"面料|材质", blob):
+        return "面料"
+    if re.search(r"图案|花纹", blob):
+        return "图案"
+    if re.search(r"厚薄", blob):
+        return "厚薄"
+    if re.search(r"袖型", blob) or (
+        re.search(r"袖", blob) and re.search(r"落肩袖|灯笼袖|短袖|长袖", blob)
+    ):
+        return "袖型"
+    ch = (col_header or "").strip()
+    if re.search(r"本期销售额|销售额", ch):
+        return "销售额"
+    if re.search(r"本期销量|销量", ch) and not re.search(r"同比|环比", ch):
+        return "销量"
+    return None
+
+
+def _value_col_header(
+    col_headers: dict[int, str],
+    value_cell: Cell,
+    row_off: int,
+    header_shift: int,
+) -> str:
+    vis = value_cell.col + row_off
+    hdr_col = vis - header_shift if header_shift else vis
+    return (col_headers.get(hdr_col, "") or col_headers.get(value_cell.col, "") or "").strip()
+
+
 def metrics_from_table(
     table: TableBlock,
     *,
@@ -523,8 +567,20 @@ def metrics_from_table(
                 attach_rate=attach,
                 attach_rate_kind=attach_kind,
             )
+            value_hdr = _value_col_header(
+                col_headers, value_cell, row_off, header_shift
+            )
+            axis = axis_from_header(
+                value_hdr, row_header=header or "", price_band=band
+            )
             for m in mets:
                 m["table_convention"] = profile.convention
+                if value_hdr:
+                    m["col_header"] = value_hdr
+                if axis:
+                    m["axis"] = axis
+                elif m.get("price_band"):
+                    m["axis"] = "价格带"
             out.extend(mets)
     return out, profile.to_dict()
 
@@ -707,6 +763,7 @@ def metrics_from_attribute_prose(
                     "raw": f"{num}{unit}",
                     "bbox": {"source": "attribute_text"},
                     "provenance": "attribute_text",
+                    **({"axis": axis} if axis else {}),
                 }
             )
     return out

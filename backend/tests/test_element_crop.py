@@ -48,7 +48,8 @@ def test_crop_element_assets_from_page_writes_elements_and_whole(tmp_path: Path)
     assert "whole" in kinds
     assert "image" in kinds
     assert "chart" in kinds
-    assert (tmp_path / "whole" / "page_6.png").exists()
+    whole = tmp_path / "whole"
+    assert (whole / "page_6.jpg").exists() or (whole / "page_6.png").exists()
     assert (tmp_path / "elements" / "demo_p6_img1.png").exists()
     assert (tmp_path / "elements" / "demo_p6_chart1.png").exists()
     img = Image.open(tmp_path / "elements" / "demo_p6_img1.png")

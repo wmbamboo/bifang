@@ -378,6 +378,14 @@ describe("v2026826 residual locks", () => {
     );
     expect(fidelity).toMatch(/价格带|面料|属性/);
 
+    // 查表：无 ¥ 串，但证据标了 axis=价格带 → 仍拒（ingest 元数据）
+    const byAxis = validateTipsAgainstEvidence(
+      "polo衫面料材质属性占比",
+      ["metric: 18.80% polo衫销量占比"],
+      "⟦chunk:extract-p2|page:2|axes:价格带⟧\n75.9万 polo衫 ¥100-200 18.8% axis=价格带",
+    );
+    expect(byAxis).toMatch(/axis=价格带|属性|面料/);
+
     const ok = checkCardTitleAxisEvidence(
       "polo衫面料材质属性占比",
       ["metric: 棉 72.18% polo面料首位", "metric: 聚酯纤维 19.16%"],

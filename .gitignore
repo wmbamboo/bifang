@@ -31,3 +31,4 @@ frontend/hezl/
 .workbuddy/backup/
 .workbuddy/tools/*.txt
 frontend/public/output-test.pptx
+frontend/tmp/

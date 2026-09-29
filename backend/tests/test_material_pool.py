@@ -132,6 +132,21 @@ def test_unused_list_complete():
     assert not (set(result.unused) & assigned)
 
 
+def test_key_to_doc_preserves_asset_ids_for_7a():
+    """7a′：分配器保留 metadata.asset_ids，供 build_writing_material_pool 吐 key_assets。"""
+    pool = _pool_60()
+    pool[0]["metadata"]["asset_ids"] = ["elements/p1_i0.png", "elements/p1_i1.png"]
+    result = allocate_material_pool(
+        _five_chapters(), pool, max_per_chapter=8, min_per_chapter=1
+    )
+    key = stable_material_key(pool[0])
+    assert key in result.key_to_doc
+    assert result.key_to_doc[key]["metadata"]["asset_ids"] == [
+        "elements/p1_i0.png",
+        "elements/p1_i1.png",
+    ]
+
+
 def test_allocator_does_not_import_domain_lexicon():
     """4B.6 / 4B.7.4：分配打分模块不得 import 领域词表常量。"""
     tree = ast.parse(POOL_SRC.read_text(encoding="utf-8"))

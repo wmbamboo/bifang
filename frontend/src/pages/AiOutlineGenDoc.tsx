@@ -12,7 +12,7 @@ import {
   injectDocBlocks,
 } from "@/components/DocUtil/DocBlockInjector";
 import {fetchAssetBytes} from "@/services/chatchat/kb";
-import {buildFigureAssetAppendix} from "@/components/DocUtil/docFigureAssets";
+import {scrubConclusionChapters} from "@/components/DocUtil/conclusionGate";
 import PizZipUtils from "pizzip/utils";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
@@ -255,7 +255,8 @@ const AiOutlineGenDoc: React.FC = () => {
           /*** 生成全部 ***/
           if(genKey.length===0) {
             if (paragraph.prompt.length > 0) {
-              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + buildFigureAssetAppendix([])), {headers: headers}));
+              // 十·7 ⑦-0：Ai 无 KB 资产，勿拼空清单硬禁（此前 buildFigureAssetAppendix([])）
+              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT), {headers: headers}));
               tArray.push({key: paragraph.key, idx: index});
               index++;
             } else {
@@ -265,7 +266,7 @@ const AiOutlineGenDoc: React.FC = () => {
           }else{
             if(genKey===paragraph.key){
               if (paragraph.prompt.length > 0) {
-                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + buildFigureAssetAppendix([])), {headers: headers}));
+                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT), {headers: headers}));
                 tArray.push({key: paragraph.key, idx: index});
                 index++;
               }else{
@@ -325,6 +326,10 @@ const AiOutlineGenDoc: React.FC = () => {
           let endTime=new Date().getTime();
           const timeDiff=((endTime-startTime)/1000/60).toFixed(1);
           console.log("共耗时约:"+timeDiff+"分钟");
+          const cg = scrubConclusionChapters(chapters);
+          if (cg.report.blocked_count > 0 || cg.report.tagged_count > 0) {
+            console.info("[结论闸]", cg.report);
+          }
           const wordCntsStr=(wordCnts/10000).toFixed(2);
           message.info("共完成了："+completeCount+"段"+wordCntsStr+"万字写作, 总耗时约:"+timeDiff+"分钟");
           console.log("---------------------------"+JSON.stringify(tArray));

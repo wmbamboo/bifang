@@ -14,10 +14,17 @@ import {
   resolveBlocksToPayloads,
   injectDocBlocks,
 } from "@/components/DocUtil/DocBlockInjector";
-import {allocateMaterialPool, fetchAssetBytes, listAssets} from "@/services/chatchat/kb";
+import {allocateMaterialPool, fetchAssetBytes} from "@/services/chatchat/kb";
+import {applyEntityGate, docsToEvidence} from "@/components/DocUtil/entityGate";
+import {applyRankingGate} from "@/components/DocUtil/rankingGate";
+import {normalizeCitations} from "@/components/DocUtil/citationNormalize";
+import {applyOcrNoiseScrub} from "@/components/DocUtil/ocrNoiseScrub";
+import {scrubConclusionChapters} from "@/components/DocUtil/conclusionGate";
 import {
   buildFigureAssetAppendix,
-  figureAssetsFromAssetList,
+  countUnresolvedFigures,
+  figureAssetsFromAssignedKeys,
+  type DocKeyAssetRow,
 } from "@/components/DocUtil/docFigureAssets";
 import PizZipUtils from "pizzip/utils";
 import PizZip from "pizzip";
@@ -210,6 +217,20 @@ const KbOutlineGenDoc: React.FC = () => {
                   asset_id,
                 }),
             });
+            // 十·7：注入诊断（blockLists / payloads / warning）
+            const unresolved = countUnresolvedFigures(payloads);
+            console.info("[DocBlock]", {
+              blockLists: blockLists.length,
+              withBlocks: blockLists.filter((b) => b.length > 0).length,
+              payloads: payloads.filter((p) => p && p.length).length,
+              unresolvedFigures: unresolved,
+            });
+            if (unresolved > 0) {
+              // 7c′：不可 resolve 拦截提示（仍注入「图片缺失」占位，不静默丢）
+              message.error(
+                `有 ${unresolved} 张插图无法解析（ref 不可 resolve），已写入「图片缺失」占位`,
+              );
+            }
             const inj = injectDocBlocks(doc.getZip(), payloads);
             if (inj.warning) {
               console.warn(inj.warning);
@@ -241,25 +262,9 @@ const KbOutlineGenDoc: React.FC = () => {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     };
-    // 九·2：生成前供给可用插图资产清单（空则禁 figure）
-    let figureAppendix = buildFigureAssetAppendix([]);
-    try {
-      if (kbName && kbName !== ALL_KB_NAME && kbName !== "all") {
-        const res = await listAssets({
-          knowledge_base_name: kbName,
-          kinds: "image,chart",
-        });
-        const raw = (res as any)?.data ?? res;
-        const list = Array.isArray(raw) ? raw : [];
-        figureAppendix = buildFigureAssetAppendix(
-          figureAssetsFromAssetList(list, 12),
-        );
-      }
-    } catch (e) {
-      console.warn("加载插图资产清单失败，本轮禁 figure", e);
-    }
-    // 任务 4B（方案 B）：生成前一次拉取「章节→片段」分配表；失败则降级为原逐段检索
+    // 十·7 7a′：段级插图来自材料池 key_assets（不再 listAssets 全库前 12）
     let byChapterKeys: Record<string, string[]> = {};
+    let keyAssets: Record<string, DocKeyAssetRow> = {};
     try {
       if (kbName && kbName !== ALL_KB_NAME && kbName !== "all" && chapters.length) {
         const allocRes = await allocateMaterialPool({
@@ -275,15 +280,20 @@ const KbOutlineGenDoc: React.FC = () => {
         byChapterKeys = (data?.by_chapter && typeof data.by_chapter === "object")
           ? data.by_chapter
           : {};
+        keyAssets =
+          data?.key_assets && typeof data.key_assets === "object"
+            ? data.key_assets
+            : {};
         if (Array.isArray(data?.unused)) {
           console.info(
-            `[材料池] pool=${data.pool_size ?? "?"} unused=${data.unused.length}`,
+            `[材料池] pool=${data.pool_size ?? "?"} unused=${data.unused.length} key_assets=${Object.keys(keyAssets).length}`,
           );
         }
       }
     } catch (e) {
-      console.warn("材料池分配失败，本轮降级为逐段检索", e);
+      console.warn("材料池分配失败，本轮降级为逐段检索且禁 figure", e);
       byChapterKeys = {};
+      keyAssets = {};
     }
     const splitKeysForParagraph = (
       chapterKeys: string[],
@@ -301,6 +311,14 @@ const KbOutlineGenDoc: React.FC = () => {
       }
       return out;
     };
+    /** 任务 4 调用方：其他章/段已分配的键 → exclude（本段 assigned 除外） */
+    const allAllocatedKeys = Object.values(byChapterKeys).flat();
+    const excludeKeysFor = (mine: string[] | undefined): string[] | undefined => {
+      if (!allAllocatedKeys.length) return undefined;
+      const mineSet = new Set(mine || []);
+      const excl = allAllocatedKeys.filter((k) => !mineSet.has(k));
+      return excl.length ? excl : undefined;
+    };
     // 生成请求的序号与每个item的key的对应
     type tIdx={
       key: string;
@@ -316,8 +334,19 @@ const KbOutlineGenDoc: React.FC = () => {
       return "paragraph0";
     }
     //---------------------------------------------
-    const buildMsg=(prompt:string, assignedKeys?: string[])=>{
+    const buildMsg=(
+      prompt:string,
+      assignedKeys?: string[],
+      excludeKeys?: string[],
+    )=>{
       setDownloadable(false);
+      const stream_options: Record<string, unknown> = {};
+      if (assignedKeys) {
+        stream_options.assigned_doc_keys = assignedKeys;
+      }
+      if (excludeKeys?.length) {
+        stream_options.exclude_doc_keys = excludeKeys;
+      }
       const msg: Record<string, unknown>={
         messages:[
           {content:WRITING_SYSTEM_PROMPT,role:"system",name:"string"},
@@ -330,8 +359,8 @@ const KbOutlineGenDoc: React.FC = () => {
         top_logprobs:0,
         top_p:0,
       };
-      if (assignedKeys) {
-        msg.stream_options = {assigned_doc_keys: assignedKeys};
+      if (Object.keys(stream_options).length) {
+        msg.stream_options = stream_options;
       }
       return JSON.stringify(msg);
     }
@@ -347,11 +376,15 @@ const KbOutlineGenDoc: React.FC = () => {
         let paraIndex = 0;
         for (let paragraph of chapter.paragraphs){
           const assigned = splitKeysForParagraph(chKeys, paraIndex, paraCount);
+          const excludeKeys = excludeKeysFor(assigned);
+          const figureAppendix = buildFigureAssetAppendix(
+            figureAssetsFromAssignedKeys(assigned, keyAssets, 6),
+          );
           paraIndex++;
           /*** 生成全部 ***/
           if(genKey.length===0) {
             if (paragraph.prompt.length > 0) {
-              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned), {headers: headers}));
+              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned, excludeKeys), {headers: headers}));
               tArray.push({key: paragraph.key, idx: index});
               index++;
             } else {
@@ -361,7 +394,7 @@ const KbOutlineGenDoc: React.FC = () => {
           }else{
             if(genKey === paragraph.key){
               if (paragraph.prompt.length > 0) {
-                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned), {headers: headers}));
+                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned, excludeKeys), {headers: headers}));
                 tArray.push({key: paragraph.key, idx: index});
                 index++;
               }else{
@@ -388,8 +421,35 @@ const KbOutlineGenDoc: React.FC = () => {
             const parsed = parseChatCompletionData(value.data, { requireKbHits: true });
             if (parsed.ok) {
               const key = getKeyFromTArray(idx);
-              Doc.setContent(chapters, key, parsed.content);
-              wordCnts += parsed.content.length;
+              // 任务 2/3/5/6：实体闸 → 排名闸 → 引用归一 → OCR 噪声 scrub
+              const docsRaw = (value.data as any)?.docs;
+              const evidence = docsToEvidence(docsRaw);
+              let body = parsed.content;
+              if (evidence) {
+                const eg = applyEntityGate(body, evidence);
+                if (eg.report.blocked_count > 0) {
+                  console.info("[实体闸]", key, eg.report);
+                }
+                body = eg.text;
+                const rg = applyRankingGate(body, evidence);
+                if (rg.report.blocked_count > 0) {
+                  console.info("[排名闸]", key, rg.report);
+                }
+                body = rg.text;
+              }
+              const docCount = Array.isArray(docsRaw) ? docsRaw.length : undefined;
+              const cn = normalizeCitations(body, {docCount});
+              if (cn.report.mapped > 0 || cn.report.removed > 0) {
+                console.info("[引用归一]", key, cn.report);
+              }
+              body = cn.text;
+              const ns = applyOcrNoiseScrub(body);
+              if (ns.report.replaced_count > 0) {
+                console.info("[OCR噪声]", key, ns.report);
+              }
+              body = ns.text;
+              Doc.setContent(chapters, key, body);
+              wordCnts += body.length;
             } else {
               console.warn("段落生成失败:", parsed.error, value.data);
             }
@@ -426,8 +486,11 @@ const KbOutlineGenDoc: React.FC = () => {
           let endTime=new Date().getTime();
           const timeDiff=((endTime-startTime)/1000/60).toFixed(1);
           console.log("共耗时约:"+timeDiff+"分钟");
-          // Item.setContent(items,2,"tset2!");
-          // Item.setContent(items,4,"tset4!");
+          // 任务 8：全段落盘后再 scrub 结论章（数值 ⊆ 前文；建议句标（推演））
+          const cg = scrubConclusionChapters(chapters);
+          if (cg.report.blocked_count > 0 || cg.report.tagged_count > 0) {
+            console.info("[结论闸]", cg.report);
+          }
           const wordCntsStr=(wordCnts/10000).toFixed(2);
           message.info("共完成了："+completeCount+"段"+wordCntsStr+"万字写作, 总耗时约:"+timeDiff+"分钟");
           console.log("---------------------------"+JSON.stringify(tArray));

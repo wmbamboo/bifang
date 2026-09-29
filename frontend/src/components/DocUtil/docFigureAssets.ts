@@ -1,11 +1,20 @@
 /**
- * Word 段落插图资产附录（九·2）：纯函数，不 import 服务层。
+ * Word 段落插图资产附录（九·2 / 十·7 7a′）：纯函数，不 import 服务层。
  * assetRef 口径与 resolveAssetBytes 一致：kb:<fileName>/<assetId>
  */
 export type DocFigureAsset = {
   fileName: string;
   assetId: string;
   caption?: string;
+};
+
+/** 材料池 key → 该 chunk 的源文件与 asset_ids */
+export type DocKeyAssetRow = {
+  source?: string;
+  file_name?: string;
+  asset_ids?: string[];
+  page?: string | number;
+  chunk?: string | number;
 };
 
 /** 从 KB chat 返回的 docs[] 抽出资产 */
@@ -39,7 +48,41 @@ export function figureAssetsFromKbDocs(docs: unknown[]): DocFigureAsset[] {
   return out;
 }
 
-/** 从 listAssets 风格条目抽出 */
+/**
+ * 7a′：按本段 assigned 材料键筛资产（段落级），替掉全库 listAssets 前 N 条。
+ */
+export function figureAssetsFromAssignedKeys(
+  assignedKeys: string[] | undefined,
+  keyAssets: Record<string, DocKeyAssetRow> | undefined,
+  limit = 6,
+): DocFigureAsset[] {
+  const out: DocFigureAsset[] = [];
+  const seen = new Set<string>();
+  if (!assignedKeys?.length || !keyAssets) return out;
+  for (const k of assignedKeys) {
+    const row = keyAssets[k];
+    if (!row) continue;
+    const fileName = String(row.source || row.file_name || "").trim();
+    const aids = Array.isArray(row.asset_ids)
+      ? row.asset_ids.map((x) => String(x || "").trim()).filter(Boolean)
+      : [];
+    const cap =
+      row.page != null && String(row.page) !== ""
+        ? `p${row.page}`
+        : undefined;
+    for (const assetId of aids) {
+      if (!fileName || !assetId) continue;
+      const dedupe = `${fileName}|${assetId}`;
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+      out.push({fileName, assetId, caption: cap});
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+/** 从 listAssets 风格条目抽出（遗留兜底；写作链优先用 figureAssetsFromAssignedKeys） */
 export function figureAssetsFromAssetList(
   assets: Array<{file_name?: string; asset_id?: string; snippet?: string}>,
   limit = 12,
@@ -91,4 +134,18 @@ export function buildFigureAssetAppendix(entries: DocFigureAsset[]): string {
     lines.join("\n") +
     "\n"
   );
+}
+
+/** 统计 payload 里不可 resolve 的 figure（7c′） */
+export function countUnresolvedFigures(
+  payloads: Array<Array<{kind: string}> | null>,
+): number {
+  let n = 0;
+  for (const items of payloads) {
+    if (!items) continue;
+    for (const it of items) {
+      if (it.kind === "figure-missing") n += 1;
+    }
+  }
+  return n;
 }

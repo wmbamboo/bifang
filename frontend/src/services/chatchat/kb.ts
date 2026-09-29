@@ -160,6 +160,16 @@ export type MaterialPoolAllocateResult = {
   unused: string[];
   pool_size: number;
   chapter_ids: string[];
+  /** 7a′：材料键 → 该 chunk 的 source/asset_ids */
+  key_assets?: Record<
+    string,
+    {
+      source: string;
+      asset_ids: string[];
+      page?: string | number;
+      chunk?: string | number;
+    }
+  >;
 };
 
 export async function allocateMaterialPool(params: {

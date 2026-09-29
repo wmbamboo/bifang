@@ -1,4 +1,5 @@
 import OutlineRec, {outlineType} from "@/components/DocUtil/OutlineStore";
+import {stripDocOutlineOrdinal} from "@/components/DocUtil/docOutlineStructure";
 export type CheckMsg={
   code:number;
   msg:string;
@@ -12,33 +13,37 @@ export class DocKeys {
     this.paragraphKey = key2;
   }
 }
-const charsToReplace=[
-  "\_"," ","#",  //":","\*","\+",
-  "＋","——","－",
-  "1","2","3","4","5","6","7","8","9","0",
-  "一","二","三","四","五","六","七","八","九","十",
-  "I","II","III","IV","VI","VII",
-  "第","部分","章","节","段",
-  "：",
-  "Chapter"
-]
+
 /**
- * 清除一些特殊字符：charsToReplaced，以及*-+。.等
- * @param charsToReplace
- * @param bigString
+ * 章/段标题轻清洗（十·1 / B1）：只剥锚定前缀序数与装饰符，
+ * **不得**全局删除 0-9 / 一~十 / 拉丁字母（会把「衬衫200元」「polo衫」吃成「衬衫元」「衫」）。
+ * 差集里若丢失 [0-9a-zA-Z] → console.warn（先 Warn 不拒单）。
  */
-const replaceCharsInString=(charsToReplace: string[], bigString: string)=>{
-  // 遍历数组中的每个字符
-  charsToReplace.forEach((char) => {
-    // 使用正则表达式全局替换字符（'g' 标志表示全局匹配）
-    bigString = bigString.replace(new RegExp(char, 'g'), '');
-  });
-  bigString= bigString.replace(/[.*+-。:]/g,'')
-  return bigString;
+export function cleanDocTitle(raw: string): string {
+  const before = String(raw || "");
+  let s = before.trim().replace(/^#+\s*/, "");
+  const afterOrdinal = stripDocOutlineOrdinal(s);
+  // 纯装饰：下划线、井号、首尾冒号；不删空格与正文标点
+  s = afterOrdinal.replace(/[_＃#]/g, "").replace(/^[：:]+|[：:]+$/g, "").trim();
+
+  // 只对「序数剥离之后」仍丢字母数字报警（1.1→趋势分析 属预期，不报）
+  const beforeChars = new Set([...afterOrdinal.replace(/\s/g, "")]);
+  const afterChars = new Set([...s.replace(/\s/g, "")]);
+  const lostAlnum = [...beforeChars].filter(
+    (c) => !afterChars.has(c) && /[0-9a-zA-Z]/i.test(c),
+  );
+  if (lostAlnum.length > 0) {
+    console.warn("[标题保真] 清洗丢失字母数字", {
+      before,
+      after: s,
+      lost: lostAlnum,
+    });
+  }
+  return s;
 }
-const cleanString=(bigString: string): string=> {
-  return replaceCharsInString(charsToReplace,bigString)
-}
+
+/** @deprecated 使用 cleanDocTitle；保留别名以免旧调用误伤 */
+const cleanString = (bigString: string): string => cleanDocTitle(bigString);
 /****用于清除```markdown\清除前导和结尾空行等标识```*****/
 export const clean4DocTitle=(str:string)=>{
   str=str.replace(/```markdown\n|```txt\n|```\n|```/, '');
@@ -226,6 +231,92 @@ export function buildDocParagraphFormatPrompt(): string {
 /** 末章是否像结论/建议（十一·3 / 9.3） */
 export const DOC_CONCLUSION_CHAPTER_RE =
   /结论|建议|动作|取舍|下一步|筛选与打法/;
+
+const TITLE_OVERLAP_STOP = new Set([
+  "与",
+  "的",
+  "和",
+  "及",
+  "其",
+  "等",
+  "概览",
+  "分析",
+  "表现",
+  "情况",
+  "相关",
+  "关于",
+  "对于",
+  "结构",
+  "对照",
+]);
+
+/** 段题 token（字母词 + 数字 + 汉字二元），供 9.4 互斥 */
+export function docParagraphTitleTokens(title: string): Set<string> {
+  const s = cleanDocTitle(title || "").replace(/\s+/g, "");
+  const toks = new Set<string>();
+  for (const m of s.matchAll(/[A-Za-z][A-Za-z0-9]*/g)) {
+    toks.add(m[0].toLowerCase());
+  }
+  for (const m of s.matchAll(/\d+(?:\.\d+)?/g)) {
+    toks.add(m[0]);
+  }
+  const cjk = [...s].filter((c) => /[\u4e00-\u9fff]/.test(c)).join("");
+  for (let i = 0; i < cjk.length - 1; i++) {
+    const a = cjk[i];
+    const b = cjk[i + 1];
+    if (TITLE_OVERLAP_STOP.has(a) || TITLE_OVERLAP_STOP.has(b)) continue;
+    const bg = a + b;
+    if (TITLE_OVERLAP_STOP.has(bg)) continue;
+    toks.add(bg);
+  }
+  return toks;
+}
+
+function titleJaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter += 1;
+  return inter / (a.size + b.size - inter);
+}
+
+/**
+ * 十一·3 / 9.4：段题互斥扫描（跨章）。
+ * 返回过近的段题对（Jaccard≥0.55 或归一后相等）。
+ */
+export function findOverlappingParagraphTitles(
+  chapters: Chapter[],
+  threshold = 0.55,
+): Array<{a: string; b: string; score: number}> {
+  type Row = {title: string; tokens: Set<string>};
+  const rows: Row[] = [];
+  for (const ch of chapters || []) {
+    for (const p of ch.paragraphs || []) {
+      const title = String(p.title || "").trim();
+      if (title.length < 2) continue;
+      rows.push({title, tokens: docParagraphTitleTokens(title)});
+    }
+  }
+  const out: Array<{a: string; b: string; score: number}> = [];
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const ta = cleanDocTitle(rows[i].title);
+      const tb = cleanDocTitle(rows[j].title);
+      // 过短段题（测试占位「段1」等）不做互斥，避免误伤
+      if (!ta || !tb || ta.length < 4 || tb.length < 4) continue;
+      if (ta === tb) {
+        out.push({a: rows[i].title, b: rows[j].title, score: 1});
+        continue;
+      }
+      if (rows[i].tokens.size < 2 || rows[j].tokens.size < 2) continue;
+      const score = titleJaccard(rows[i].tokens, rows[j].tokens);
+      if (score >= threshold) {
+        out.push({a: rows[i].title, b: rows[j].title, score});
+      }
+    }
+  }
+  out.sort((x, y) => y.score - x.score);
+  return out;
+}
 
 /** 从文章标题推断写作岗位；空串表示不注入人设（勿默认「读者」） */
 export function inferDocWritingRole(title: string): string {
@@ -631,6 +722,13 @@ export class Doc{
         `末章「${lastCh.title}」不像结论/建议类；建议增加结论章或改末章题（含「结论/建议/动作」等）。`,
       );
     }
+    // 十一·3 / 9.4：段题互斥（Warn 不拒单）
+    const overlaps = findOverlappingParagraphTitles(chapters);
+    for (const o of overlaps.slice(0, 3)) {
+      warns.push(
+        `段题过近：「${o.a}」与「${o.b}」可能重复展开同一主题（骨架要求同级标题互不重复）。`,
+      );
+    }
     if (warns.length) {
       return {
         code: 1,
@@ -739,7 +837,8 @@ export class Doc{
         }
         if (isConclusionChapter) {
           prompt +=
-            `本段属结论/建议归属章：给出可执行判断与动作，勿堆砌前文已写过的同一组数字。`;
+            `本段属结论/建议归属章：给出可执行判断与动作，勿堆砌前文已写过的同一组数字；` +
+            `凡建议/预判/取舍类判断句末须标「（推演）」；结论中的数值必须前文正文已出现过。`;
         } else {
           prompt +=
             `结论与行动建议留给末章；本段只写本段题所需的事实与分析。`;

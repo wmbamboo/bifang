@@ -18,6 +18,7 @@ from app.services.table_structure import (
     metrics_from_kpi_prose,
     metrics_from_product_captions,
     metrics_from_table,
+    build_rankings_from_metrics,
 )
 
 _PAGE_MARK = re.compile(r"^\[(?:第|幻灯片)?\s*(\d+)\s*页?\]\s*", re.M)
@@ -261,12 +262,14 @@ def extract_page_record(
             _refresh_displays(metrics)
         except Exception as ex:  # noqa: BLE001
             warnings.append(f"llm_cell_roles:{ex}")
+    rankings = build_rankings_from_metrics(metrics)
     return {
         "source": source,
         "page": page,
         "scopes": scopes,
         "page_type": page_type,
         "metrics": metrics,
+        "rankings": rankings,
         "table_profiles": table_profiles,
         "tables": [
             {
@@ -653,6 +656,19 @@ def extracts_as_pseudo_docs(
         if not metrics:
             continue
         lines = []
+        rankings = rec.get("rankings") or build_rankings_from_metrics(metrics)
+        for rk in rankings:
+            top = rk.get("top") or {}
+            items = rk.get("items") or []
+            dim = rk.get("dim") or ""
+            if not top or not dim:
+                continue
+            order = " > ".join(
+                f"{it.get('name')}{it.get('pct')}%" for it in items[:6]
+            )
+            lines.append(
+                f"【排名·{dim}】第一名：{top.get('name')} {top.get('pct')}%；次序：{order}"
+            )
         for met in metrics:
             unit = met.get("unit") or ""
             name = met.get("name") or ""

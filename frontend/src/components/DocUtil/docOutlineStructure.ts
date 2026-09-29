@@ -54,13 +54,17 @@ const RE_META = /^[*+\-]\s*(layout|tips|intent|版式|类型|备注|页数)\s*[:
  *  否则会把「2024年男装趋势」剥成「年男装趋势」（与标题丢字 B1 同类错误）。 */
 export const stripDocOutlineOrdinal = (s: string): string =>
   String(s || "")
-    .replace(/^第\s*[一二三四五六七八九十百零〇两\d]+\s*[章节]\s*[：:\-—–．.、]?\s*/u, "")
+    .replace(
+      /^第\s*[一二三四五六七八九十百零〇两\d]+\s*[章节段部分]\s*[：:\-—–．.、]?\s*/u,
+      "",
+    )
     .replace(/^Chapter\s*\d+\s*[:：.\-—–]?\s*/i, "")
     .replace(/^[（(]\s*[一二三四五六七八九十\d]+\s*[)）]\s*/u, "")
     .replace(/^[一二三四五六七八九十]+\s*[、.．]\s*/u, "")
     .replace(/^\d+(?:\.\d+)+\s*[、.．:：\-]?\s*/u, "")
     .replace(/^\d+\s*[、.．:：]\s*/u, "")
     .replace(/^[①②③④⑤⑥⑦⑧⑨⑩]\s*/u, "")
+    .replace(/^(?:[IVXLC]{1,6})\s*[、.．:：\-]?\s*/i, "")
     .trim();
 
 export function parseDocOutlineMarkdown(

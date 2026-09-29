@@ -1440,12 +1440,58 @@ def build_writing_material_pool(
     result = allocate_material_pool(
         specs, pool, max_per_chapter=max_per_chapter, min_per_chapter=1
     )
+    # 7a′：按 chunk 键带出 asset_ids，供前端段级插图清单（替掉全库前 12）
+    key_assets: dict[str, dict[str, Any]] = {}
+    for key, doc in result.key_to_doc.items():
+        meta = doc.get("metadata") or {}
+        source = str(meta.get("source") or "").strip()
+        aids = _sort_asset_ids(meta.get("asset_ids"))
+        if not source or not aids:
+            continue
+        key_assets[key] = {
+            "source": source,
+            "asset_ids": aids,
+            "page": meta.get("page"),
+            "chunk": meta.get("chunk"),
+        }
     return {
         "by_chapter": result.by_chapter,
         "unused": result.unused,
         "pool_size": len(pool),
         "chapter_ids": [sp.chapter_id for sp in specs],
+        "key_assets": key_assets,
     }
+
+
+def _lookup_doc_vectors(
+    knowledge_base_name: str, docs: list[dict]
+) -> list[Optional[np.ndarray]]:
+    """从向量库对齐 embedding；对不上则 None（近重复去重跳过该条）。"""
+    if not docs or knowledge_base_name == ALL_KB_NAME:
+        return [None] * len(docs)
+    try:
+        store = get_store(knowledge_base_name)
+    except Exception:  # noqa: BLE001
+        return [None] * len(docs)
+    emb = getattr(store, "embeddings", None)
+    store_docs = getattr(store, "docs", None) or []
+    if emb is None or len(emb) != len(store_docs):
+        return [None] * len(docs)
+    index: dict[str, int] = {}
+    for i, item in enumerate(store_docs):
+        meta = item.get("metadata") or {}
+        key = f"{meta.get('source')}|{meta.get('chunk')}|{(item.get('page_content') or '')[:48]}"
+        index[key] = i
+    out: list[Optional[np.ndarray]] = []
+    for doc in docs:
+        meta = doc.get("metadata") or {}
+        key = f"{meta.get('source')}|{meta.get('chunk')}|{(doc.get('page_content') or '')[:48]}"
+        idx = index.get(key)
+        if idx is None:
+            out.append(None)
+        else:
+            out.append(np.asarray(emb[idx], dtype=np.float32))
+    return out
 
 
 def retrieve_for_writing(
@@ -1457,6 +1503,8 @@ def retrieve_for_writing(
     source_files: Optional[list[str]] = None,
     retrieval_scope: Optional[str] = None,
     assigned_keys: Optional[list[str]] = None,
+    exclude_keys: Optional[set[str] | list[str]] = None,
+    dedup_report: Optional[dict] = None,
 ) -> tuple[list[dict], str]:
     """先按主题或本页要点检索，再对专名做第二跳，合并去重。
 
@@ -1467,11 +1515,34 @@ def retrieve_for_writing(
     assigned_keys:
       - None：走原检索（默认，防回归）
       - list：任务 4B 消费分配表，不再重新检索（空列表 → 空证据）
+
+    exclude_keys:
+      - None：不做跨调用排除（验收：与无此参数时一致）
+      - set/list：只读过滤，返回键与之无交集（任务 4；调用方持有账本）
     """
+    from app.services.retrieval_dedup import (
+        apply_exclude_keys,
+        dedup_near_duplicate_docs,
+    )
+
+    report: dict[str, Any] = {"excluded": [], "near_dup_dropped": []}
+
+    def _finalize(docs: list[dict]) -> list[dict]:
+        vecs = _lookup_doc_vectors(knowledge_base_name, docs)
+        if any(v is not None for v in vecs):
+            docs = dedup_near_duplicate_docs(
+                docs, vecs, threshold=0.92, report=report
+            )
+        docs = apply_exclude_keys(docs, exclude_keys, report=report)
+        if dedup_report is not None:
+            dedup_report.clear()
+            dedup_report.update(report)
+        return docs
+
     if assigned_keys is not None:
         task, _, _ = plan_writing_retrieval(user_text)
         docs = resolve_docs_by_material_keys(knowledge_base_name, list(assigned_keys))
-        return docs, task
+        return _finalize(docs), task
 
     task, primary, extras = plan_writing_retrieval(user_text)
     if not primary:
@@ -1498,7 +1569,7 @@ def retrieve_for_writing(
     # 问答保持原来的混合检索。大纲和正文改用向量前若干条：
     # 混合排序会把封面、爆款标题页顶上来，真正写到做法的片段虽然余弦过线，也会掉出前几名。
     if task not in ("outline", "slide", "paragraph"):
-        return _search(primary, top_k), task
+        return _finalize(_search(primary, top_k)), task
 
     settings = get_settings()
     # 本页/段落：标题多路向量（去问句尾巴等），再按分数融合，避免口语问句漂到无关段。
@@ -1732,7 +1803,7 @@ def retrieve_for_writing(
 
     limited = merged[: settings.writing_context_limit]
     limited = _apply_source_scope(limited, source_files, retrieval_scope)
-    return limited, task
+    return _finalize(limited), task
 
 
 def _apply_source_scope(
@@ -1816,12 +1887,14 @@ _TASK_SUMMARY = {
         "跨文档补充：定性趋势/营销节点可写；跨文档原数字须在 tip 内标注"
         "「（来源：文档名）」或仅用主文档口径，禁止无来源混入口径窗。\n"
         "tips 数组每个元素一行；禁止在单个 tip 字符串里塞 Markdown 多行列表。\n"
-        "不要输出 [1]/[2] 引用标注（大纲 tips 阶段不需要）。\n"
+        "不要输出 [文档N] 或裸 [N] 引用标注（大纲 tips 阶段不需要）。\n"
     ),
     "paragraph": (
         "【段落摘要】\n"
         "合并全部检索片段，把相关定义、做法和案例写进正文，不要只复述总述。\n"
         "检索没有依据的句子不要写。\n"
+        "若本段属于结论/建议章：数值必须来自前文已写事实，禁止引入检索外新数字；"
+        "建议、预判、取舍类判断句末须标「（推演）」。\n"
     ),
 }
 
@@ -1841,10 +1914,11 @@ def build_rag_system_prompt(
     summary = _TASK_SUMMARY.get(task, "")
     tail = f"\n\n{summary}" if summary else ""
     cite_rule = (
-        "引用规范：大纲 tips 填充阶段不要输出 [1]/[2] 引用标注。\n"
+        "引用规范：大纲 tips 填充阶段不要输出 [文档N] 或裸 [N] 引用标注。\n"
         if task == "outline_slide_fill"
         else (
-            "引用规范：在对应句子末尾使用方括号编号引用，例如 [1] 或 [2][3]，"
+            "引用规范：在对应句子末尾使用检索结果中的方括号编号，且必须写成 [文档1]、[文档2] 这种形式"
+            "（与上文「[文档N] 来源：…」一致）；禁止裸写 [1]、[2]；"
             "不要写「(文档1)」这类文字；不要编造未提供的文档编号。\n"
         )
     )

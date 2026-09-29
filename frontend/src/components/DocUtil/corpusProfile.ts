@@ -33,6 +33,12 @@ export type CorpusCoverageItemDef = {
   requiredIfTopicHints?: string[];
 };
 
+/** OCR / 抽取噪声词替换（任务 6 · 十·6：词表跟画像，不建第三份 config） */
+export type OcrNoiseReplacement = {
+  from: string;
+  to: string;
+};
+
 export type CorpusProfileJson = {
   id: string;
   label?: string;
@@ -46,6 +52,8 @@ export type CorpusProfileJson = {
   priceBandPageHints: string[];
   coverageDetectHints: string[];
   coverageItems: CorpusCoverageItemDef[];
+  /** 可选：正文后处理噪声替换 */
+  ocrNoiseReplacements?: OcrNoiseReplacement[];
 };
 
 export type EntityClass = string;
@@ -68,6 +76,7 @@ export type CompiledCorpusProfile = {
   entityClassWords: Array<{cls: EntityClass; words: string[]; caseInsensitive: boolean}>;
   entityClassLabelZh: Record<string, string>;
   attrAxes: readonly CorpusAttrAxis[];
+  ocrNoiseReplacements: readonly OcrNoiseReplacement[];
 };
 
 function escapeRe(s: string): string {
@@ -139,6 +148,9 @@ export function compileCorpusProfile(raw: CorpusProfileJson): CompiledCorpusProf
     entityClassWords,
     entityClassLabelZh,
     attrAxes: [...(raw.attrAxes || [])],
+    ocrNoiseReplacements: (raw.ocrNoiseReplacements || [])
+      .filter((r) => r && typeof r.from === "string" && r.from.length > 0)
+      .map((r) => ({from: String(r.from), to: String(r.to ?? "")})),
   };
 }
 
@@ -223,6 +235,10 @@ export function getEntityClassWords(): CompiledCorpusProfile["entityClassWords"]
 
 export function getEntityClassLabelZh(): Record<string, string> {
   return active.entityClassLabelZh;
+}
+
+export function getOcrNoiseReplacements(): readonly OcrNoiseReplacement[] {
+  return active.ocrNoiseReplacements;
 }
 
 /** 去掉份额附属语后再判是否点名大盘总盘口径 */

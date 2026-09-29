@@ -644,7 +644,8 @@ _ATTR_AXIS_LABELS: dict[str, frozenset[str]] = {
     "图案": frozenset({"纯色", "几何图案", "条纹", "字母", "动物图案"}),
     "厚薄": frozenset({"薄款", "厚款", "加厚", "超薄"}),
     "袖型": frozenset(
-        {"落肩袖", "灯笼袖", "常规袖", "插肩袖", "短袖", "长袖"}
+        # 「常规」为 OCR 常截断形（缺「袖」）；与「常规袖」并存时由 rankings 去重保高 pct
+        {"落肩袖", "灯笼袖", "常规袖", "常规", "插肩袖", "短袖", "长袖"}
     ),
 }
 _ATTR_AXIS_HEADING_RE = re.compile(
@@ -657,6 +658,64 @@ def _attr_axis_of_label(label: str) -> Optional[str]:
         if label in labs:
             return axis
     return None
+
+
+def _dedupe_ranking_label_items(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """同轴内标签互相包含时只保留更高 pct（常规 79.76 压掉 常规袖 1.50）。"""
+    ordered = sorted(
+        items, key=lambda x: (-float(x.get("pct") or 0), str(x.get("name") or ""))
+    )
+    kept: list[dict[str, Any]] = []
+    for it in ordered:
+        name = str(it.get("name") or "")
+        if not name:
+            continue
+        if any(k["name"] == name for k in kept):
+            continue
+        if any(
+            name != k["name"] and (name in k["name"] or k["name"] in name)
+            for k in kept
+        ):
+            continue
+        kept.append({"name": name, "pct": float(it["pct"])})
+    return kept
+
+
+def build_rankings_from_metrics(
+    metrics: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """任务 3 第 2 步：从已有属性指标聚合成排序 JSON（不另起 OCR 产物）。
+
+    形如 {dim, items:[{name,pct}…按 pct 降序], top}。
+    """
+    by_dim: dict[str, list[dict[str, Any]]] = {}
+    for m in metrics or []:
+        unit = str(m.get("unit") or "").replace("％", "%")
+        if unit != "%":
+            continue
+        label = str(m.get("attr_label") or "").strip()
+        if not label:
+            continue
+        try:
+            pct = float(str(m.get("value") or "").replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        dim = str(m.get("axis") or "").strip() or (_attr_axis_of_label(label) or "")
+        if not dim:
+            continue
+        by_dim.setdefault(dim, []).append({"name": label, "pct": pct})
+
+    out: list[dict[str, Any]] = []
+    for dim, items in by_dim.items():
+        merged = _dedupe_ranking_label_items(items)
+        merged.sort(key=lambda x: (-x["pct"], x["name"]))
+        if len(merged) < 2:
+            continue
+        out.append({"dim": dim, "items": merged, "top": dict(merged[0])})
+    out.sort(key=lambda r: r["dim"])
+    return out
 
 
 def metrics_from_attribute_prose(

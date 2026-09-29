@@ -88,5 +88,8 @@
       "titleHints": ["属性", "面料", "款式", "图案", "颜色", "卖点"],
       "required": true
     }
+  ],
+  "ocrNoiseReplacements": [
+    {"from": "激情增高", "to": "热情提升"}
   ]
 }

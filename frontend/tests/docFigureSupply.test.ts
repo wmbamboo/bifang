@@ -3,6 +3,8 @@
  */
 import {
   buildFigureAssetAppendix,
+  countUnresolvedFigures,
+  figureAssetsFromAssignedKeys,
   figureAssetsFromKbDocs,
   formatKbAssetRef,
 } from "@/components/DocUtil/docFigureAssets";
@@ -44,6 +46,45 @@ describe("docFigureAssets", () => {
     expect(formatKbAssetRef(assets[0].fileName, assets[0].assetId)).toBe(
       "kb:a.docx/elements/x.png",
     );
+  });
+
+  it("7a′ 按 assigned keys 段级筛资产，不取未分配键", () => {
+    const keyAssets = {
+      "服装|a.pdf|1": {
+        source: "a.pdf",
+        asset_ids: ["elements/p1.png", "elements/p1b.png"],
+        page: 1,
+      },
+      "服装|b.pdf|2": {
+        source: "b.pdf",
+        asset_ids: ["elements/p2.png"],
+        page: 2,
+      },
+    };
+    const got = figureAssetsFromAssignedKeys(
+      ["服装|a.pdf|1"],
+      keyAssets,
+      6,
+    );
+    expect(got.map((x) => x.assetId)).toEqual([
+      "elements/p1.png",
+      "elements/p1b.png",
+    ]);
+    expect(got.every((x) => x.fileName === "a.pdf")).toBe(true);
+    expect(figureAssetsFromAssignedKeys([], keyAssets)).toEqual([]);
+    expect(
+      buildFigureAssetAppendix(got),
+    ).toContain("kb:a.pdf/elements/p1.png");
+  });
+
+  it("7c′ countUnresolvedFigures", () => {
+    expect(
+      countUnresolvedFigures([
+        [{kind: "figure"}, {kind: "figure-missing"}],
+        null,
+        [{kind: "table"}],
+      ]),
+    ).toBe(1);
   });
 });
 

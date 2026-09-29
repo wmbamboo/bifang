@@ -5,6 +5,18 @@
 
 import manifestJson from './template-manifest.json';
 
+export type ManifestUnit = {
+  axis: 'x' | 'y' | 'grid' | string;
+  band?: number[];
+  proto?: string;
+  unitSize?: number[];
+  pitch?: number;
+  minN?: number;
+  maxN?: number;
+  fontLadder?: Record<string, number>;
+  align?: 'stretch' | 'fixed' | string;
+};
+
 export type ManifestPage = {
   page: number;
   layout: string;
@@ -13,6 +25,8 @@ export type ManifestPage = {
   rows?: number;
   lists?: number;
   skin?: number;
+  unitKind?: string;
+  unit?: ManifestUnit;
   slots?: string[];
 };
 
@@ -81,9 +95,18 @@ export function resolveTemplatePage(
 
   if (layout === 'list') {
     const n = clamp(itemCounts, 3);
-    // 整份锁定 skin0（页 6–8）
+    // 整份锁定 skin0（页 15–17）
     const hit = find(
       (p) => p.layout === 'list' && (p.cards || 0) === n && !p.skin,
+    );
+    return { page: hit?.page || 15 + (n - 3) };
+  }
+
+  // progress：页 6–14，3 类型 × 3/4/5；与 list 同槽形，语义为有向序列
+  if (layout === 'progress') {
+    const n = clamp(itemCounts, 3);
+    const hit = find(
+      (p) => p.layout === 'progress' && (p.cards || 0) === n && !p.skin,
     );
     return { page: hit?.page || 6 + (n - 3) };
   }
@@ -91,13 +114,13 @@ export function resolveTemplatePage(
   if (layout === 'metric') {
     const n = clamp(itemCounts, 3);
     const hit = find((p) => p.layout === 'metric' && (p.cards || 0) === n);
-    return { page: hit?.page || 24 + (n - 2) };
+    return { page: hit?.page || 27 + (n - 2) };
   }
 
   if (layout === 'columns') {
     const n = clamp(itemCounts, 2);
     const hit = find((p) => p.layout === 'columns' && (p.cols || 0) === n);
-    return { page: hit?.page || 28 + (n - 2) };
+    return { page: hit?.page || 31 + (n - 2) };
   }
 
   if (layout === 'metric_columns') {
@@ -131,7 +154,7 @@ export function resolveTemplatePage(
     if (listHit) {
       return { page: listHit.page, downgraded: 'metric_columns→metric_list' };
     }
-    return { page: 32 + (m - 2), downgraded: 'metric_columns fallback' };
+    return { page: 35 + (m - 2), downgraded: 'metric_columns fallback' };
   }
 
   if (layout === 'metric_list') {
@@ -154,13 +177,13 @@ export function resolveTemplatePage(
       );
       if (hit) return { page: hit.page, downgraded: 'metric_list→2要点' };
     }
-    return { page: 37 + (m - 2) };
+    return { page: 40 + (m - 2) };
   }
 
   if (layout === 'table') {
     // 表格有 5×4 / 6×4 / 6×5 / 8×5 四种规格，按数据行列取「最小够用」
     const tables = pages.filter((p) => p.layout === 'table');
-    if (!tables.length) return { page: 42 };
+    if (!tables.length) return { page: 45 };
     const spec = (p: ManifestPage) => ({ r: p.rows || 5, c: p.cols || 4 });
     const r = Math.max(2, Math.min(8, itemCounts ? Math.round(itemCounts) : 5));
     const c = Math.max(2, Math.min(5, colCounts ? Math.round(colCounts) : 4));
@@ -194,7 +217,7 @@ export function resolveTemplatePage(
 
   if (layout === 'image_grid') {
     const hit = find((p) => p.layout === 'image_grid');
-    return { page: hit?.page || 43 };
+    return { page: hit?.page || 49 };
   }
 
   return { page: 0 };

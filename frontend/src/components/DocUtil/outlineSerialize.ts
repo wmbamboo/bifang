@@ -13,10 +13,11 @@ import {
 } from "@/components/DocUtil/ViewItem4Ppt";
 
 function normalizeLayout(layout: SlideLayout | string | undefined): SlideLayout {
-  if (
+    if (
     layout === "metric" ||
     layout === "metric_list" ||
     layout === "list" ||
+    layout === "progress" ||
     layout === "columns" ||
     layout === "metric_columns" ||
     layout === "table" ||
@@ -131,6 +132,7 @@ export function refreshSlideLayouts(chapters: Chapter[]): Chapter[] {
       if (
         slide.layout === "metric" ||
         slide.layout === "list" ||
+        slide.layout === "progress" ||
         slide.layout === "metric_list" ||
         slide.layout === "columns" ||
         slide.layout === "metric_columns"

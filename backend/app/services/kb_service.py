@@ -435,6 +435,36 @@ def _extract_pdf_image_assets(
     return out
 
 
+_ELEM_ASSET_NAME_RE = re.compile(
+    r"^(?P<stem>.+)_p(?P<page>\d+)_(?P<kind>img|chart)(?P<idx>\d+)\.(?P<ext>png|jpe?g|webp)$",
+    re.I,
+)
+
+
+def _element_asset_sort_key(path: Path) -> tuple[int, str, int, str]:
+    """自然序：(页号, 类型, 序号)——避免字符串排序把 img10 插到 img2 前。"""
+    m = _ELEM_ASSET_NAME_RE.match(path.name)
+    if not m:
+        return (10**9, path.name, 0, path.name)
+    return (
+        int(m.group("page")),
+        m.group("kind").lower(),
+        int(m.group("idx")),
+        path.name,
+    )
+
+
+def _image_wh(path: Path) -> tuple[Optional[int], Optional[int]]:
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            w, h = im.size
+            return int(w), int(h)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 def _collect_element_asset_ids(assets_dir: Path, file_stem: str) -> dict[int, list[str]]:
     """扫描 OCR 内联裁切产物 elements/<stem>_pN_imgK.png / _chartK.png。"""
     out: dict[int, list[str]] = {}
@@ -445,7 +475,12 @@ def _collect_element_asset_ids(assets_dir: Path, file_stem: str) -> dict[int, li
         rf"^{re.escape(file_stem)}_p(\d+)_(img|chart)(\d+)\.png$",
         re.I,
     )
-    for p in sorted(elem.glob(f"{file_stem}_p*_*.png")):
+    paths = [
+        p
+        for p in elem.glob(f"{file_stem}_p*_*.png")
+        if pat.match(p.name)
+    ]
+    for p in sorted(paths, key=_element_asset_sort_key):
         m = pat.match(p.name)
         if not m:
             continue
@@ -535,9 +570,10 @@ def list_doc_assets(
                 rf"^{re.escape(stem)}_p(\d+)_(img|chart)(\d+)\.(png|jpe?g|webp)$",
                 re.I,
             )
-            for p in sorted(elem.iterdir()):
-                if not p.is_file():
-                    continue
+            elem_files = [
+                p for p in elem.iterdir() if p.is_file() and pat.match(p.name)
+            ]
+            for p in sorted(elem_files, key=_element_asset_sort_key):
                 m = pat.match(p.name)
                 if not m:
                     continue
@@ -546,22 +582,25 @@ def list_doc_assets(
                     continue
                 page_no = int(m.group(1))
                 asset_id = f"elements/{p.name}"
-                rows.append(
-                    {
-                        "kb_name": kb_name,
-                        "doc": stem,
-                        "file_name": f"{stem}.pdf",
-                        "asset_id": asset_id,
-                        "page": page_no,
-                        "kind": kind,
-                        "idx": int(m.group(3)),
-                        "snippet": page_snip.get(page_no, ""),
-                        "url": (
-                            f"/knowledge_base/asset_file?knowledge_base_name={kb_name}"
-                            f"&file_name={stem}.pdf&asset_id={asset_id}"
-                        ),
-                    }
-                )
+                w, h = _image_wh(p)
+                row: dict = {
+                    "kb_name": kb_name,
+                    "doc": stem,
+                    "file_name": f"{stem}.pdf",
+                    "asset_id": asset_id,
+                    "page": page_no,
+                    "kind": kind,
+                    "idx": int(m.group(3)),
+                    "snippet": page_snip.get(page_no, ""),
+                    "url": (
+                        f"/knowledge_base/asset_file?knowledge_base_name={kb_name}"
+                        f"&file_name={stem}.pdf&asset_id={asset_id}"
+                    ),
+                }
+                if w and h:
+                    row["w"] = w
+                    row["h"] = h
+                rows.append(row)
         whole = adir / "whole"
         if whole.is_dir() and "whole" in want:
             for p in sorted(whole.glob("page_*.*")):
@@ -611,6 +650,31 @@ def list_doc_assets(
     return ok(rows)
 
 
+def normalize_asset_id(asset_id: str) -> list[str]:
+    """asset_id 候选：相对 assets/<doc>/ 的路径。
+
+    历史回填可能是裸文件名（``stem_p2_0.png``），新流水线是 ``elements/...``；
+    取图时按候选依次尝试，避免 404 静默丢图。
+    """
+    rel = (asset_id or "").replace("\\", "/").lstrip("/")
+    if not rel or ".." in rel.split("/"):
+        return []
+    out = [rel]
+    name = Path(rel).name
+    if "/" not in rel:
+        out.extend([f"elements/{name}", f"whole/{name}"])
+    elif rel.startswith("elements/"):
+        out.append(name)
+    # 去重保序
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for c in out:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
+
 def resolve_asset_path(kb_name: str, file_name: str, asset_id: str) -> Optional[Path]:
     """解析 asset_id 到绝对路径；拒绝路径穿越。"""
     if not kb_name or not asset_id:
@@ -623,16 +687,16 @@ def resolve_asset_path(kb_name: str, file_name: str, asset_id: str) -> Optional[
     # stem=".." 时 Path 会退到 assets 上一级（库目录），可读任意文件
     if not stem or ".." in stem or "/" in stem or "\\" in stem:
         return None
-    rel = asset_id.replace("\\", "/").lstrip("/")
-    if ".." in rel.split("/"):
-        return None
     base = (get_settings().kb_root / kb_name / "assets" / stem).resolve()
-    path = (base / rel).resolve()
-    try:
-        path.relative_to(base)
-    except ValueError:
-        return None
-    return path if path.is_file() else None
+    for rel in normalize_asset_id(asset_id):
+        path = (base / rel).resolve()
+        try:
+            path.relative_to(base)
+        except ValueError:
+            continue
+        if path.is_file():
+            return path
+    return None
 
 
 def vectorize_files(
@@ -830,6 +894,16 @@ def search_cross_kb_docs(
     return all_docs[:top_k]
 
 
+def _sort_asset_ids(asset_ids: Optional[list[str]]) -> list[str]:
+    """出口再排一次自然序，兼容库内旧 metadata（字符串排序残留）。"""
+    if not asset_ids:
+        return []
+    return sorted(
+        asset_ids,
+        key=lambda aid: _element_asset_sort_key(Path(str(aid))),
+    )
+
+
 def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
     contexts = []
     ref_docs = []
@@ -845,10 +919,12 @@ def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
         loc = f" 片段{chunk_id}" if chunk_id is not None else ""
         if page is not None:
             loc += f" 第{page}页"
-        # 同 chunk 边界标记，供前端数值+实体同块校验（含源文档）
+        asset_ids = _sort_asset_ids(meta.get("asset_ids"))
+        assets_part = f"|assets:{','.join(asset_ids)}" if asset_ids else ""
+        # 同 chunk 边界标记，供前端数值+实体同块校验（含源文档与附图）
         head = (
             f"⟦chunk:{chunk_id}|page:{page if page is not None else ''}"
-            f"|src:{source}⟧"
+            f"|src:{source}{assets_part}⟧"
         )
         contexts.append(f"[文档{i}] 来源：{source}{loc}\n{head}\n{content}")
         ref_docs.append(
@@ -859,7 +935,7 @@ def format_docs_for_prompt(docs: list[dict]) -> tuple[str, list[dict]]:
                 "kb_name": kb_name,
                 "chunk_id": chunk_id,
                 "page": page,
-                "asset_ids": meta.get("asset_ids"),
+                "asset_ids": asset_ids or None,
                 "kind": meta.get("kind"),
                 "snippet": snippet,
                 "content": content,
@@ -1245,6 +1321,133 @@ def _expand_neighbors(docs: list[dict], *, previous: bool, limit_parents: int = 
     return out
 
 
+def resolve_docs_by_material_keys(
+    knowledge_base_name: str, keys: list[str]
+) -> list[dict]:
+    """按材料池稳定键从向量库取回片段（任务 4B 阶段 3 消费分配结果）。"""
+    from app.services.material_pool import stable_material_key
+
+    if not keys:
+        return []
+    wanted = [str(k) for k in keys if str(k).strip()]
+    if not wanted:
+        return []
+    order = {k: i for i, k in enumerate(wanted)}
+    found: dict[str, dict] = {}
+    if knowledge_base_name == ALL_KB_NAME:
+        stores = list(_stores.items())
+    else:
+        stores = [(knowledge_base_name, get_store(knowledge_base_name))]
+    for kb, store in stores:
+        for item in getattr(store, "docs", []) or []:
+            meta = dict(item.get("metadata") or {})
+            meta.setdefault("kb_name", kb)
+            doc = {
+                "page_content": item.get("page_content", ""),
+                "metadata": meta,
+                "score": item.get("score"),
+                "vector_score": item.get("vector_score"),
+            }
+            key = stable_material_key(doc)
+            if key in order and key not in found:
+                found[key] = doc
+    return [found[k] for k in wanted if k in found]
+
+
+def build_writing_material_pool(
+    topic: str,
+    knowledge_base_name: str,
+    chapters: list[dict],
+    *,
+    pool_size: int = 250,
+    max_per_chapter: int = 8,
+    score_threshold: Optional[float] = None,
+) -> dict[str, Any]:
+    """阶段 1+2：宽召回建池 + 互斥分配（任务 4B / 方案 B）。
+
+    chapters: [{id, title, points?}, ...]
+    返回 {by_chapter, unused, pool_size}；不写模块级缓存。
+    """
+    from app.services.material_pool import (
+        ChapterSpec,
+        allocate_material_pool,
+        stable_material_key,
+    )
+
+    specs: list[ChapterSpec] = []
+    for i, raw in enumerate(chapters or []):
+        if not isinstance(raw, dict):
+            continue
+        cid = str(raw.get("id") or raw.get("chapter_id") or f"chapter-{i}")
+        title = str(raw.get("title") or "").strip()
+        points_raw = raw.get("points") or []
+        points = (
+            [str(p).strip() for p in points_raw if str(p).strip()]
+            if isinstance(points_raw, list)
+            else []
+        )
+        if not title and not points:
+            continue
+        specs.append(ChapterSpec(chapter_id=cid, title=title or cid, points=points))
+
+    settings = get_settings()
+    thr = (
+        settings.default_score_threshold
+        if score_threshold is None
+        else float(score_threshold)
+    )
+    per_q = max(20, min(80, pool_size // max(1, len(specs) + 1)))
+    queries: list[str] = []
+    t = _clean_query(topic or "", 120)
+    if t:
+        queries.append(t)
+    for sp in specs:
+        q = _clean_query(sp.title, 80)
+        if q and q not in queries:
+            queries.append(q)
+
+    merged: dict[str, dict] = {}
+    all_kb = knowledge_base_name == ALL_KB_NAME
+    for q in queries:
+        if all_kb:
+            hits = search_cross_kb_docs(
+                q, [], top_k=per_q, score_threshold=thr, mode="vector"
+            )
+        else:
+            hits = search_docs(
+                q,
+                knowledge_base_name,
+                top_k=per_q,
+                score_threshold=thr,
+                mode="vector",
+            )
+        for doc in hits:
+            key = stable_material_key(doc)
+            prev = merged.get(key)
+            score = float(doc.get("vector_score") or doc.get("score") or 0.0)
+            if prev is None or score > float(
+                prev.get("vector_score") or prev.get("score") or 0.0
+            ):
+                merged[key] = doc
+        if len(merged) >= pool_size:
+            break
+
+    pool = sorted(
+        merged.values(),
+        key=lambda d: float(d.get("vector_score") or d.get("score") or 0.0),
+        reverse=True,
+    )[:pool_size]
+    result = allocate_material_pool(
+        specs, pool, max_per_chapter=max_per_chapter, min_per_chapter=1
+    )
+    return {
+        "by_chapter": result.by_chapter,
+        "unused": result.unused,
+        "pool_size": len(pool),
+        "chapter_ids": [sp.chapter_id for sp in specs],
+    }
+
+
 def retrieve_for_writing(
     user_text: str,
     knowledge_base_name: str,
@@ -1253,13 +1456,23 @@ def retrieve_for_writing(
     mode: Optional[str] = None,
     source_files: Optional[list[str]] = None,
     retrieval_scope: Optional[str] = None,
+    assigned_keys: Optional[list[str]] = None,
 ) -> tuple[list[dict], str]:
     """先按主题或本页要点检索，再对专名做第二跳，合并去重。
 
     retrieval_scope:
       - bound_only：只保留 source_files 内文档
       - kb_supplement / 空：不按文件硬过滤（可带 source 标记）
+
+    assigned_keys:
+      - None：走原检索（默认，防回归）
+      - list：任务 4B 消费分配表，不再重新检索（空列表 → 空证据）
     """
+    if assigned_keys is not None:
+        task, _, _ = plan_writing_retrieval(user_text)
+        docs = resolve_docs_by_material_keys(knowledge_base_name, list(assigned_keys))
+        return docs, task
+
     task, primary, extras = plan_writing_retrieval(user_text)
     if not primary:
         primary = _clean_query(user_text, 200)

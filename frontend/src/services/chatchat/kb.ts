@@ -127,6 +127,9 @@ export type KbAssetItem = {
   url: string;
   /** 页级文案摘要，供图鉴文案对齐 */
   snippet?: string;
+  /** 像素宽高（list_assets 出口） */
+  w?: number;
+  h?: number;
 };
 
 /** 列出库内元素图（默认 image+chart） */
@@ -143,6 +146,42 @@ export async function listAssets(params: {
       kinds: params.kinds || 'image,chart',
     },
   });
+}
+
+/** 任务 4B：材料池互斥分配（方案 B 新端点） */
+export type MaterialPoolChapter = {
+  id: string;
+  title: string;
+  points?: string[];
+};
+
+export type MaterialPoolAllocateResult = {
+  by_chapter: Record<string, string[]>;
+  unused: string[];
+  pool_size: number;
+  chapter_ids: string[];
+};
+
+export async function allocateMaterialPool(params: {
+  knowledge_base_name: string;
+  topic: string;
+  chapters: MaterialPoolChapter[];
+  pool_size?: number;
+  max_per_chapter?: number;
+}) {
+  return request<KBResponse<MaterialPoolAllocateResult>>(
+    `/knowledge_base/material_pool/allocate`,
+    {
+      method: 'POST',
+      data: {
+        knowledge_base_name: params.knowledge_base_name,
+        topic: params.topic,
+        chapters: params.chapters,
+        pool_size: params.pool_size ?? 250,
+        max_per_chapter: params.max_per_chapter ?? 8,
+      },
+    },
+  );
 }
 
 /** 拉取单张资产为 ArrayBuffer（灌模用） */

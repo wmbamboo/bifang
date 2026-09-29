@@ -87,6 +87,11 @@ export class ViewItem4Doc {
     // }
 }
 
+/** Word 段落级表/图块（七·3）；对应大纲 ```table / ```figure */
+export type DocBlock =
+  | {kind: "table"; caption: string; rows: string[][]}
+  | {kind: "figure"; assetRef: string; caption: string};
+
 export class Paragraph{
   /** 段落条目在章节层级中的索引，不是总索引 **/
   index:number;
@@ -98,8 +103,10 @@ export class Paragraph{
   label:string;
   prompt:string="";
   content:string="";
-  // viewItems:Array<ViewItem4Ppt>=new Array<ViewItem4Ppt>(); //word中没用**/
-
+  /** 段落级表/图块；默认空 → 存量大纲零回归 */
+  blocks: DocBlock[] = [];
+  /** ### → true；* + - → false（八·3：额度只算 heading） */
+  heading: boolean = false;
 
   constructor(index:number, title:string,subTitle?:string) {
     this.index = index;
@@ -190,6 +197,242 @@ export class Chapter {
 
 }*/
 
+/**
+ * 文章段落写作契约（对齐 PPT format prompt 角色，输出散文而非编号行）。
+ * 七·3 围栏 + 九·4 可判定表/图判据。
+ */
+export function buildDocParagraphFormatPrompt(): string {
+  return (
+    '\n\n【输出格式·文章段落】\n' +
+    '直接输出约 200～400 字连贯正文，可分 1～3 个自然段。\n' +
+    '禁止「1. 标题 - 描述」编号清单；禁止只写 bullet 列表替代正文。\n' +
+    '禁止以「根据知识库」「材料显示」「综上所述」等套话开头或结尾。\n' +
+    '数字与专名须可溯；材料没有的数据禁止编造。\n' +
+    '\n【表·须同时满足才可追加 ```table】\n' +
+    '- 材料里同一组字段被复述给 ≥2 个对象（品类×指标、价格带×销量、时段×值等）；\n' +
+    '- 该组 ≥2 行 × ≥2 列，且行与行同质可比；\n' +
+    '- 反例（不要出表）：① 只有 1 个对象；② 只是把正文已列数字再抄一遍；③ 为一句结论配表。\n' +
+    '- 表格 ≤8 行 × 5 列。\n' +
+    '\n【图·须同时满足才可追加 ```figure】\n' +
+    '- 本段对象在【可用插图资产】里有对应条目，且 ref 只能原样复制清单字符串；\n' +
+    '- 该图就在本段上下文（不是别段的对象）；一段最多 1 张图；\n' +
+    '- 清单为空或未提供【可用插图资产】→ **禁止**写 figure。\n' +
+    '\n【围栏格式】表/图紧跟正文之后：\n' +
+    '```table\ncaption: 表题\n| 列1 | 列2 |\n| 值 | 值 |\n```\n' +
+    '```figure\nref: kb:文档名/相对路径\ncaption: 图题\n```\n'
+  );
+}
+
+/** 末章是否像结论/建议（十一·3 / 9.3） */
+export const DOC_CONCLUSION_CHAPTER_RE =
+  /结论|建议|动作|取舍|下一步|筛选与打法/;
+
+/** 从文章标题推断写作岗位；空串表示不注入人设（勿默认「读者」） */
+export function inferDocWritingRole(title: string): string {
+  const t = title || "";
+  if (/选品/.test(t)) return "选品师";
+  if (/运营/.test(t)) return "运营";
+  if (/汇报|领导|管理层/.test(t)) return "管理者";
+  return "";
+}
+
+/** 段落写作上下文（十一·3 / 9.1） */
+export type DocParagraphPromptCtx = {
+  /** 岗位；缺省则按标题推断 */
+  role?: string;
+};
+
+/**
+ * 本地无大纲时的种子样例：### 段落 + 结论章（替换遗留 * 1.1 / 六章无关总结，十一·2）。
+ */
+export const DOC_OUTLINE_MARKDOWN_INIT =
+  "# 抖音男装选品要点\n\n" +
+  "## 大盘与类目机会\n\n" +
+  "### 规模与增速\n\n" +
+  "### 机会赛道概览\n\n" +
+  "## 证据与货盘对照\n\n" +
+  "### 热销结构\n\n" +
+  "### 价格带与客群\n\n" +
+  "## 风险与不选什么\n\n" +
+  "### 高风险信号\n\n" +
+  "### 明确不选清单\n\n" +
+  "## 选品结论与动作\n\n" +
+  "### 优先跟进方向\n\n" +
+  "### 近两周动作\n";
+
+const TABLE_FENCE = /^```\s*table\s*$/i;
+const FIGURE_FENCE = /^```\s*figure\s*$/i;
+const FENCE_END = /^```\s*$/;
+const TABLE_SEP = /^\|?[\s:\-|]+ \|/;
+/** PPT 元数据行：不进 Word 段落（八·2） */
+export const DOC_META_LINE =
+  /^[*+\-]\s*(layout|tips|intent|版式|类型|备注|页数)\s*[:：]/i;
+
+/** 保存前剥离大纲中的 PPT 风格元数据行 */
+export function stripDocOutlineMetaLines(content: string): string {
+  return (content || "")
+    .split("\n")
+    .filter((line) => !DOC_META_LINE.test(line.trim()))
+    .join("\n");
+}
+
+/**
+ * 一键规范化：去元数据行，并把章下 `* + -` 要点升为 `### `（八·6）。
+ * 不改 ## / # / 已是 ### 的行；不碰围栏内。
+ */
+export function normalizeDocOutlineMarkdown(content: string): string {
+  const stripped = stripDocOutlineMetaLines(content);
+  const lines = stripped.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    const t = line.trim();
+    if (/^```/.test(t)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    const bullet = t.match(/^[*+\-]\s+(.+)$/);
+    if (bullet && !DOC_META_LINE.test(t) && !/^###?\s/.test(t)) {
+      out.push(`### ${bullet[1].trim()}`);
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
+/** 大纲是否「看起来有章但段落标记不规范」（气泡 Warn，八·6） */
+export function docOutlineNeedsNormalizeHint(markdown: string): boolean {
+  const raw = markdown || "";
+  if (!raw.includes("## ")) return false;
+  if (raw.split("\n").some((l) => DOC_META_LINE.test(l.trim()))) return true;
+  const hasHeading = /^###\s+/m.test(raw);
+  const hasBullet = /^[*+\-]\s+/m.test(raw);
+  return !hasHeading && hasBullet;
+}
+
+function splitTableRow(line: string): string[] {
+  return line
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim());
+}
+
+function isTableSepLine(line: string): boolean {
+  const t = line.trim();
+  if (!t.includes("|")) return false;
+  const cells = splitTableRow(t);
+  return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c) || c === "");
+}
+
+/** 从已生成正文剥离 ```table/figure 并入 paragraph.blocks，返回清洁正文 */
+export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
+  const lines = (paragraph.content || "").split("\n");
+  const out: string[] = [];
+  let state: "normal" | "table" | "figure" | "unknown" = "normal";
+  let buf: string[] = [];
+  const flush = () => {
+    if (state === "table") {
+      const block = parseTableFenceLines(buf);
+      if (block) paragraph.blocks.push(block);
+    } else if (state === "figure") {
+      const block = parseFigureFenceLines(buf);
+      if (block) paragraph.blocks.push(block);
+    }
+    buf = [];
+    state = "normal";
+  };
+  for (const line of lines) {
+    const t = line.trim();
+    if (state === "normal") {
+      if (TABLE_FENCE.test(t)) {
+        state = "table";
+        buf = [];
+        continue;
+      }
+      if (FIGURE_FENCE.test(t)) {
+        state = "figure";
+        buf = [];
+        continue;
+      }
+      if (/^```/.test(t)) {
+        state = "unknown";
+        buf = [];
+        continue;
+      }
+      out.push(line);
+      continue;
+    }
+    if (FENCE_END.test(t)) {
+      flush();
+      continue;
+    }
+    if (state !== "unknown") buf.push(line);
+  }
+  if (state !== "normal") flush();
+  const plain = out.join("\n").trim();
+  paragraph.content = plain;
+  return plain;
+}
+
+function parseTableFenceLines(lines: string[]): DocBlock | null {
+  let caption = "";
+  const rows: string[][] = [];
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) continue;
+    const cap = t.match(/^caption\s*[:：]\s*(.+)$/i);
+    if (cap) {
+      caption = cap[1].trim();
+      continue;
+    }
+    if (isTableSepLine(t) || TABLE_SEP.test(t)) continue;
+    if (t.includes("|")) {
+      const parts = splitTableRow(t);
+      if (parts.length) rows.push(parts);
+    }
+  }
+  if (!rows.length) return null;
+  // 防御性截断：≤8 行 × 5 列
+  const cols = Math.min(5, Math.max(...rows.map((r) => r.length)));
+  const clipped = rows.slice(0, 8).map((r) => {
+    const padded = [...r];
+    while (padded.length < cols) padded.push("");
+    return padded.slice(0, cols);
+  });
+  if (rows.length > 8 || Math.max(...rows.map((r) => r.length), 0) > 5) {
+    if (!/截断/.test(caption)) caption = `${caption || "表"}（表已截断）`;
+  }
+  return {kind: "table", caption, rows: clipped};
+}
+
+function parseFigureFenceLines(lines: string[]): DocBlock | null {
+  let caption = "";
+  let assetRef = "";
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) continue;
+    const cap = t.match(/^(?:caption|图)\s*[:：]\s*(.+)$/i);
+    if (cap) {
+      caption = cap[1].trim();
+      continue;
+    }
+    const ref = t.match(/^(?:ref|assetRef|asset)\s*[:：]\s*(.+)$/i);
+    if (ref) {
+      assetRef = ref[1].trim();
+      continue;
+    }
+  }
+  if (!assetRef && !caption) return null;
+  return {kind: "figure", assetRef, caption};
+}
+
 export class Doc{
   title:string;
   chapters:Array<Chapter>;
@@ -252,54 +495,93 @@ export class Doc{
   }
 
   /**
-   * 从大纲内容中获取DOC大纲内容。
-   * @param content
-   * @return Chpater[] 数组
+   * 从大纲内容中获取 DOC 章/段树；状态机优先识别 ```table/figure，
+   * 避免表格行被 paragraphRegex2（`|*+-`）误收成假段落（七·3）。
    */
   static getChaptersFromContent(content:string):Chapter[]{
     const chapters: Chapter[] = [];
     let currentChapter: Chapter | null = null;
+    let currentParagraph: Paragraph | null = null;
 
-    // 使用正则表达式匹配章节标题、段落标题
     const chapterRegex = /^## (.+)$/;
     const paragraphRegex1 = /^### (.+)$/;
     const paragraphRegex2 = /^[*|+-] (.+)$/;
 
-    // 按行分割markdown文本
     const lines = content.split('\n');
     let chapterIndex=1;
     let paragraphIndex=1;
+    let state: "normal" | "table" | "figure" | "unknown" = "normal";
+    let fenceBuf: string[] = [];
+
+    const flushFence = () => {
+      if (state === "table" || state === "figure") {
+        const block =
+          state === "table"
+            ? parseTableFenceLines(fenceBuf)
+            : parseFigureFenceLines(fenceBuf);
+        if (block && currentParagraph) {
+          currentParagraph.blocks.push(block);
+        }
+      }
+      fenceBuf = [];
+      state = "normal";
+    };
+
     for (const line of lines) {
-      const chapterMatch = line.trim().match(chapterRegex);
-      const paragraphMatch1 = line.trim().match(paragraphRegex1);
-      const paragraphMatch2 = line.trim().match(paragraphRegex2);
-      // const subtitleMatch = line.trim().match(subtitleRegex);
+      const trimmed = line.trim();
+      if (state !== "normal") {
+        if (FENCE_END.test(trimmed)) {
+          flushFence();
+        } else if (state !== "unknown") {
+          fenceBuf.push(line);
+        }
+        continue;
+      }
+      if (TABLE_FENCE.test(trimmed)) {
+        state = "table";
+        fenceBuf = [];
+        continue;
+      }
+      if (FIGURE_FENCE.test(trimmed)) {
+        state = "figure";
+        fenceBuf = [];
+        continue;
+      }
+      if (/^```/.test(trimmed)) {
+        // 孤立/未知围栏：吞掉直到闭合，不参与段落识别
+        state = "unknown";
+        fenceBuf = [];
+        continue;
+      }
+      // PPT 元数据行：永不产生段落（八·2）
+      if (DOC_META_LINE.test(trimmed)) continue;
+
+      const chapterMatch = trimmed.match(chapterRegex);
+      const paragraphMatch1 = trimmed.match(paragraphRegex1);
+      const paragraphMatch2 = trimmed.match(paragraphRegex2);
 
       if (chapterMatch) {
-        // 如果找到新章节,保存当前章节并创建新章节
         if (currentChapter) {
           chapters.push(currentChapter);
         }
-        const chapterTitle=chapterMatch[1]
-        currentChapter = new Chapter(chapterIndex,cleanString(chapterTitle));
+        currentChapter = new Chapter(chapterIndex, cleanString(chapterMatch[1]));
+        currentParagraph = null;
         chapterIndex++;
-      } else if ((paragraphMatch1||paragraphMatch2) && currentChapter) {
-        // 在当前章节中添加新幻灯片
-        let paragraphTitle
-        if(paragraphMatch1){
-          paragraphTitle =paragraphMatch1[1];
-        }else if(paragraphMatch2){ //2者必有其一,必定是paragraphMatch2有值
-          paragraphTitle =paragraphMatch2[1];
-        }else{
-          paragraphTitle=""
-          console.log("段落title未赋值，出错了。")
+      } else if ((paragraphMatch1 || paragraphMatch2) && currentChapter) {
+        let paragraphTitle = "";
+        if (paragraphMatch1) {
+          paragraphTitle = paragraphMatch1[1];
+        } else if (paragraphMatch2) {
+          paragraphTitle = paragraphMatch2[1];
         }
-        const paragraph=new Paragraph(paragraphIndex,cleanString(paragraphTitle));
+        const paragraph = new Paragraph(paragraphIndex, cleanString(paragraphTitle));
+        paragraph.heading = !!paragraphMatch1;
         paragraphIndex++;
         currentChapter.paragraphs.push(paragraph);
+        currentParagraph = paragraph;
       }
     }
-    // 添加最后一个章节
+    if (state !== "normal") flushFence();
     if (currentChapter) {
       chapters.push(currentChapter);
     }
@@ -308,23 +590,54 @@ export class Doc{
 
 
   /**
-   * 用于检查格式正不正确。
-   * @param chapters
+   * 检查文章大纲格式。code：0 通过；>0 Warn 可保存；<0 拒收（八·3）。
    */
   static checkChapter(chapters:Array<Chapter>):CheckMsg{
     if (!chapters || chapters.length==0) {
       return {code:-1,msg:"大纲格式不正确，没有发现任何章节，章节前缀应该为【## 】，注意空格"};
-    }else{
-      let paragraphsCnt=0
-      for (let i=0;i<chapters.length;i++) {
-        const paragraphs=chapters[i].paragraphs;
-        if(!paragraphs || paragraphs.length==0){
-          return {code:-2,msg:`大纲格式不正确，第${i+1}章没发现任何段落，段落标题前缀应该为【### 】或【* 】或【+ 】或【- 】，注意空格。`}
-        }
-        paragraphsCnt+=paragraphs.length;
-      }
-      return {code:0, msg:`大纲格式正确，一共发现${chapters.length}章，共计${paragraphsCnt}个段落。`}
     }
+    if (chapters.length < 2) {
+      return {code:-3,msg:`文章大纲章节过少（当前 ${chapters.length} 章），请写 3～5 章（推荐 4）。`};
+    }
+    if (chapters.length > 6) {
+      return {code:-3,msg:`文章大纲章节过多（当前 ${chapters.length} 章），请压缩为 3～5 章（最多 6）。`};
+    }
+    let paragraphsCnt=0
+    const warns: string[] = [];
+    for (let i=0;i<chapters.length;i++) {
+      const paragraphs=chapters[i].paragraphs;
+      if(!paragraphs || paragraphs.length==0){
+        return {code:-2,msg:`大纲格式不正确，第${i+1}章没发现任何段落，段落标题前缀应为【### 】（* + - 为兼容写法，推荐 ###），注意空格。`}
+      }
+      const headingCnt = paragraphs.filter((p) => p.heading).length;
+      if (headingCnt === 0) {
+        warns.push(
+          `第${i + 1}章未使用【### 】段落标记（检测到 ${paragraphs.length} 行 */- 开头）。已按段落理解；建议重新生成或手工改为【### 】。`,
+        );
+      } else {
+        if (headingCnt < 2) {
+          return {code:-2,msg:`第${i+1}章段落过少（须 2～4 个 ### 段落，当前 ${headingCnt}）。`};
+        }
+        if (headingCnt > 6) {
+          return {code:-2,msg:`第${i+1}章段落过多（当前 ${headingCnt} 个 ###，请压到 2～4，最多 6）。`};
+        }
+      }
+      paragraphsCnt+=paragraphs.length;
+    }
+    // 九·3 / 十一·3：末章宜为结论类（Warn 不拒单）
+    const lastCh = chapters[chapters.length - 1];
+    if (lastCh && !DOC_CONCLUSION_CHAPTER_RE.test(lastCh.title || "")) {
+      warns.push(
+        `末章「${lastCh.title}」不像结论/建议类；建议增加结论章或改末章题（含「结论/建议/动作」等）。`,
+      );
+    }
+    if (warns.length) {
+      return {
+        code: 1,
+        msg: `大纲可保存，但标记不规范：${warns.join(" ")}（共 ${chapters.length} 章 / ${paragraphsCnt} 段）`,
+      };
+    }
+    return {code:0, msg:`大纲格式正确，一共发现${chapters.length}章，共计${paragraphsCnt}个段落。`}
   }
   /**
    * 通过给一个key，获取{章节key,段落key}
@@ -387,21 +700,52 @@ export class Doc{
     console.log(`给key：${key}项设置提示词时出错。找不到key值`);
   }
   /**
-   * 为一个文档大纲的所有段落初始化提示词 //TODO-hezl 后续优化时，考虑要存客户的提示词
-   * 文章标题是<一、引言>，请为[描述宝能系介入并逐步增持股份的过程]章节撰写大约200~400个字左右的具体内容.
-   * @param chapters
-   * @param pptTitle
-   * @param format_prompt //暂时无用，预留
+   * 为一个文档大纲的所有段落初始化提示词。
+   * format_prompt：段落写作契约（字数/禁套话）；由 buildDocParagraphFormatPrompt 提供。
+   * ctx：岗位 / 章问题 / 相邻段边界 / 结论归属（十一·3 / 9.1）。
    */
-  static setAllPrompt(chapters:Chapter[],pptTitle:string,format_prompt:string=""){
-    for (let chapter of chapters) {
+  static setAllPrompt(
+    chapters: Chapter[],
+    pptTitle: string,
+    format_prompt: string = "",
+    ctx?: DocParagraphPromptCtx,
+  ) {
+    const fmt = (format_prompt || "").trim();
+    const role =
+      (ctx?.role || "").trim() || inferDocWritingRole(pptTitle);
+    const nCh = chapters.length;
+    for (let ci = 0; ci < nCh; ci++) {
+      const chapter = chapters[ci];
       const paragraphs = chapter.paragraphs;
-      if (Array.isArray(paragraphs)) {
-        for(let paragraph of paragraphs) {
-          let prompt="";
-          prompt = `文章标题是<${pptTitle}>，请为它的【${chapter.title}】章节中的段落： [${paragraph.title}]撰写大约200~400个字左右的具体内容。直接输出正文，不要以「根据知识库内容」等套话开头。`;
-          paragraph.setPrompt(prompt);
+      if (!Array.isArray(paragraphs)) continue;
+      const isConclusionChapter =
+        ci === nCh - 1 || DOC_CONCLUSION_CHAPTER_RE.test(chapter.title || "");
+      for (const paragraph of paragraphs) {
+        const siblings = paragraphs
+          .filter((p) => p !== paragraph)
+          .map((p) => p.title)
+          .filter(Boolean);
+        let prompt =
+          `文章标题是<${pptTitle}>，请为它的【${chapter.title}】章节中的段落： [${paragraph.title}]撰写大约200~400个字左右的具体内容。` +
+          `直接输出正文，不要以「根据知识库内容」等套话开头。`;
+        if (role) {
+          prompt += `请以「${role}」岗位视角撰写，用该岗位的判断口径，勿写成百科介绍。`;
         }
+        prompt +=
+          `本章要回答的问题：围绕「${chapter.title}」说明本段「${paragraph.title}」对该问题的贡献；勿跑题。`;
+        if (siblings.length) {
+          prompt +=
+            `同章其他段落（内容勿重复）：${siblings.join("、")}。`;
+        }
+        if (isConclusionChapter) {
+          prompt +=
+            `本段属结论/建议归属章：给出可执行判断与动作，勿堆砌前文已写过的同一组数字。`;
+        } else {
+          prompt +=
+            `结论与行动建议留给末章；本段只写本段题所需的事实与分析。`;
+        }
+        if (fmt) prompt += fmt;
+        paragraph.setPrompt(prompt);
       }
     }
     return chapters;
@@ -476,7 +820,9 @@ export class Doc{
      * 先初始化chapters结构，再设置所有提示词(重设)。
      */
     let chapters =Doc.getChaptersFromContent(or.outlineContent);
-    chapters = Doc.setAllPrompt(chapters, or.outlineName, formatPrompt);
+    chapters = Doc.setAllPrompt(chapters, or.outlineName, formatPrompt, {
+      role: inferDocWritingRole(or.outlineName || ""),
+    });
     return [
       or.outlineName? or.outlineName: "",
       or.outlineContent? or.outlineContent: "",

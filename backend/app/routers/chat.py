@@ -75,6 +75,14 @@ async def _handle_completions(body: dict[str, Any], kb_name: Optional[str]):
         source_files = [str(s).strip() for s in raw_sources if str(s).strip()]
     else:
         source_files = []
+    # 任务 4B：消费材料池分配键；缺省 None 走原检索（与任务 4 exclude_keys 无关）
+    raw_assigned = stream_options.get("assigned_doc_keys", body.get("assigned_doc_keys", None))
+    if raw_assigned is None:
+        assigned_keys = None
+    elif isinstance(raw_assigned, list):
+        assigned_keys = [str(x) for x in raw_assigned if str(x).strip()]
+    else:
+        assigned_keys = None
 
     # 规范化 messages
     norm_messages = []
@@ -109,6 +117,7 @@ async def _handle_completions(body: dict[str, Any], kb_name: Optional[str]):
             score_threshold=score_threshold,
             source_files=source_files or None,
             retrieval_scope=retrieval_scope or None,
+            assigned_keys=assigned_keys,
         )
         retrieve_ms = (time.perf_counter() - t_ret) * 1000
         # 大纲按页填 tips：检索仍按 slide，但摘要改用短标签契约，避免套用正文「小点」写法

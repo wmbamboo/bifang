@@ -398,6 +398,13 @@ def crop_element_assets_from_page(
                         "path": str(whole_path),
                     }
                 )
+                # JPEG 已覆盖该页：删同页 PNG 冗余（五·5）
+                png_twin = whole_dir / f"page_{page_no}.png"
+                if png_twin.is_file():
+                    try:
+                        png_twin.unlink()
+                    except OSError as e:  # noqa: BLE001
+                        _logger.warning("crop elements: unlink whole png failed: %s", e)
             except Exception as e:  # noqa: BLE001
                 _logger.warning("crop elements: save whole jpeg failed: %s", e)
         else:

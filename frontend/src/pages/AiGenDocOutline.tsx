@@ -10,7 +10,7 @@ import OutlineRec from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Doc from "@/components/ChatUtil/ChatWithSpeech4Doc";
-import {composeDocOutlineUserMessage} from "@/components/ChatUtil/OutlinePromptComposer";
+import {DOC_OUTLINE_WELCOME_SAMPLES} from "@/components/ChatUtil/outlineWelcomeSamples";
 import {message, Button} from "antd";
 
 export const AiGenDocOutline: React.FC = () => {
@@ -33,17 +33,7 @@ export const AiGenDocOutline: React.FC = () => {
   //----------------------------------------------------------------------------------------------
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
-  const buttonMessages_init:ButtonMessage[]=[
-    {title: "",
-      content: composeDocOutlineUserMessage('如何帮助选品师判断抖音男装的流行趋势')
-    },
-    {title: '',
-      content: composeDocOutlineUserMessage('研制总结报告') + '（深空探测科学目标体系图谱项目，遵循GJB438B）'
-    },
-    {title: '',
-      content: composeDocOutlineUserMessage('2024年男装流行趋势如何')
-    }
-  ]
+  const buttonMessages_init:ButtonMessage[] = DOC_OUTLINE_WELCOME_SAMPLES;
   const openai = new OpenAI({
     apiKey: 'sk-f46769dda93743ba8266506c28500d32',
     baseURL: process.env.bf_baseUrl+'/chat',

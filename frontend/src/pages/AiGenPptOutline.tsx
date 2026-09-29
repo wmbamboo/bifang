@@ -8,7 +8,7 @@ import OutlineRec, {outlineTypeAiPPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Ppt from "@/components/ChatUtil/ChatWithSpeech4Ppt";
-import {composePptOutlineUserMessage} from "@/components/ChatUtil/OutlinePromptComposer";
+import {PPT_OUTLINE_WELCOME_SAMPLES} from "@/components/ChatUtil/outlineWelcomeSamples";
 import {message, Button} from "antd";
 
 const AiGenPptOutline: React.FC = () => {
@@ -31,30 +31,8 @@ const AiGenPptOutline: React.FC = () => {
   //----------------------------------------------------------------------------------------------
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
-  /** 样例只带主题短句；骨架/领域由对话层注入 system */
-  const buttonMessages_init:ButtonMessage[]=[
-    {title: "",
-      content: composePptOutlineUserMessage(
-        '帮助选品师，通过采样时间20240319-20240417的数据筛选抖音商务男装衬衫/polo衫爆品',
-        {
-          role: '选品师',
-          object: '商务男装衬衫/polo衫爆品',
-          scope: '商务男装衬衫/polo衫',
-          domainPack: 'selection',
-        },
-      )
-    },
-    {title: '',
-      content: composePptOutlineUserMessage('深空探测图谱项目研制总结报告', {
-        role: '研制人员', object: '深空探测图谱项目研制总结报告', scope: '', domainPack: 'report',
-      }) + '要求遵循GJB438B的要求。'
-    },
-    {title: '',
-      content: composePptOutlineUserMessage('万科怎么了', {
-        role: '读者', object: '万科怎么了', scope: '', domainPack: 'generic',
-      })
-    }
-  ]
+  /** 样例与知识库侧共用；点选后走定框 */
+  const buttonMessages_init:ButtonMessage[] = PPT_OUTLINE_WELCOME_SAMPLES;
   const openai = new OpenAI({
     apiKey: 'sk-f46769dda93743ba8266506c28500d32',
     baseURL: process.env.bf_baseUrl+'/chat',

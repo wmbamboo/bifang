@@ -217,15 +217,117 @@ function countAxisLabels(axis: string, text: string, axisMentioned: boolean): nu
   const row = ATTR_AXIS_LEXICON.find((r) => r.axis === axis);
   if (!row) return 0;
   let n = countExclusiveLabels(text, row.labels);
-  if (
-    axisMentioned &&
-    (axis === '袖型' || axis === '厚薄') &&
-    /常规/.test(text) &&
-    !/常规袖/.test(text)
-  ) {
-    n += 1;
+  // 「常规 79.76%」是袖型/厚薄主力项；即使同页还有「常规袖」也要计本轴（P13）
+  if (axisMentioned && (axis === '袖型' || axis === '厚薄')) {
+    if (/常规\s*\d/.test(text)) {
+      n += 1;
+    } else if (/常规/.test(text) && !/常规袖/.test(text)) {
+      n += 1;
+    }
   }
   return n;
+}
+
+/**
+ * 五·4.1：分栏列内标签须与列头同轴（面料列出现「纯色/动物图案」即拒）。
+ */
+export function checkColumnItemAxisAlign(
+  tips: string[],
+): {ok: boolean; hint: string} {
+  type Col = {axisHint: string; items: string[]};
+  const cols: Col[] = [];
+  let cur: Col | null = null;
+  for (const tip of tips || []) {
+    const raw = String(tip || '').trim();
+    if (!raw) continue;
+    const colM = raw.match(/^(?:col|column|栏)\s*[:：]\s*(.+)$/i);
+    if (colM) {
+      cur = {axisHint: String(colM[1] || '').trim(), items: []};
+      cols.push(cur);
+      continue;
+    }
+    if (/^(?:colSub|columnSub|栏副|副标|layout)\s*[:：]/i.test(raw)) continue;
+    if (!cur) continue;
+    cur.items.push(
+      raw.replace(/^(?:metric|list)\s*[:：]\s*/i, '').trim(),
+    );
+  }
+  if (cols.length < 2) return {ok: true, hint: ''};
+
+  for (const col of cols) {
+    const axis = detectAttrAxisInText(col.axisHint);
+    if (!axis) continue;
+    const body = col.items.join('\n');
+    if (!body.trim()) continue;
+    const selfRow = ATTR_AXIS_LEXICON.find((r) => r.axis === axis);
+    const selfLabs = new Set(selfRow?.labels || []);
+    for (const other of ATTR_AXIS_LEXICON) {
+      if (other.axis === axis) continue;
+      for (const lab of other.labels) {
+        if (!lab || lab.length < 2) continue;
+        if (selfLabs.has(lab)) continue; // 跨轴共享词跳过
+        if (body.includes(lab)) {
+          return {
+            ok: false,
+            hint:
+              `分栏「${col.axisHint.slice(0, 12)}」列头属「${axis}」，` +
+              `但栏内出现「${other.axis}」标签「${lab}」；列内标签须与列头同轴`,
+          };
+        }
+      }
+    }
+  }
+  return {ok: true, hint: ''};
+}
+
+/**
+ * 属性分布页：证据中该轴占比最大的标签须出现在 tips（防丢掉「常规 79.76%」）。
+ */
+export function findMissingDominantAttrShare(
+  title: string,
+  tips: string[],
+  evidence: string,
+): string | null {
+  const axis = detectAttrAxisInText(title);
+  if (!axis) return null;
+  const row = ATTR_AXIS_LEXICON.find((r) => r.axis === axis);
+  if (!row) return null;
+  const ev = String(evidence || '');
+  if (!ev.trim()) return null;
+  const labels = [...row.labels];
+  if (axis === '袖型' || axis === '厚薄') {
+    if (!labels.includes('常规')) labels.push('常规');
+  }
+  let bestLabel = '';
+  let bestPct = -1;
+  for (const lab of labels) {
+    if (!lab) continue;
+    const re = new RegExp(
+      `${lab.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(\\d+(?:\\.\\d+)?)\\s*[%％]`,
+      'g',
+    );
+    for (const m of ev.matchAll(re)) {
+      const pct = parseFloat(m[1] || '');
+      if (Number.isFinite(pct) && pct > bestPct) {
+        bestPct = pct;
+        bestLabel = lab;
+      }
+    }
+  }
+  if (!bestLabel || bestPct < 30) return null;
+  const blob = (tips || []).join('\n');
+  // 「常规袖」contains「常规」——须「常规 + 数字」才算覆盖主力项
+  const covered =
+    bestLabel === '常规'
+      ? /常规\s*\d/.test(blob)
+      : blob.includes(bestLabel);
+  if (covered) return null;
+  return (
+    `属性页须含份额最大项「${bestLabel} ${bestPct}%」` +
+    `（证据已有，勿只列尾项` +
+    (bestLabel === '常规' ? '；「常规袖」不能代替「常规」' : '') +
+    `）`
+  );
 }
 
 /**

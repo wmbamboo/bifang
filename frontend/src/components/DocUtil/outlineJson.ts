@@ -25,6 +25,8 @@ import {
 import {
   checkCardTitleAxisEvidence,
   checkColumnAxisEvidence,
+  checkColumnItemAxisAlign,
+  findMissingDominantAttrShare,
   findUnsupportedActionSlideTitles,
 } from "@/components/DocUtil/outlineCoverage";
 import {judgeThemeAlignRule} from "@/components/DocUtil/outlineThemeJudge";
@@ -58,12 +60,15 @@ export type OutlineFilledJson = {
       /** 页意图（选型阶段声明；缺省时忠实度校验用标题降级） */
       intent?: string;
       tips?: string[];
+      /** tips 超额被 cap 时记录（克隆/降级落地前仍 slice） */
+      overflow?: { from: number; to: number; reason: string };
     }>;
   }>;
 };
 
 const LAYOUTS = [
   "list",
+  "progress",
   "metric",
   "columns",
   "metric_columns",
@@ -74,7 +79,7 @@ const LAYOUTS = [
 
 export type OutlineJsonLayout = (typeof LAYOUTS)[number];
 
-/** 渲染用版式（table / image_grid 已接模板页 42/43） */
+/** 渲染用版式（table / image_grid 已接模板页 45–49；progress 页 6–14） */
 export function layoutForRender(layout: OutlineJsonLayout): OutlineJsonLayout {
   return layout;
 }
@@ -109,6 +114,16 @@ export function coerceLayoutBySlideTitle(
     !multiAxisHint &&
     (/(?:类型|清单|名单|话题|盘点)$/.test(t) ||
       /(?:类型|清单|名单|话题|盘点)(?:有哪些|是什么)?$/.test(t));
+  // progress ↔ list 温和抬降（打乱测试：有向序列才 progress）
+  const flowCue =
+    /步骤|流程|路径|阶段|节奏|链路|打法推进|转化|从.+到/.test(t);
+  const parallelCue = /(?:是什么|有哪些|清单|类型|名单)/.test(t);
+  if (flowCue && !parallelCue && (layout === "list" || layout === "progress")) {
+    return "progress";
+  }
+  if (layout === "progress" && parallelCue && !flowCue) {
+    return "list";
+  }
   if (
     (enumQuestion || flatInventory) &&
     !multiAxisHint &&
@@ -117,15 +132,15 @@ export function coerceLayoutBySlideTitle(
     return "list";
   }
   // 「三种/几大…」总览：若被标成 list，抬回 columns
-  if (multiAxisHint && (layout === "list" || layout === "metric_list")) {
+  if (multiAxisHint && (layout === "list" || layout === "metric_list" || layout === "progress")) {
     return "columns";
   }
   const tableCue = /价格带|对照表|矩阵表|排行表|分档表|表格/.test(t);
   const imageGridCue = /图鉴|款式墙|视觉榜|形象墙|商品墙|TOP图/.test(t);
-  if (tableCue && (layout === "list" || layout === "columns")) {
+  if (tableCue && (layout === "list" || layout === "columns" || layout === "progress")) {
     return "table";
   }
-  if (imageGridCue && (layout === "list" || layout === "columns")) {
+  if (imageGridCue && (layout === "list" || layout === "columns" || layout === "progress")) {
     return "image_grid";
   }
   const metricCue =
@@ -134,7 +149,7 @@ export function coerceLayoutBySlideTitle(
   if (
     metricCue &&
     !tableCue &&
-    (layout === "list" || layout === "metric_list")
+    (layout === "list" || layout === "metric_list" || layout === "progress")
   ) {
     return layout === "metric_list" ? "metric_list" : "metric";
   }
@@ -145,6 +160,110 @@ export function coerceLayoutBySlideTitle(
     return multiAxisHint ? "columns" : "list";
   }
   return layout;
+}
+
+/**
+ * progress tips 顺序/阶段信号（六·5·补）。
+ * 全无 → 调用方 Warn + 降 list，不拒单、不进填充重试。
+ */
+const PROGRESS_ORDER_RE =
+  /先|再|后|承接|阶段|前期|中期|后期|起量|收口|放大|沉淀|首先|其次|最后|然后|进而|随之|随后|接着|从而|起点|终点|输入|产出|转化|链路|路径|节奏|推进/;
+
+/** 强并列标记：密度过高时也倾向 list */
+const PROGRESS_PARALLEL_RE = /各|分别|均|以及|另外|此外|同时还有|还有/;
+
+export function hasProgressOrderSignal(tips: string[]): boolean {
+  const blob = (tips || []).join("\n");
+  return PROGRESS_ORDER_RE.test(blob);
+}
+
+export function progressParallelDensity(tips: string[]): number {
+  const blob = (tips || []).join("\n");
+  const hits = blob.match(new RegExp(PROGRESS_PARALLEL_RE.source, "g"));
+  return hits?.length || 0;
+}
+
+/**
+ * 填充后自检：progress 无顺序词（或并列词过密）→ 降 list。
+ * 不返回错误，避免触发填充重试循环。
+ */
+export function coerceProgressLayoutByTips(
+  layout: OutlineJsonLayout,
+  tips: string[],
+): { layout: OutlineJsonLayout; warn?: string } {
+  if (layout !== "progress") return { layout };
+  if (!hasProgressOrderSignal(tips)) {
+    return {
+      layout: "list",
+      warn: "progress 无顺序/阶段信号，降级为 list",
+    };
+  }
+  // 并列词明显多于顺序语境：≥3 处且 tips 较短时降
+  if (progressParallelDensity(tips) >= 3 && (tips || []).length <= 5) {
+    const orderHits =
+      (tips || []).join("\n").match(new RegExp(PROGRESS_ORDER_RE.source, "g"))
+        ?.length || 0;
+    if (progressParallelDensity(tips) >= orderHits + 2) {
+      return {
+        layout: "list",
+        warn: "progress 并列标记过密，降级为 list",
+      };
+    }
+  }
+  return { layout };
+}
+
+/** 超额 tips 改写成 table 行（表头 + 最多 7 条，合计 ≤8）。 */
+export function tipsToOverflowTableRows(tips: string[]): string[] {
+  const content = (tips || [])
+    .map((t) => String(t || "").trim())
+    .filter((t) => t && !/^img\s*[:：]/i.test(t))
+    .map((t) => t.replace(/^(?:metric|list)\s*[:：]\s*/i, "").trim())
+    .filter(Boolean);
+  const data = content.slice(0, 7).map((t) => {
+    const m = t.match(/^(.{1,16}?)[：:](.+)$/);
+    if (m) {
+      return `${m[1].trim().slice(0, 14)}|${m[2].trim().slice(0, 14)}`;
+    }
+    return `${t.slice(0, 14)}|—`;
+  });
+  return ["要点|说明", ...data];
+}
+
+/**
+ * N>9：可克隆版式优先降 table（已有 | 行则直接切；否则改写为「要点|说明」表）。
+ * 六·5：克隆覆盖到 9，再往上不硬塞。
+ */
+export function coerceOverflowByTipCount(
+  layout: OutlineJsonLayout,
+  tips: string[],
+): { layout: OutlineJsonLayout; tips?: string[]; warn?: string } {
+  if (!tips || tips.length <= 9) return { layout };
+  if (
+    layout !== "list" &&
+    layout !== "progress" &&
+    layout !== "metric" &&
+    layout !== "metric_list" &&
+    layout !== "image_grid"
+  ) {
+    return { layout };
+  }
+  const content = tips.filter((t) => t && !/^img\s*[:：]/i.test(t));
+  const pipeRows = content.filter(
+    (t) => (t.match(/\|/g) || []).length >= 1,
+  ).length;
+  if (pipeRows >= 2) {
+    return {
+      layout: "table",
+      tips: content.slice(0, 8),
+      warn: `tips=${tips.length}>9 且含表格行，降级为 table`,
+    };
+  }
+  return {
+    layout: "table",
+    tips: tipsToOverflowTableRows(tips),
+    warn: `tips=${tips.length}>9，改写为 table（要点|说明）`,
+  };
 }
 
 function pickStr(...cands: unknown[]): string {
@@ -794,6 +913,11 @@ export function validateFilledSlideInChapter(
       `请写入材料占比/销量，或并入有证据的页/改 list，禁止只写「回查原图/独立成图」类计划语`
     );
   }
+  // P13：证据最大占比项必须上 tip（勿只列尾项）
+  if (/面料|图案|厚薄|袖型|属性/.test(titleTrim) && evidence) {
+    const missDom = findMissingDominantAttrShare(titleTrim, tips, evidence);
+    if (missDom) return `页「${title}」${missDom}`;
+  }
 
   if (layout === "metric") {
     if (nMetric < 2) {
@@ -833,6 +957,11 @@ export function validateFilledSlideInChapter(
         return `页「${title}」${colEv.hint}`;
       }
     }
+    // 五·4.1：列内标签与列头同轴（面料列禁图案项）
+    const colItem = checkColumnItemAxisAlign(tips);
+    if (!colItem.ok) {
+      return `页「${title}」${colItem.hint}`;
+    }
   }
 
   if (layout === "table") {
@@ -860,8 +989,8 @@ export function validateFilledSlideInChapter(
     }
   }
   if (layout === "image_grid") {
-    if (tips.length > 4) {
-      return `页「${title}」layout=image_grid 图注最多 4 条（现 ${tips.length}）`;
+    if (tips.length > 9) {
+      return `页「${title}」layout=image_grid 图注最多 9 条（现 ${tips.length}）`;
     }
   }
 
@@ -895,8 +1024,12 @@ function validateFilledSlides(slides: FilledSlide[]): string | null {
   return null;
 }
 
-/** list/metric 仍限 5 条；分栏/复合页 tips 含多行 col:/colSub:/条目，不能硬截 5 */
-function capTipsByLayout(layout: OutlineJsonLayout, tips: string[]): string[] {
+/** progress 与 list/metric/image_grid 克隆后可到 9。
+ * 超额记 overflow（不静默吞掉语义）；克隆落地前仍 slice 以保灌模不炸槽。 */
+function capTipsByLayout(
+  layout: OutlineJsonLayout,
+  tips: string[],
+): { tips: string[]; overflow?: { from: number; to: number; reason: string } } {
   const max =
     layout === "columns" || layout === "metric_columns"
       ? 32
@@ -904,10 +1037,21 @@ function capTipsByLayout(layout: OutlineJsonLayout, tips: string[]): string[] {
         ? 8
         : layout === "table"
           ? 8
-          : layout === "image_grid"
-            ? 4
+          : layout === "image_grid" ||
+              layout === "metric" ||
+              layout === "list" ||
+              layout === "progress"
+            ? 9
             : 5;
-  return tips.length > max ? tips.slice(0, max) : tips;
+  if (tips.length <= max) return { tips };
+  return {
+    tips: tips.slice(0, max),
+    overflow: {
+      from: tips.length,
+      to: max,
+      reason: `capTipsByLayout(${layout}) 待克隆/降级`,
+    },
+  };
 }
 
 /** 解析单章填充（按章调用时用，不要求全文 3～5 章） */
@@ -946,16 +1090,38 @@ export function parseFilledChapterFromModel(
     const lockedSl = lockedChapter.slides[j];
     const sl = (slidesRaw[j] || {}) as Record<string, unknown>;
     const title = pickStr(lockedSl.title, sl.title, sl.标题, sl.name, sl.页标题);
-    const layout = normalizeSlideLayout(String(sl.layout || sl.版式 || "list"));
+    const layoutRaw = normalizeSlideLayout(String(sl.layout || sl.版式 || "list"));
     let tips = coerceTips(sl.tips || sl.要点 || sl.items || sl.points || sl.bullets);
+    let layout = layoutRaw;
     if (layout === "metric_list" || layout === "metric") {
       tips = normalizeMetricListTipsArray(tips);
     }
-    tips = capTipsByLayout(layout, tips);
+    const prog = coerceProgressLayoutByTips(layout, tips);
+    if (prog.warn) {
+      console.warn(
+        "ppt-outline-progress-coerce",
+        title || lockedSl.title,
+        prog.warn,
+      );
+    }
+    layout = prog.layout;
+    const overflowLay = coerceOverflowByTipCount(layout, tips);
+    if (overflowLay.warn) {
+      console.warn(
+        "ppt-outline-overflow-coerce",
+        title || lockedSl.title,
+        overflowLay.warn,
+      );
+    }
+    layout = overflowLay.layout;
+    if (overflowLay.tips) tips = overflowLay.tips;
+    const capped = capTipsByLayout(layout, tips);
+    tips = capped.tips;
     slides.push({
       title: (title || lockedSl.title).slice(0, 20),
       layout,
       tips,
+      ...(capped.overflow ? { overflow: capped.overflow } : {}),
     });
   }
   const bad = validateFilledSlides(slides);
@@ -1078,11 +1244,24 @@ export function parseFilledSlideFromModel(
   let tips = coerceTips(
     tipSrc.tips || tipSrc.要点 || tipSrc.items || tipSrc.points || tipSrc.bullets,
   );
-  const layout = lockedLayout;
+  let layout = lockedLayout;
   if (layout === "metric_list" || layout === "metric") {
     tips = normalizeMetricListTipsArray(tips);
   }
-  tips = capTipsByLayout(layout, tips);
+  // progress 顺序信号：填充后自检，无信号则 Warn+降 list（不拒单、不重试）
+  const prog = coerceProgressLayoutByTips(layout, tips);
+  if (prog.warn) {
+    console.warn("ppt-outline-progress-coerce", lockedTitle, prog.warn);
+  }
+  layout = prog.layout;
+  const overflowLay = coerceOverflowByTipCount(layout, tips);
+  if (overflowLay.warn) {
+    console.warn("ppt-outline-overflow-coerce", lockedTitle, overflowLay.warn);
+  }
+  layout = overflowLay.layout;
+  if (overflowLay.tips) tips = overflowLay.tips;
+  const capped = capTipsByLayout(layout, tips);
+  tips = capped.tips;
   // 分栏副标重复：修复（保首个删其余）而非整页拒收，避免「colSub 同文」耗尽重试
   const dedupSub = dropDuplicateColSub(tips);
   if (dedupSub.dropped) {
@@ -1098,6 +1277,7 @@ export function parseFilledSlideFromModel(
     layout,
     intent: chapterSlides[index]?.intent,
     tips,
+    ...(capped.overflow ? { overflow: capped.overflow } : {}),
   };
   const next = chapterSlides.map((s, i) => (i === index ? slide : s));
   const bad = validateFilledSlideInChapter(next, index, evidence, fidelityOpts);
@@ -1149,7 +1329,7 @@ export function validateOutlineFilled(
         sl.name,
         sl.页标题,
       );
-      const layout = normalizeSlideLayout(String(sl.layout || sl.版式 || "list"));
+      const layoutRaw = normalizeSlideLayout(String(sl.layout || sl.版式 || "list"));
       let tips = coerceTips(
         sl.tips || sl.要点 || sl.items || sl.points || sl.bullets,
       );
@@ -1174,14 +1354,36 @@ export function validateOutlineFilled(
             `材料不足时并入有证据的页或写含事实/数字的 tip，勿写「材料未覆盖」或照抄「回查属性页」`,
         };
       }
+      let layout = layoutRaw;
       if (layout === "metric_list" || layout === "metric") {
         tips = normalizeMetricListTipsArray(tips);
       }
-      tips = capTipsByLayout(layout, tips);
+      const prog = coerceProgressLayoutByTips(layout, tips);
+      if (prog.warn) {
+        console.warn(
+          "ppt-outline-progress-coerce",
+          title || lockedSl.title,
+          prog.warn,
+        );
+      }
+      layout = prog.layout;
+      const overflowLay = coerceOverflowByTipCount(layout, tips);
+      if (overflowLay.warn) {
+        console.warn(
+          "ppt-outline-overflow-coerce",
+          title || lockedSl.title,
+          overflowLay.warn,
+        );
+      }
+      layout = overflowLay.layout;
+      if (overflowLay.tips) tips = overflowLay.tips;
+      const capped = capTipsByLayout(layout, tips);
+      tips = capped.tips;
       slides.push({
         title: (title || lockedSl.title).slice(0, 20),
         layout,
         tips,
+        ...(capped.overflow ? { overflow: capped.overflow } : {}),
       });
     }
     const bad = validateFilledSlides(slides);

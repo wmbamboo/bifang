@@ -1011,6 +1011,45 @@ export function claimFromAxisTitle(
 }
 
 /**
+ * 店铺/百货名 + 万件：证据中该店名后紧邻的万件须与 tip 一致（P9 郗思昙挂错件量）。
+ * 返回拒收文案；通过则 null。
+ */
+export function shopMetricMismatchInEvidence(
+  tip: string,
+  evidence: string,
+): string | null {
+  const t = String(tip || "").trim();
+  const shopWan = t.match(
+    /([\u4e00-\u9fffA-Za-z0-9]{2,16}(?:店|百货|旗舰|专卖)[^\d]{0,12})(\d+(?:\.\d+)?\s*万)\s*件?/,
+  );
+  if (!shopWan) return null;
+  const shop = shopWan[1].replace(/\s+/g, "");
+  const tipWan = normalizeMetricToken(shopWan[2]).replace(/件$/, "");
+  const evFlat = String(evidence || "").replace(/\s+/g, "");
+  const shopKey = shop.slice(0, Math.min(6, shop.length));
+  let from = 0;
+  let paired = false;
+  while (from < evFlat.length) {
+    const at = evFlat.indexOf(shopKey, from);
+    if (at < 0) break;
+    // 店名后 28 字内的第一个「x万」视为该店销量
+    const window = evFlat.slice(at, at + shopKey.length + 28);
+    const m = window.match(/(\d+(?:\.\d+)?万)/);
+    if (m && normalizeMetricToken(m[1]) === tipWan) {
+      paired = true;
+      break;
+    }
+    from = at + Math.max(1, shopKey.length);
+  }
+  if (!paired) {
+    return (
+      `「${t}」店铺「${shop.slice(0, 12)}」与「${tipWan}」在证据中未就近共现；禁止张冠李戴销量`
+    );
+  }
+  return null;
+}
+
+/**
  * 校验 tips 相对检索证据。
  * 每个数字 token 独立做存在性 + 实体对齐（禁止「一条 tip 两个数只验第一个」）。
  * columns 页：`col: 轴名` 后的短条目继承该栏口径（避免「同比+30.6%」掉栏成裸数字）。
@@ -1127,6 +1166,13 @@ export function validateTipsAgainstEvidence(
       issues.push(
         `「${t}」写了占大盘份额但未点名衬衫/polo；请写成「3.3亿 男士衬衫销售额，占大盘5.6%」这类品类主量+份额`,
       );
+      continue;
+    }
+
+    // P9：店铺名 + 万件 须在证据中同窗共现（防郗思昙挂错 1.4万件）
+    const shopMis = shopMetricMismatchInEvidence(t, ev);
+    if (shopMis) {
+      issues.push(shopMis);
       continue;
     }
 

@@ -9,9 +9,9 @@ import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Ppt from "@/components/ChatUtil/ChatWithSpeech4Ppt";
-import {composePptOutlineUserMessage} from "@/components/ChatUtil/OutlinePromptComposer";
+import {PPT_OUTLINE_WELCOME_SAMPLES} from "@/components/ChatUtil/outlineWelcomeSamples";
 import {message, Tag, Button} from "antd";
-import {ALL_KB_NAME, kbLabel, opKbTagStyle} from "@/components/DocUtil/kbSelectorModal";
+import {ALL_KB_NAME, kbLabel, opKbTagStyle, getCachedKbName, setCachedKbName} from "@/components/DocUtil/kbSelectorModal";
 
 const KbGenPptOutline: React.FC = () => {
   const theme = useTheme();
@@ -20,9 +20,10 @@ const KbGenPptOutline: React.FC = () => {
   const [tempOutlineRecs, setTempOutlineRec] = useState<OutlineRec[]>([]);
   /**用于指定shower中初始化选中的radio**/
   const [defaultId, setDefaultId] = useState<string>("");
-  const [selectKbName, setSelectKbName] = useState(ALL_KB_NAME);
+  const [selectKbName, setSelectKbName] = useState(() => getCachedKbName(ALL_KB_NAME));
   const handleSelectedKbItem= (kb_name:string) => {
     console.log('选择的知识库:', kb_name);
+    setCachedKbName(kb_name);
     setSelectKbName(kb_name)
   };
   const showDrawer = () => {
@@ -38,30 +39,8 @@ const KbGenPptOutline: React.FC = () => {
   //----------------------------------------------------------------------------------------------
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
-  /** 样例只带主题短句；骨架/领域由对话层注入 system */
-  const buttonMessages_init:ButtonMessage[]=[
-    {title: "",
-      content: composePptOutlineUserMessage(
-        '帮助选品师，通过采样时间20240319-20240417的数据筛选抖音商务男装衬衫/polo衫爆品',
-        {
-          role: '选品师',
-          object: '商务男装衬衫/polo衫爆品',
-          scope: '商务男装衬衫/polo衫',
-          domainPack: 'selection',
-        },
-      )
-    },
-    {title: '',
-      content: composePptOutlineUserMessage('深空探测图谱项目研制总结报告', {
-        role: '研制人员', object: '深空探测图谱项目研制总结报告', scope: '', domainPack: 'report',
-      }) + '要求遵循GJB438B的要求。'
-    },
-    {title: '',
-      content: composePptOutlineUserMessage('万科怎么了', {
-        role: '读者', object: '万科怎么了', scope: '', domainPack: 'generic',
-      })
-    }
-  ]
+  /** 样例与智能侧共用；点选后走定框 */
+  const buttonMessages_init:ButtonMessage[] = PPT_OUTLINE_WELCOME_SAMPLES;
   const openai = new OpenAI({
     apiKey: 'sk-f46769dda93743ba8266506c28500d32',
     baseURL: `${process.env.bf_baseUrl}/knowledge_base/local_kb/${selectKbName}/`,

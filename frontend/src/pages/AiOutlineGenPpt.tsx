@@ -15,6 +15,10 @@ import PptTemplate from "@/components/DocUtil/PptTemplate";
 import { downgradeMetricColumns } from "@/components/DocUtil/outlineTipSlots";
 import { layoutForRender } from "@/components/DocUtil/outlineJson";
 import { loadImageGridBytes } from "@/components/DocUtil/kbImageAssets";
+import {
+  inferFileNameFromImageTips,
+  preferredAssetIdsFromImageTips,
+} from "@/components/DocUtil/outlineImageBind";
 import {CompassTwoTone, FilePptTwoTone, FolderOpenTwoTone, RocketTwoTone} from "@ant-design/icons";
 import SlideTemplateDrawer from "@/components/DocUtil/SlideTemplateDrawer";
 import {opStackStyle, opBtnStyle} from "@/components/DocUtil/kbSelectorModal";
@@ -341,25 +345,63 @@ const AiOutlineGenPpt: React.FC = () => {
           continue;
         }
         if (slide.layout === 'image_grid') {
-          const { vars } = buildImageGridFillVars(slide.subTitle || '', sv.vItem || {});
+          const { vars, count: gridN } = buildImageGridFillVars(
+            slide.subTitle || '',
+            sv.vItem || {},
+          );
           let imageBuffers: ArrayBuffer[] = [];
           try {
-            const captions = parseSlideTips(slide.subTitle || '').map((t) => t.text);
-            const manual = parseSlideImageAssets(slide.subTitle || '');
-            const picked = await loadImageGridBytes(kbName, 4, usedAssetIds, {
-              title: slide.title || '',
-              captions,
-              manual,
-            });
+            const sub = slide.subTitle || '';
+            const captions = parseSlideTips(sub)
+              .map((t) => t.text)
+              .filter((t) => t && !/^img\s*[:：]/i.test(t));
+            const manual = parseSlideImageAssets(sub);
+            const fileName =
+              inferFileNameFromImageTips(sub) ||
+              manual.find((m) => m?.file_name)?.file_name ||
+              '';
+            const preferredAssetIds = preferredAssetIdsFromImageTips(sub);
+            const slotN = Math.max(
+              2,
+              Math.min(
+                9,
+                gridN ||
+                  captions.length ||
+                  preferredAssetIds.length ||
+                  4,
+              ),
+            );
+            const {picked, warnings} = await loadImageGridBytes(
+              kbName,
+              slotN,
+              usedAssetIds,
+              {
+                fileName,
+                title: slide.title || '',
+                captions,
+                manual,
+                preferredAssetIds,
+              },
+            );
             imageBuffers = picked.map((p) => p.bytes);
+            if (warnings.length) {
+              message.warning(
+                `图鉴「${slide.title || page}」: ${warnings.slice(0, 2).join('；')}`,
+              );
+            }
           } catch (e) {
             console.warn('image_grid assets load failed', e);
+            message.warning(`图鉴「${slide.title || page}」取图失败`);
           }
+          const nForClone = Math.max(
+            2,
+            Math.min(9, imageBuffers.length || gridN || 4),
+          );
           await pptTemplate.genNewSlideFileDict_Random(
             'image_grid',
             { ...sv, ...vars },
             page,
-            undefined,
+            nForClone,
             undefined,
             imageBuffers.length ? imageBuffers : undefined,
           );
@@ -373,6 +415,9 @@ const AiOutlineGenPpt: React.FC = () => {
         if (renderLayout === 'metric' && Ppt.canFillMetric(sv.vItem)) {
           const slots = Ppt.padMetricVItem(sv.vItem, counts);
           await pptTemplate.genNewSlideFileDict_Random("metric", sv, page, slots);
+        } else if (renderLayout === 'progress') {
+          const padded = Ppt.padVItemForTemplate(sv.vItem, counts);
+          await pptTemplate.genNewSlideFileDict_Random("progress", sv, page, padded);
         } else {
           const padded = Ppt.padVItemForTemplate(sv.vItem, counts);
           await pptTemplate.genNewSlideFileDict_Random("list", sv, page, padded);

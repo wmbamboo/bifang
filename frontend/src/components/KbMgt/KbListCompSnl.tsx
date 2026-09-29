@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ProList } from '@ant-design/pro-components';
 import {Checkbox, message} from 'antd';
-
-/** 与 kbSelectorModal.ALL_KB_NAME 保持一致 */
-const ALL_KB_NAME = '__all__';
+import {ALL_KB_NAME, setCachedKbName} from '@/components/DocUtil/kbCache';
 
 interface KbListSnlCompProps {
    // 选中项改变时的回调
@@ -49,10 +47,18 @@ const  KbListSnlComp =(props: KbListSnlCompProps)=> {
      getKbList()
   }, []);
 
+  useEffect(() => {
+    if (props.value !== undefined) {
+      setSelectedValue(props.value);
+    }
+  }, [props.value]);
+
   // 处理选中事件
   const handleSelect = (checkFlag:boolean, record:any) => {
-    setSelectedValue(checkFlag ? record.kb_name : undefined);
-    props.onSelectionChange?.(checkFlag ? record.kb_name : '')
+    const next = checkFlag ? record.kb_name : undefined;
+    setSelectedValue(next);
+    if (next) setCachedKbName(next);
+    props.onSelectionChange?.(next || '')
   };
 
   return (

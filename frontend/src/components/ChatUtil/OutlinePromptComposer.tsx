@@ -88,14 +88,18 @@ export const PPT_OUTLINE_STRUCTURE_SKELETON =
 
 /** 版式一句话目录：选型段用；不展开 tips 语法、不写领域词表 */
 export const PPT_OUTLINE_LAYOUT_CATALOG =
-  '【layout 枚举】list | metric | columns | metric_columns | metric_list | table | image_grid。\n' +
+  '【layout 枚举】list | progress | metric | columns | metric_columns | metric_list | table | image_grid。\n' +
   '- metric：页主题是「看规模/增速/占比等数字」；材料里多半能抽出 ≥2 个含 %/亿/万 的原数字。' +
   '标题含「规模/增速/大盘/销售额/同比」且材料有原数字时**优先 metric**，不要用 list 把数字句平铺成清单。拿不准有没有原数字时不要选。\n' +
   '- columns：页主题是「少数几个并列轴/角色/对照组」对照，且每个轴下面还要挂若干下属事实。后文有分页展开的总览页常用。\n' +
   '- metric_columns：上半要数字卡，下半还要分轴对照。仅支持 2～5 卡+2 栏，或 5 卡+3 栏；其它组合改 metric_list/columns。\n' +
   '- metric_list：上半数字卡，下半判断清单（不分栏）。\n' +
-  '- list：同一主题下的平铺要点/枚举答案；一页只回答一个名单或一套动作时优先。\n' +
-  '- table：价格带/榜单等对照表，tips 每行用「|」分格（表头行 + 记录行，2～8 行、2～5 列；4 列「维度|数值|增速|口径」或 5 列「排名|店铺/单品|销量|销售额|同比」）；image_grid：2×2 图鉴，tips 为 2～4 条短图注。\n' +
+  '- list：同一主题下的平铺要点/枚举答案；一页只回答一个名单或一套动作时优先。' +
+  '【打乱测试】把 N 条重排意思不变 → list；重排即破坏先后/因果 → 才用 progress。\n' +
+  '- progress：材料本身含流程/阶段/路径/转化链路时用；相邻要点有先后或递进。' +
+  '禁用并列枚举、属性占比、多轴对照、纯数字规模。禁止把并列卖点机械套成「第一步/第二步」。' +
+  '不要为「好看」硬造 progress（无硬配额）。\n' +
+  '- table：价格带/榜单等对照表，tips 每行用「|」分格（表头行 + 记录行，2～8 行、2～5 列；4 列「维度|数值|增速|口径」或 5 列「排名|店铺/单品|销量|销售额|同比」）；image_grid：图鉴，tips 为 2～9 条短图注（4=2×2、6=3×2、8=4×2、9=3×3；材料图少则少写）。\n' +
   '【columns vs list】columns 的栏标题必须是「分组轴」；若页标题问「有哪些/是什么」或答案是对等叶子项，用 list。\n' +
   '【混合】本章若有原数字，至少 1 页 metric*；若有多轴对照，至少 1 页 columns*。禁止本章几乎全是 list。\n';
 
@@ -134,6 +138,7 @@ export const PPT_OUTLINE_FILL_CORE =
 
 type FillLayoutKey =
   | 'list'
+  | 'progress'
   | 'metric'
   | 'columns'
   | 'metric_columns'
@@ -144,13 +149,13 @@ type FillLayoutKey =
 /** 按 layout 拆开的 tips 语法：调用时只拼本页用到的块（勿写领域词表） */
 export const PPT_OUTLINE_LAYOUT_RULES: Record<FillLayoutKey, string> = {
   metric:
-    '【本页 layout=metric】tips 必须且只能是 2～5 条「原数字 + 空格 + 短口径」（口径 4～16 字）；原数字须含 % / 亿 / 万，来自检索。\n' +
+    '【本页 layout=metric】tips 必须且只能是 2～9 条「原数字 + 空格 + 短口径」（口径 4～16 字）；原数字须含 % / 亿 / 万，来自检索。常用 2～5；材料够多可到 6～9（运行时克隆扩卡）。\n' +
     '禁止无数字的名词清单或叙述句充当数据卡。材料不足 2 个原数字时不要硬选 metric。\n' +
     '正例：["586亿 2024H1男装大盘销售额","+42.3% 同比增速"]\n' +
     '反例：["类目A、类目B、类目C均保持较高增长"]\n',
   columns:
     '【本页 layout=columns】用于「少数分组轴」对照，不是把答案清单拆成空栏。\n' +
-    'tips 多行数组：每栏以 `col: 轴名`(≤12 字，轴名须含品类/大盘词，如「col: 衬衫」「col: 大盘」「col: polo」) 开头 → 可选 `colSub:`（各栏副标宜区分） → **紧跟 ≥1 条短条目**(4～16 字)。整页 **2～4 栏**。\n' +
+    'tips 多行数组：每栏以 `col: 轴名`(≤12 字，轴名须含品类/大盘词，如「col: 衬衫」「col: 大盘」「col: polo」) 开头 → 可选 `colSub:`（各栏副标宜区分） → **紧跟 ≥1 条短条目**(4～16 字)。整页 **2～9 栏**（常用 2～5；更多靠克隆）。\n' +
     '结构自检：任意两个 `col:` 之间（以及最后一个 `col:` 到数组末尾）必须出现至少 1 条非 col:/colSub:/metric: 的短条目，否则不合格。\n' +
     '栏标题 = 分组/角色/对照轴；栏内条目 = 该轴下的事实或标签。禁止把「对等叶子答案」逐个写成只有 `col:`、没有栏内条目。\n' +
     '禁止把多行 Markdown 列表塞进同一个 tip 字符串：`col:轴名` 与每条短标签必须是 tips 数组里的独立元素。\n' +
@@ -169,12 +174,18 @@ export const PPT_OUTLINE_LAYOUT_RULES: Record<FillLayoutKey, string> = {
     '再按 columns 写 2～4 栏（每栏 `col:` + 可选 `colSub:` + ≥1 条短条目）。禁止空栏。\n',
   metric_list:
     '【本页 layout=metric_list】上半数据卡 + 下半判断清单（不分栏）。\n' +
-    '- 2～4 条「metric: 单个原数字 + 空格 + 短口径」；一条只含一个数字。\n' +
-    '- 2～3 条「list: 短判断」(≤22 字)。\n' +
+    '- 2～9 条「metric: 单个原数字 + 空格 + 短口径」（常用 2～5）；一条只含一个数字。\n' +
+    '- 2～9 条「list: 短判断」(≤22 字；常用 2～4）。\n' +
     '正例：["metric: 586亿 2024H1男装大盘销售额","metric: +42.3% 同比增速","list: 核心类目多数超大盘","list: 领涨子类可核对"]\n',
   list:
-    '【本页 layout=list】tips 3～5 条平铺要点；每条「短标题（4～12 字）：短说明（≤22 字）」或单句 ≤22 字。\n' +
-    '适合回答「有哪些/是什么」的对等枚举；不要为了「好看」改成空的 columns。\n',
+    '【本页 layout=list】tips 3～9 条平铺要点（常用 3～5；材料够多可到 6～9，运行时克隆扩行）；每条「短标题（4～12 字）：短说明（≤22 字）」或单句 ≤22 字。\n' +
+    '适合回答「有哪些/是什么」的对等枚举；不要为了「好看」改成空的 columns。超过 9 条会降为 table。\n',
+  progress:
+    '【本页 layout=progress】有向序列（阶段/步骤/路径），不是并列枚举。tips 3～9 条（常用 3～5；6～9 靠克隆），强制两段式：' +
+    '「阶段名（4～12 字）：该阶段动作或产出（≤22 字）」。模板已有节点序号，文本里不许写「第一步/阶段1」。\n' +
+    '首条=起点/输入，末条=终点/产出。禁止把并列卖点套成伪顺序。超过 9 条会降为 table。\n' +
+    '正例：["选品定锚：锁定高增速品类与价格带","内容起量：以卖点短视频撬动自然流","货架承接：搜索与推荐位同步放量","复购沉淀：私域承接拉长生命周期"]\n' +
+    '反例：["价格带50-100占比18.8%","面料以棉为主","袖型常规最多"]（并列属性 → 应走 list/metric）\n',
   table:
     '【本页 layout=table】tips 是表格行：每个 tip 一行，单元格用竖线 | 分隔（不要 Markdown 表格线、不要行号）。\n' +
     '- 首行必须是表头（列名），其后每行一条记录；整表 **2～8 行**（含表头）、**2～5 列**。\n' +
@@ -184,7 +195,8 @@ export const PPT_OUTLINE_LAYOUT_RULES: Record<FillLayoutKey, string> = {
     '正例：["价格带|本期销量(占比)|销量同比|本期销售额(占比)","￥50以下|1200.5万(12.3%)|+8.2%|3.6亿(11.0%)"]\n' +
     '反例：["¥50","¥100","¥200"]（价格带碎片当行）；["价格带|销量"]（只有表头没有记录行）。\n',
   image_grid:
-    '【本页 layout=image_grid】2×2 图鉴：tips 2～4 条短图注（每条 4～16 字），一条对应一格。\n' +
+    '【本页 layout=image_grid】图鉴：tips 2～9 条短图注（每条 4～16 字），一条对应一格。' +
+    '4=2×2、6=3×2、8=4×2、9=3×3；材料图少则少写，不要凑空格。\n' +
     '图注须写材料事实（品类/属性/卖点），不要写「见图」「图1」这类指代，也不要写计划语。\n',
 };
 
@@ -209,7 +221,7 @@ export function layoutRulesFor(layouts: Array<string | undefined>): string {
 export const PPT_OUTLINE_FILL_SKELETON =
   PPT_OUTLINE_FILL_CORE +
   PPT_OUTLINE_LAYOUT_CATALOG +
-  layoutRulesFor(['metric', 'columns', 'metric_columns', 'metric_list', 'list', 'table', 'image_grid']) +
+  layoutRulesFor(['metric', 'columns', 'metric_columns', 'metric_list', 'list', 'progress', 'table', 'image_grid']) +
   '【输出格式·整章】\n' +
   '{"title":"…","chapters":[{"title":"…","subtitle":"…","slides":[' +
   '{"title":"规模与增速口径","layout":"metric_list","tips":["metric: 586亿 某口径销售额","metric: +42.3% 同比增速","list: 核心子类多数超大盘","list: 领涨子类可核对"]},' +
@@ -268,23 +280,49 @@ export const PPT_DOMAIN_PACK_OPTIONS = (
 
 // ─── 文章大纲（独立，不参与 PPT 三层）──────────────────────────────────────
 
-/** 文章大纲：骨架进 system 时用 */
+/** 文章大纲：骨架进 system 时用（对齐 PPT 的「定框强度」，但不引入 layout） */
 export const DOC_OUTLINE_SKELETON =
-  '你是文章大纲撰写助手。只输出符合契约的中文 Markdown 大纲。\n' +
-  '请拟一个中文大纲，必须输出完整三级，缺一级即为不合格。\n' +
-  '【层级】\n' +
-  '1. 全文只有 1 行一级标题，以「# 」开头。\n' +
-  '2. 每个章节以「## 」开头，不要用「第一章」这类序号代替层级。\n' +
-  '3. 每个章节下必须有至少 2 个段落，段落以「### 」开头。禁止只写到 ## 就结束。\n' +
-  '【示例】\n' +
+  '你是文章大纲撰写助手。只输出符合契约的中文 Markdown 大纲，不要前言后语，不要解释。\n' +
+  '【层级·缺一级即不合格】\n' +
+  '1. 全文只有 1 行一级标题，以「# 」开头（短名 ≤20 字，勿把长主题整句塞进标题）。\n' +
+  '2. 章节以「## 」开头；全文 **3～5 章**（推荐 4；禁止 1 章或超过 6 章）。不要用「第一章」代替层级。\n' +
+  '3. 每章下必须有 **2～4 个段落**，段落以「### 」开头。禁止只写到 ## 就结束；禁止一章堆 8 个以上 ###。\n' +
+  '【内容】\n' +
+  '- 章/段标题要能独立成题（读者只看标题能懂要写什么）；禁止「概述/小结/其他」空壳标题。\n' +
+  '- 同级标题互不重复；后文段落是前文的展开，不要换题重说。\n' +
+  '- 材料有流程/阶段时可用「路径/节奏」类章题；有多轴对照时章题点名对照对象；纯枚举用清单式段题。\n' +
+  '- 段落标记只能用「### 」；禁止用「* 」「+ 」「- 」代替 ### 写段落。\n' +
+  '- 禁止出现 layout / tips / intent / 版式 等字段行（Word 没有分区概念，出现即不合格）。\n' +
+  '- 不要在大纲里写正文，也不要写 ```table / ```figure 围栏（图表由正文阶段按材料决定）。\n' +
+  '【段类型】\n' +
+  '- 每段默认是散文段。\n' +
+  '- 数据密集段（销量/占比/构成/对比）：段题直接点名数据口径，如「销量与占比结构」；不要在段题里写「表」「图」字样。\n' +
+  '- 图表由正文阶段依据材料决定，大纲不预先承诺配图配表（避免产出「无图可配」的空段）。\n' +
+  '【结论章】\n' +
+  '- 末章须为结论/建议类（题含「结论」「建议」「动作」「取舍」「下一步」等），给出可执行判断；不得重述前章同一组数字。\n' +
+  '【示例·正确】\n' +
   '# 2024年男装流行趋势\n' +
   '## 色彩与面料\n' +
   '### 主色与撞色\n' +
   '### 面料与质感\n' +
   '## 版型与单品\n' +
   '### 宽松与修身\n' +
-  '### 外套与内搭\n';
-
+  '### 外套与内搭\n' +
+  '## 渠道与转化\n' +
+  '### 内容起量\n' +
+  '### 货架承接\n' +
+  '## 结论与建议\n' +
+  '### 优先方向\n' +
+  '### 近两周动作\n' +
+  '【示例·错误·勿仿】\n' +
+  '# 2024年男装流行趋势\n' +
+  '## 社媒热度与节奏\n' +
+  '* layout: metric\n' +
+  '- 近一年男装作品量与互动量\n' +
+  '- 下半年热度高于上半年\n' +
+  '## 西服品类的品牌竞争\n' +
+  '* layout: list\n' +
+  '- 高作品量主力品牌\n';
 /** @deprecated */
 export const DOC_OUTLINE_TEMPLATE = DOC_OUTLINE_SKELETON;
 
@@ -534,12 +572,100 @@ export function composePptOutlinePrompt(topic: string, vars?: Partial<PptOutline
   return `${composePptOutlineUserMessage(topic, vars)}\n${buildPptOutlineSystemPrompt(pack)}`;
 }
 
-export function buildDocOutlineSystemPrompt(): string {
-  return DOC_OUTLINE_SKELETON;
+export type DocDomainPack =
+  | 'generic'
+  | 'selection'
+  | 'report'
+  | 'research'
+  | 'review';
+
+export const DOC_DOMAIN_PACKS: Record<DocDomainPack, {label: string; prompt: string}> = {
+  generic: {
+    label: '通用',
+    prompt: '【体裁：通用】按读者理解路径组织章节；不照搬材料原目录。',
+  },
+  selection: {
+    label: '选品',
+    prompt:
+      '【体裁：选品】按选品决策顺序合并为 3～5 章（推荐 4）。章主题参考（改写勿照抄）：' +
+      '机会面 → 证据对照 → 风险与不选什么 → 选品结论与动作。\n' +
+      '推演不得引入材料没有的数字与周期；末章必须落可执行结论与动作。',
+  },
+  report: {
+    label: '汇报总结',
+    prompt: '【体裁：汇报总结】结论先行 → 依据 → 问题与风险 → 结论建议。',
+  },
+  research: {
+    label: '调研研究',
+    prompt: '【体裁：调研研究】背景与方法 → 现状与结构 → 归因 → 判断与建议；判断须有材料依据。',
+  },
+  review: {
+    label: '复盘归因',
+    prompt: '【体裁：复盘】目标 → 结果 → 归因 → 改进；不得编造未提供的基数。',
+  },
+};
+
+export const DOC_DOMAIN_PACK_OPTIONS = (
+  Object.keys(DOC_DOMAIN_PACKS) as DocDomainPack[]
+).map((id) => ({value: id, label: DOC_DOMAIN_PACKS[id].label}));
+
+/**
+ * 体裁推断。仅当调用方传入**显式** domainPack 时才 forced；
+ * 勿把 UI 默认值 `generic` 塞进来，否则会永久短路主题推断（十一·2）。
+ */
+export function inferDocDomainPack(
+  topic: string,
+  vars?: {domainPack?: string},
+): DocDomainPack {
+  const forced = (vars?.domainPack || '').trim() as DocDomainPack | '';
+  if (forced && DOC_DOMAIN_PACKS[forced]) return forced;
+  const t = `${topic || ''}`;
+  if (/选品|爆品|货盘|赛道/.test(t)) return 'selection';
+  if (/总结|汇报|研制|结题|述职|周报|月报/.test(t)) return 'report';
+  if (/调研|研究|白皮书|趋势|分析/.test(t)) return 'research';
+  if (/复盘|回顾|归因|改进/.test(t)) return 'review';
+  return 'generic';
 }
 
-export function composeDocOutlineUserMessage(topic: string): string {
-  return `撰写一篇文章大纲，主题是【${topic.trim()}】。`;
+export type DocOutlineVars = {
+  role: string;
+  object: string;
+  scope: string;
+  /** 体裁由 system 承载，不进 L3 气泡（八·5） */
+  domainPack?: DocDomainPack;
+};
+
+export function buildDocOutlineSystemPrompt(pack?: DocDomainPack): string {
+  const p = pack && DOC_DOMAIN_PACKS[pack] ? pack : 'generic';
+  return DOC_OUTLINE_SKELETON + '\n' + DOC_DOMAIN_PACKS[p].prompt;
+}
+
+export type DocOutlineRetrievalHint = {
+  scope?: RetrievalScope;
+  boundFiles?: string[];
+};
+
+export function composeDocOutlineUserMessage(
+  topic: string,
+  vars?: Partial<PptOutlineVars>,
+  retrieval?: DocOutlineRetrievalHint,
+): string {
+  const t = topic.trim();
+  const lines = [`撰写一篇文章大纲，主题是【${t}】。`];
+  const role = (vars?.role || '').trim();
+  const object = (vars?.object || '').trim();
+  const scope = sanitizeOutlineScope((vars?.scope || '').trim());
+  if (role) lines.push(`面向岗位：${role}。`);
+  if (object) lines.push(`核心议题/对象：${object}。`);
+  if (scope) lines.push(`范围：${scope}。`);
+  const files = (retrieval?.boundFiles || []).filter(Boolean);
+  if (files.length) {
+    const scopeLab =
+      retrieval?.scope === 'bound_only' ? '仅用下列源文档' : '以下源文档优先，可扩展知识库';
+    lines.push(`检索约束（${scopeLab}）：${files.join('、')}。`);
+  }
+  lines.push('请按系统契约输出完整三级 Markdown 大纲。');
+  return lines.join('\n');
 }
 
 export function composeDocOutlinePrompt(topic: string): string {
@@ -596,6 +722,11 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
   const [domainPack, setDomainPack] = useState<PptDomainPack>(
     initialVars?.domainPack ?? 'generic',
   );
+  // 默认 undefined=自动推断；勿默认 generic（会短路 inferDocDomainPack）
+  const [docPack, setDocPack] = useState<DocDomainPack | undefined>(() => {
+    const p = (initialVars as DocOutlineVars | undefined)?.domainPack;
+    return p && DOC_DOMAIN_PACKS[p] ? p : undefined;
+  });
   const [inferring, setInferring] = useState(false);
   const [inferNote, setInferNote] = useState('');
   const lastPreviewSignal = React.useRef(0);
@@ -609,7 +740,7 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
   const [filesLoading, setFilesLoading] = useState(false);
 
   const canBindFiles =
-    Boolean(kbName) && kbName !== ALL_KB_NAME && mode === 'ppt' && showVars;
+    Boolean(kbName) && kbName !== ALL_KB_NAME && showVars;
 
   // 绑定关系 → 默认 scope（用户改过也可因清空绑定而回落）
   useEffect(() => {
@@ -660,7 +791,7 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
       return;
     }
 
-    if (mode === 'doc' || !showVars) {
+    if (!showVars) {
       setPreviewOpen(true);
       return;
     }
@@ -677,7 +808,6 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
             next = {
               role: (remote.role || '').trim() || next.role,
               object: (remote.object || '').trim() || next.object,
-              // 远程常把细分类目清单塞进 scope；过长则退回规则结果（如「男装」）
               scope: sanitizeOutlineScope(
                 (remote.scope || '').trim(),
                 next.scope,
@@ -719,9 +849,39 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
       return;
     }
     if (mode === 'doc') {
+      // 体裁只进 system；role 空则不写进 user（勿默认「读者」反向误导，十一·2）
+      const vars: DocOutlineVars = {
+        role: role.trim(),
+        object: object.trim() || t,
+        scope: scope.trim(),
+        domainPack: docPack,
+      };
+      const pack = inferDocDomainPack(
+        t,
+        docPack ? {domainPack: docPack} : undefined,
+      );
+      const files = canBindFiles ? boundSourceFiles : [];
+      const effectiveScope: RetrievalScope =
+        files.length === 0 ? 'kb_supplement' : retrievalScope;
       onSend({
-        userMessage: composeDocOutlineUserMessage(t),
-        systemPrompt: buildDocOutlineSystemPrompt(),
+        userMessage: composeDocOutlineUserMessage(
+          t,
+          {
+            role: vars.role,
+            object: vars.object,
+            scope: sanitizeOutlineScope(vars.scope),
+          },
+          {scope: effectiveScope, boundFiles: files},
+        ),
+        systemPrompt: buildDocOutlineSystemPrompt(pack),
+        displayTitle: displayTitle.trim() || suggestPptDocTitle(t, {
+          role: vars.role || undefined,
+          object: vars.object,
+          scope: vars.scope,
+          domainPack: pack === 'selection' ? 'selection' : 'generic',
+        }),
+        boundSourceFiles: files,
+        retrievalScope: effectiveScope,
       });
     } else {
       const vars: PptOutlineVars = {
@@ -764,24 +924,35 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
   };
 
   const bubblePreview = useMemo(
-    () =>
-      composePptOutlineUserMessage(
+    () => {
+      const vars = {
+        role,
+        object,
+        scope,
+        domainPack,
+      };
+      const retrieval = {
+        scope:
+          boundSourceFiles.length === 0
+            ? ('kb_supplement' as RetrievalScope)
+            : retrievalScope,
+        boundFiles: canBindFiles ? boundSourceFiles : [],
+      };
+      if (mode === 'doc') {
+        return composeDocOutlineUserMessage(
+          topic.trim() || '（主题）',
+          vars,
+          retrieval,
+        );
+      }
+      return composePptOutlineUserMessage(
         topic.trim() || '（主题）',
-        {
-          role,
-          object,
-          scope,
-          domainPack,
-        },
-        {
-          scope:
-            boundSourceFiles.length === 0
-              ? 'kb_supplement'
-              : retrievalScope,
-          boundFiles: canBindFiles ? boundSourceFiles : [],
-        },
-      ),
+        vars,
+        retrieval,
+      );
+    },
     [
+      mode,
       topic,
       role,
       object,
@@ -803,11 +974,11 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
           onPressEnter={openPreview}
         />
         <Button type="default" loading={inferring} onClick={openPreview}>
-          {showVars && mode === 'ppt' ? '定框并构思' : '确认并构思'}
+          {showVars ? '定框并构思' : '确认并构思'}
         </Button>
       </Space.Compact>
       <Modal
-        title={showVars && mode === 'ppt' ? '确认定框' : '确认构思'}
+        title={showVars ? '确认定框' : '确认构思'}
         open={previewOpen}
         width={520}
         onCancel={() => setPreviewOpen(false)}
@@ -821,7 +992,7 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
           </Space>
         }
       >
-        {showVars && mode === 'ppt' ? (
+        {showVars ? (
           <>
             {inferNote ? (
               <Alert type="info" showIcon style={{marginBottom: 12}} message={inferNote} />
@@ -906,14 +1077,15 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
                     />
                   </Form.Item>
                 </>
-              ) : showVars && mode === 'ppt' ? (
+              ) : (
                 <Alert
                   type="info"
                   showIcon
                   style={{marginBottom: 8}}
                   message="当前为全库或未选具体知识库：检索默认「知识库补充」。选定具体库后可绑定源文档。"
                 />
-              ) : null}
+              )}
+              {mode === 'ppt' ? (
               <Collapse
                 ghost
                 size="small"
@@ -938,10 +1110,38 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
                   },
                 ]}
               />
+              ) : (
+              <Collapse
+                ghost
+                size="small"
+                items={[
+                  {
+                    key: 'doc-adv',
+                    label: <Text strong>高级（体裁）</Text>,
+                    children: (
+                      <Form.Item
+                        label={<Text strong>体裁</Text>}
+                        extra="写入系统侧文章骨架；不出现在聊天气泡。"
+                        style={{marginBottom: 0}}
+                      >
+                        <Select
+                          allowClear
+                          placeholder="自动推断"
+                          style={{width: 160}}
+                          value={docPack}
+                          options={DOC_DOMAIN_PACK_OPTIONS}
+                          onChange={(v) => setDocPack(v)}
+                        />
+                      </Form.Item>
+                    ),
+                  },
+                ]}
+              />
+              )}
             </Form>
             <div style={{marginTop: 12}}>
               <Text type="secondary" style={{fontSize: 12}}>
-                对话里只会看到下面这句；格式/版式契约在系统侧注入，不会出现在气泡中。
+                对话里只会看到下面这句；格式契约在系统侧注入，不会出现在气泡中。
               </Text>
               <Paragraph
                 style={{

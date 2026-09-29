@@ -4,24 +4,34 @@ import { useTheme } from 'antd-style';
 import {Button, Empty, Spin, message, Flex, Progress, Tag} from 'antd';
 import React, {useEffect, useState} from "react";
 import axios from "axios";
-import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
+import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_DOC_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
 
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
-import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle} from "@/components/DocUtil/ViewItem4Doc";
+import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT} from "@/components/DocUtil/ViewItem4Doc";
+import {
+  prepareChaptersBlocks,
+  resolveBlocksToPayloads,
+  injectDocBlocks,
+} from "@/components/DocUtil/DocBlockInjector";
+import {allocateMaterialPool, fetchAssetBytes, listAssets} from "@/services/chatchat/kb";
+import {
+  buildFigureAssetAppendix,
+  figureAssetsFromAssetList,
+} from "@/components/DocUtil/docFigureAssets";
 import PizZipUtils from "pizzip/utils";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { saveAs } from 'file-saver'
 import OutlineRec, {outlineTypeDOC, outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
-import KnowledgeBaseSelector, {opStackStyle, opBtnStyle, opKbTagStyle, ALL_KB_NAME, kbLabel} from "@/components/DocUtil/kbSelectorModal";
+import KnowledgeBaseSelector, {opStackStyle, opBtnStyle, opKbTagStyle, ALL_KB_NAME, kbLabel, getCachedKbName, setCachedKbName} from "@/components/DocUtil/kbSelectorModal";
 import {CompassTwoTone, FileWordTwoTone, FolderOpenTwoTone} from "@ant-design/icons";
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 
 
-// 定义一个markdown字串，当localstorage中一个文档也没有的情况下暂时使用。
-const markdown_init = "# 如何帮助选品师筛选出抖音男装的爆品\n\n## 一、了解市场需求\n\n* 1.1 趋势分析：关注抖音上的流行趋势，研究赛博机能、末日竞赛等热门主题。\n* 1.2 用户偏好：分析用户对于衣服的审美要求与功能需求。\n* 1.3 目标受众定位：针对年轻受众的需求进行细分。\n\n## 二、考察产品特点\n\n* 2.1 设计元素：选择符合流行趋势且具个性化、创意性的设计风格，如做旧、解构、拼接等。\n* 2.2 色彩搭配：选取银色、黑色、灰色等主流颜色或者具有冲击力的撞色效果。\n* 2.3 功能性需求：关注舒适度、实用性和时尚感，满足多元化运动场景。\n* 2.4 品质把控：要求供应商提供高品质的产品，保障商品的耐用性与满意度。\n\n## 三、数据分析\n\n* 3.1 热销爆款分析：查看抖音男装销量情况，了解热销爆款的销量规律。\n* 3.2 官方数据：关注各大电商平台和抖音平台的数据报告。\n* 3.3 社交热度：跟踪抖音热点话题和相关标签的热度。\n\n## 四、供应商与合作\n\n* 4.1 优质供应商选择：寻找有品牌形象、生产实力和网络营销能力合格的供应商。\n* 4.2 考察合作店铺：调研店铺信誉好、客群广泛的销售渠道和搭配公式。\n* 4.3 平台政策：关注抖音平台相关的选品规范和优惠政策。\n\n## 五、营销策略\n\n* 5.1 视频创意：根据服装特点制作优质的宣传视频，提高用户观看兴趣。\n* 5.2 选品类目：策划与服装特点相符的产品活动、打折促销等策略吸引消费者。\n* 5.3 晒单反馈：注重用户体验，主动收集产品反馈信息。\n\n## 六、总结评估\n\n* 6.1 抒达能力测试：评价写作者对于市场需求和趋势的认识能力。\n* 6.2 产品知识掌握程度：考察选品师对各品类产品的了解与掌握程度。\n* 6.3 持续关注市场动态，优化和调整策略。\n";
+// 本地无大纲时的种子样例（十一·2：### + 结论章）
+const markdown_init = DOC_OUTLINE_MARKDOWN_INIT;
 // const get_chapters_from_outlineRecs=(outlineRecs:OutlineRec[],id:string,formatPrompt="")=>{
 //   const or=OutlineRec.getRecById(outlineRecs,id);
 //   init_title =or?or.outlineName:"";
@@ -58,14 +68,15 @@ const slideTemplates=[
   {id:6,name:"商业活动策划",pict:"doc_template_6.jpg",file:"template_6.docx",labels:["商业"]}
 ]
 function init():[OutlineRec[],string,string,Chapter[],string]{
-  const formatPrompt = "";
-  const outlineRecs = OutlineRec.listRecs(outlineTypeDOC, ALL_KB_NAME);
+  const formatPrompt = buildDocParagraphFormatPrompt();
+  const cachedKb = getCachedKbName(ALL_KB_NAME);
+  const outlineRecs = OutlineRec.listRecs(outlineTypeDOC, cachedKb);
   if (!outlineRecs.length) {
-    return [[], "", ALL_KB_NAME, [], formatPrompt];
+    return [[], "", cachedKb, [], formatPrompt];
   }
   const init_id = outlineRecs[0].outlineId!;
   const [init_title, _, __, init_chapters] = Doc.get_chapters_from_outlineRecs(outlineRecs, outlineTypeDOC, init_id, formatPrompt);
-  return [outlineRecs, init_title, ALL_KB_NAME, init_chapters, formatPrompt];
+  return [outlineRecs, init_title, cachedKb, init_chapters, formatPrompt];
 }
 
 const KbOutlineGenDoc: React.FC = () => {
@@ -83,7 +94,11 @@ const KbOutlineGenDoc: React.FC = () => {
   const [chapters,setChapters] = useState(init_chapters);
   const [title, setTitle] = useState<string>(init_title);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [kbName,setKbName]=useState(init_kbName);
+  const [kbName,setKbNameState]=useState(init_kbName);
+  const setKbName = (name: string) => {
+    setCachedKbName(name);
+    setKbNameState(name);
+  };
   const [kbModelOpen,setKbModelOpen]=useState(false);
   const theme = useTheme();
   const { initialState } = useModel('@@initialState');
@@ -156,50 +171,63 @@ const KbOutlineGenDoc: React.FC = () => {
   const saveDoc=()=>{
       setLoading(true);
       loadFile(
-        // the "template" example hosted by us
         "/docTemplate-simple.docx",
-        function (error: any, content: PizZip.LoadData) {
+        async function (error: any, content: PizZip.LoadData) {
           if (error) {
+            setLoading(false);
             throw error;
           }
-          const curDate = new Date();
-          const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
-          const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
-          const zip = new PizZip(content);
-          const doc = new Docxtemplater(zip, {
-            paragraphLoop: true,
-            linebreaks: true,
-          });
-
-          // Render the document (Replace {first_name} by John, {last_name} by Doe)
-          doc.render({
-            // company: "北京英创互联科技",
-            company: "北京AI智能联盟",
-            department: "AI智能工作室",
-            author: "智能小毕",
-            curDate: curDateStr,
-            title: title,
-            first_name: "John",
-            last_name: "Doe",
-            phone: "+33666666",
-            description: "The Acme Product",
-            itemName1: "test1",
-            itemName2: "test2",
-            chapters: chapters,
-          });
-
-          const blob = doc.getZip().generate({
-            type: "blob",
-            mimeType:
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            // compression: DEFLATE adds a compression step.
-            // For a 50MB output document, expect 500ms additional CPU time
-            compression: "DEFLATE",
-          });
-          // Output the document using Data-URI
-          saveAs(blob, title+"-Ai-v"+curSimpleDateStr+".docx");
-          setLoading(false);
-          // setDownloadable(false);
+          try {
+            const curDate = new Date();
+            const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
+            const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
+            const blockLists = prepareChaptersBlocks(chapters);
+            const zip = new PizZip(content);
+            const doc = new Docxtemplater(zip, {
+              paragraphLoop: true,
+              linebreaks: true,
+            });
+            doc.render({
+              company: "北京AI智能联盟",
+              department: "AI智能工作室",
+              author: "智能小毕",
+              curDate: curDateStr,
+              title: title,
+              first_name: "John",
+              last_name: "Doe",
+              phone: "+33666666",
+              description: "The Acme Product",
+              itemName1: "test1",
+              itemName2: "test2",
+              chapters: chapters,
+            });
+            const payloads = await resolveBlocksToPayloads(blockLists, {
+              kbName,
+              fetchKbAsset: async ({kbName: kn, file_name, asset_id}) =>
+                fetchAssetBytes({
+                  knowledge_base_name: kn,
+                  file_name,
+                  asset_id,
+                }),
+            });
+            const inj = injectDocBlocks(doc.getZip(), payloads);
+            if (inj.warning) {
+              console.warn(inj.warning);
+              message.warning(inj.warning);
+            }
+            const blob = doc.getZip().generate({
+              type: "blob",
+              mimeType:
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              compression: "DEFLATE",
+            });
+            saveAs(blob, title+"-Ai-v"+curSimpleDateStr+".docx");
+          } catch (e) {
+            console.error(e);
+            message.error("生成 Word 失败");
+          } finally {
+            setLoading(false);
+          }
         }
       );
   }
@@ -213,13 +241,72 @@ const KbOutlineGenDoc: React.FC = () => {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     };
+    // 九·2：生成前供给可用插图资产清单（空则禁 figure）
+    let figureAppendix = buildFigureAssetAppendix([]);
+    try {
+      if (kbName && kbName !== ALL_KB_NAME && kbName !== "all") {
+        const res = await listAssets({
+          knowledge_base_name: kbName,
+          kinds: "image,chart",
+        });
+        const raw = (res as any)?.data ?? res;
+        const list = Array.isArray(raw) ? raw : [];
+        figureAppendix = buildFigureAssetAppendix(
+          figureAssetsFromAssetList(list, 12),
+        );
+      }
+    } catch (e) {
+      console.warn("加载插图资产清单失败，本轮禁 figure", e);
+    }
+    // 任务 4B（方案 B）：生成前一次拉取「章节→片段」分配表；失败则降级为原逐段检索
+    let byChapterKeys: Record<string, string[]> = {};
+    try {
+      if (kbName && kbName !== ALL_KB_NAME && kbName !== "all" && chapters.length) {
+        const allocRes = await allocateMaterialPool({
+          knowledge_base_name: kbName,
+          topic: title || "",
+          chapters: chapters.map((ch, i) => ({
+            id: ch.key || `chapter-${i}`,
+            title: ch.title || "",
+            points: (ch.paragraphs || []).map((p) => p.title).filter(Boolean),
+          })),
+        });
+        const data = (allocRes as any)?.data ?? allocRes;
+        byChapterKeys = (data?.by_chapter && typeof data.by_chapter === "object")
+          ? data.by_chapter
+          : {};
+        if (Array.isArray(data?.unused)) {
+          console.info(
+            `[材料池] pool=${data.pool_size ?? "?"} unused=${data.unused.length}`,
+          );
+        }
+      }
+    } catch (e) {
+      console.warn("材料池分配失败，本轮降级为逐段检索", e);
+      byChapterKeys = {};
+    }
+    const splitKeysForParagraph = (
+      chapterKeys: string[],
+      paraIndex: number,
+      paraCount: number,
+    ): string[] | undefined => {
+      if (!chapterKeys.length) return undefined;
+      const n = Math.max(1, paraCount);
+      const out: string[] = [];
+      for (let i = paraIndex; i < chapterKeys.length; i += n) {
+        out.push(chapterKeys[i]);
+      }
+      if (!out.length) {
+        out.push(chapterKeys[paraIndex % chapterKeys.length]);
+      }
+      return out;
+    };
     // 生成请求的序号与每个item的key的对应
     type tIdx={
       key: string;
       idx: number;
     }
     const tArray=new Array<tIdx>();
-    // const getTIdxFromTArray=(idx:number) => {tArray.filter((t)=> {return t.idx===idx})}
     const getKeyFromTArray=(idx:number) => {
       for(let t of tArray){
         if(idx===t.idx){
@@ -229,9 +316,23 @@ const KbOutlineGenDoc: React.FC = () => {
       return "paragraph0";
     }
     //---------------------------------------------
-    const buildMsg=(prompt:string )=>{
+    const buildMsg=(prompt:string, assignedKeys?: string[])=>{
       setDownloadable(false);
-      const msg={messages:[{content:WRITING_SYSTEM_PROMPT,role:"system",name:"string"},{content: prompt,role:"user",name:"string"}],model:DEFAULT_LLM_MODEL,frequency_penalty:0,stream:false,temperature:0.7,top_logprobs:0,top_p:0}
+      const msg: Record<string, unknown>={
+        messages:[
+          {content:WRITING_SYSTEM_PROMPT,role:"system",name:"string"},
+          {content: prompt,role:"user",name:"string"},
+        ],
+        model:DEFAULT_LLM_MODEL,
+        frequency_penalty:0,
+        stream:false,
+        temperature:0.7,
+        top_logprobs:0,
+        top_p:0,
+      };
+      if (assignedKeys) {
+        msg.stream_options = {assigned_doc_keys: assignedKeys};
+      }
       return JSON.stringify(msg);
     }
 
@@ -240,11 +341,17 @@ const KbOutlineGenDoc: React.FC = () => {
     let index=0;
     for (let chapter of chapters){
       if(Array.isArray(chapter.paragraphs)){
+        const chId = chapter.key || "";
+        const chKeys = byChapterKeys[chId] || [];
+        const paraCount = chapter.paragraphs.length;
+        let paraIndex = 0;
         for (let paragraph of chapter.paragraphs){
+          const assigned = splitKeysForParagraph(chKeys, paraIndex, paraCount);
+          paraIndex++;
           /*** 生成全部 ***/
           if(genKey.length===0) {
             if (paragraph.prompt.length > 0) {
-              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + formatPrompt + KB_WRITING_CONSTRAINT_PROMPT), {headers: headers}));
+              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned), {headers: headers}));
               tArray.push({key: paragraph.key, idx: index});
               index++;
             } else {
@@ -254,7 +361,7 @@ const KbOutlineGenDoc: React.FC = () => {
           }else{
             if(genKey === paragraph.key){
               if (paragraph.prompt.length > 0) {
-                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + formatPrompt + KB_WRITING_CONSTRAINT_PROMPT), {headers: headers}));
+                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned), {headers: headers}));
                 tArray.push({key: paragraph.key, idx: index});
                 index++;
               }else{

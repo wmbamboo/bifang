@@ -10,9 +10,9 @@ import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Doc from "@/components/ChatUtil/ChatWithSpeech4Doc";
-import {composeDocOutlineUserMessage} from "@/components/ChatUtil/OutlinePromptComposer";
+import {DOC_OUTLINE_WELCOME_SAMPLES} from "@/components/ChatUtil/outlineWelcomeSamples";
 import {message, Tag, Button} from "antd";
-import {ALL_KB_NAME, kbLabel, opKbTagStyle} from "@/components/DocUtil/kbSelectorModal";
+import {ALL_KB_NAME, kbLabel, opKbTagStyle, getCachedKbName, setCachedKbName} from "@/components/DocUtil/kbSelectorModal";
 
 export const KbGenDocOutline: React.FC = () => {
   const theme = useTheme();
@@ -21,9 +21,10 @@ export const KbGenDocOutline: React.FC = () => {
   const [tempOutlineRecs, setTempOutlineRec] = useState<OutlineRec[]>([]);
   /**用于指定shower中初始化选中的radio**/
   const [defaultId, setDefaultId] = useState<string>("");
-  const [selectKbName, setSelectKbName] = useState(ALL_KB_NAME);
+  const [selectKbName, setSelectKbName] = useState(() => getCachedKbName(ALL_KB_NAME));
   const handleSelectedKbItem= (kb_name:string) => {
     console.log('选择的知识库:', kb_name);
+    setCachedKbName(kb_name);
     setSelectKbName(kb_name)
   };
   const showDrawer = () => {
@@ -39,17 +40,7 @@ export const KbGenDocOutline: React.FC = () => {
   //----------------------------------------------------------------------------------------------
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
-  const buttonMessages_init:ButtonMessage[]=[
-    {title: "",
-      content: composeDocOutlineUserMessage('万科怎么了')
-    },
-    {title: '',
-      content: composeDocOutlineUserMessage('研制总结报告') + '（深空探测科学目标体系图谱项目，遵循GJB438B）'
-    },
-    {title: '',
-      content: composeDocOutlineUserMessage('2024年男装流行趋势如何')
-    }
-  ]
+  const buttonMessages_init:ButtonMessage[] = DOC_OUTLINE_WELCOME_SAMPLES;
   const openai = new OpenAI({
     apiKey: 'sk-f46769dda93743ba8266506c28500d32',
     baseURL: `${process.env.bf_baseUrl}/knowledge_base/local_kb/${selectKbName}/`,

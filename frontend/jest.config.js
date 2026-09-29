@@ -6,7 +6,6 @@ module.exports = {
   // 遗留空壳/依赖 ESM(nanoid) 的用例尚未迁移；勿挡金标/覆盖闸 CI
   testPathIgnorePatterns: [
     "/node_modules/",
-    "<rootDir>/tests/DocTemplate\\.test\\.ts$",
     "<rootDir>/tests/PptTemplate\\.test\\.ts$",
     "<rootDir>/tests/ViewItem4Doc\\.test\\.ts$",
     "<rootDir>/tests/ViewItem4Ppt\\.test\\.ts$",
@@ -32,6 +31,8 @@ module.exports = {
   },
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
+    // nanoid v4 ESM：单测用 stub，避免拉进 ViewItem4Ppt → OutlineStore 时炸
+    "^nanoid$": "<rootDir>/tests/stubs/nanoid.js",
   },
   moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json"],
 };

@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import {Modal, Button, Tooltip} from 'antd';
 import { DatabaseTwoTone } from '@ant-design/icons';
 import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
+import {ALL_KB_NAME, getCachedKbName, setCachedKbName} from "@/components/DocUtil/kbCache";
 
-/** 写作时「全库」选项对应的知识库名，不对应真实库 */
-export const ALL_KB_NAME = '__all__';
+export {ALL_KB_NAME, getCachedKbName, setCachedKbName} from "@/components/DocUtil/kbCache";
 
 export function kbLabel(name?: string) {
   if (!name) return '未选择';
@@ -65,6 +65,7 @@ const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = (props:Knowl
   const handleOk = () => {
     if (selectedKnowledgeBase) {
       console.log('选中的知识库:', selectedKnowledgeBase);
+      setCachedKbName(selectedKnowledgeBase);
       props.cbKbSel(selectedKnowledgeBase);
 
       setVisible(false);

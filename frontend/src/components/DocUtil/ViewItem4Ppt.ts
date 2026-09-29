@@ -376,7 +376,7 @@ export const PPT_METRIC_TITLE_MAX = 12;
 export const PPT_METRIC_DESC_MIN = 4;
 export const PPT_METRIC_DESC_MAX = 16;
 
-export type SlideLayout = 'list' | 'metric' | 'metric_list' | 'columns' | 'metric_columns' | 'table' | 'image_grid';
+export type SlideLayout = 'list' | 'progress' | 'metric' | 'metric_list' | 'columns' | 'metric_columns' | 'table' | 'image_grid';
 
 export type TipRole = 'metric' | 'list';
 export type OutlineTip = { role: TipRole; text: string };
@@ -388,7 +388,7 @@ export type SlideImageAssetRef = { file_name: string; asset_id: string };
 export type ColumnBlock = { title: string; sub: string; items: string[] };
 
 const LAYOUT_LINE =
-  /^layout\s*[:：]\s*(metric_columns|metric_list|columns?|metrics?|list|table|image_grid|imagegrid|grid)\s*$/i;
+  /^layout\s*[:：]\s*(metric_columns|metric_list|columns?|metrics?|list|progress|table|image_grid|imagegrid|grid)\s*$/i;
 const TIP_ROLE_LINE = /^(metric|list)\s*[:：]\s*(.+)$/i;
 const IMG_ASSET_LINE = /^img\s*[:：]\s*(.*)$/i;
 const COL_TITLE_LINE = /^(?:col|column|栏)\s*[:：]\s*(.+)$/i;
@@ -401,7 +401,7 @@ export function parseImgAssetLine(tip: string): SlideImageAssetRef | null {
   const body = (m[1] || "").trim();
   if (!body) return { file_name: "", asset_id: "" };
   const pipe = body.indexOf("|");
-  if (pipe > 0) {
+  if (pipe >= 0) {
     return {
       file_name: body.slice(0, pipe).trim(),
       asset_id: body.slice(pipe + 1).trim(),
@@ -455,6 +455,7 @@ export function parseLayoutLine(tip: string): SlideLayout | undefined {
   if (v === 'columns' || v === 'column') return 'columns';
   if (v === 'table') return 'table';
   if (v === 'image_grid' || v === 'imagegrid' || v === 'grid') return 'image_grid';
+  if (v === 'progress') return 'progress';
   if (/^metrics?$/.test(v)) return 'metric';
   return 'list';
 }
@@ -959,19 +960,42 @@ export function buildTableFillVars(
   return { vars, rows: ROWS, cols: COLS, page: gridSpec.page };
 }
 
-/** image_grid：2×2 图鉴，cap1～cap4 取前 4 条要点/小项。 */
+/**
+ * image_grid 槽数：图注条数（排除 img:）与 vItem 取大，钳制 2～9（克隆后可超原生 4 格）。
+ */
+export function countImageGridSlots(
+  subTitle: string,
+  vItem?: Dictionary<string>,
+): number {
+  const tipTexts = parseSlideTips(subTitle || '')
+    .map((t) => t.text)
+    .filter((t) => (t || '').trim() && !/^img\s*[:：]/i.test(t));
+  let fromV = 0;
+  if (vItem) {
+    for (let i = 1; i <= 9; i++) {
+      if ((vItem[`item${i}`] || '').trim()) fromV = i;
+    }
+  }
+  const n = Math.max(tipTexts.length, fromV);
+  return Math.max(2, Math.min(9, n || 4));
+}
+
+/** image_grid：按实际槽数填 cap1～capN（2～9，克隆扩格）。 */
 export function buildImageGridFillVars(
   subTitle: string,
   vItem: Dictionary<string>,
-): { vars: Dictionary<string> } {
-  const tipTexts = parseSlideTips(subTitle).map((t) => t.text);
+): { vars: Dictionary<string>; count: number } {
+  const tipTexts = parseSlideTips(subTitle)
+    .map((t) => t.text)
+    .filter((t) => (t || '').trim() && !/^img\s*[:：]/i.test(t));
+  const count = countImageGridSlots(subTitle, vItem);
   const vars: Dictionary<string> = {};
-  for (let i = 1; i <= 4; i++) {
+  for (let i = 1; i <= count; i++) {
     let t = (vItem[`item${i}`] || '').trim();
     if (!t && tipTexts[i - 1]) t = tipTexts[i - 1];
     vars[`cap${i}`] = t.slice(0, 28);
   }
-  return { vars };
+  return { vars, count };
 }
 
 /**
@@ -1033,7 +1057,8 @@ export function countOutlineTips(subTitle: string): number {
 }
 
 /**
- * 把生成小项对齐到分栏槽位：丢掉「栏标题/副标」伪条目，按大纲条目匹配，不足则按序补。
+ * 把生成小项对齐到分栏槽位：丢掉「栏标题/副标」伪条目，按大纲条目匹配。
+ * 槽位无匹配 → 留空（禁止抢 pool[0]，否则面料栏会吞图案首项、像「复制填充」）。
  */
 export function alignItemsToColumnSlots(
   subTitle: string,
@@ -1074,16 +1099,23 @@ export function alignItemsToColumnSlots(
   for (let ci = 0; ci < cols.length; ci++) {
     const col = cols[ci];
     const wanted = (col.items || []).map((t) => t.trim()).filter(Boolean);
-    const n = Math.max(1, wanted.length || 2);
+    // 大纲写了几条就几槽；一条都没有也不要硬造 2 槽去抢别栏
+    const n = wanted.length;
+    if (n === 0) continue;
     for (let ii = 0; ii < n; ii++) {
       const want = wanted[ii] || '';
       let hit = -1;
       if (want) {
-        hit = pool.findIndex(
-          (it) => it.title === want || it.title.includes(want) || want.includes(it.title),
-        );
+        hit = pool.findIndex((it) => it.title === want);
+        // 前缀弱匹配（≥4 字）；禁止 includes 互吞短串
+        if (hit < 0 && want.length >= 4) {
+          hit = pool.findIndex(
+            (it) =>
+              it.title.length >= 4 &&
+              (it.title.startsWith(want) || want.startsWith(it.title)),
+          );
+        }
       }
-      if (hit < 0 && pool.length) hit = 0;
       const picked =
         hit >= 0
           ? pool.splice(hit, 1)[0]
@@ -1194,10 +1226,12 @@ export function buildPptItemFormatPrompt(
     );
   }
   if (layout === 'image_grid') {
-    const n = count && count > 0 ? Math.min(4, count) : 4;
+    const n = count && count > 0 ? Math.min(9, Math.max(2, count)) : 4;
+    const gridHint =
+      n <= 4 ? '2×2' : n <= 6 ? '3×2' : n <= 8 ? '4×2' : '3×3';
     return (
       '\n\n【输出格式】\n' +
-      `本页是 2×2 图鉴，必须且只能输出 ${n} 行图注（编号 1 到 ${n}）。\n` +
+      `本页是图鉴（${gridHint}），必须且只能输出 ${n} 行图注（编号 1 到 ${n}）。\n` +
       '每行一句短图注（4～16 字），对应一格图片说明；禁止长段落。\n' +
       '1. 短图注\n'
     );
@@ -1229,8 +1263,8 @@ export function validateSlideViewItems(
   if (rows.length === 0) {
     return '请至少填写 1 条完整小项（概括标题 + 具体描述）。';
   }
-  if (layout === 'metric' && (rows.length < 2 || rows.length > 5)) {
-    return `数据卡须为 2～5 条（当前 ${rows.length} 条）。`;
+  if (layout === 'metric' && (rows.length < 2 || rows.length > 9)) {
+    return `数据卡须为 2～9 条（当前 ${rows.length} 条）。`;
   }
   if (layout === 'columns') {
     for (let i = 0; i < rows.length; i++) {
@@ -1342,8 +1376,14 @@ export function validateSlideViewItems(
       return `第 ${n} 点描述须为 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字（当前 ${content.length} 字）。`;
     }
   }
-  // list：禁止多点粘贴同一段品牌故事当 Desc
-  if (layout === 'list') {
+  // list / metric*：禁止多点粘贴同一段正文（P17 高弹加宽卡整段复制）
+  if (
+    layout === 'list' ||
+    layout === 'progress' ||
+    layout === 'metric' ||
+    layout === 'metric_list' ||
+    layout === 'metric_columns'
+  ) {
     const norm = (s: string) => s.replace(/\s+/g, '').slice(0, 80);
     for (let i = 0; i < rows.length; i++) {
       for (let j = i + 1; j < rows.length; j++) {
@@ -1631,6 +1671,21 @@ export class Slide{
     }
     if(!viewItems||viewItems.length===0){
       return false
+    }
+    const rows = viewItems.map((vi) => ({
+      title: vi.title,
+      content: vi.content,
+    }));
+    const vErr = validateSlideViewItems(rows, this.layout, {
+      metricCount:
+        this.layout === 'metric_list' || this.layout === 'metric_columns'
+          ? splitMetricListTips(this.subTitle || '').metrics.length
+          : undefined,
+    });
+    if (vErr) {
+      this.genError = vErr;
+      this.setResult(viewItems);
+      return false;
     }
     this.setResult(viewItems);
     return true
@@ -2055,7 +2110,7 @@ export class Ppt{
                   : slide.layout === 'table'
                     ? `请把「${slide.title || '本页'}」写成表格行：每行一条完整管道记录，列顺序与【大纲要点】一致（如 品类|价格带|销量(占比)|同比|销售额(占比)）。数字须来自大纲/检索原文；禁止把 ¥50-100 等价格带从连字符拆开。`
                     : slide.layout === 'image_grid'
-                      ? `请把「${slide.title || '本页'}」写成 2×2 图鉴图注：输出 2～4 行短图注（每行 4～16 字），对应四格图片说明。`
+                      ? `请把「${slide.title || '本页'}」写成图鉴图注：按大纲条数输出 2～9 行短图注（每行 4～16 字；4=2×2、6=3×2、8/9 更大网格），一条对应一格。`
                       : buildSlideTaskInstruction(slide.title);
           if (
             /高举高打|精种准打|聚流快打/.test(slide.title || '') &&
@@ -2095,7 +2150,7 @@ export class Ppt{
           const countHint = slide.layout === 'metric'
             ? (outlineTips.length
               ? `本页是数据卡，大纲共 ${outlineTips.length} 条。必须且只能输出 ${outlineTips.length} 行。每行以原数字开头，解读 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字，且不得重复【当前章节】和【本页标题】中的词语。禁止换算，禁止编造检索里没有的比例、金额或天数。`
-              : '本页是数据卡。输出 2～5 行，每行以检索中的原数字开头。禁止换算或编造数字。')
+              : '本页是数据卡。输出 2～9 行，每行以检索中的原数字开头。禁止换算或编造数字。')
             : slide.layout === 'metric_list'
               ? `本页是数据卡+要点：前 ${metrics.length} 行为数据卡，后 ${lists.length} 行为列表要点，必须且只能输出 ${outlineTips.length} 行。`
               : slide.layout === 'columns'
@@ -2112,8 +2167,8 @@ export class Ppt{
                       : '本页是表格，每行用 | 分隔单元格，列与材料口径一致。')
                     : slide.layout === 'image_grid'
                       ? (outlineTips.length
-                        ? `本页是 2×2 图鉴，大纲共 ${Math.min(4, outlineTips.length)} 条图注。必须输出对应行数短图注。`
-                        : '本页是 2×2 图鉴，输出 2～4 行短图注。')
+                        ? `本页是图鉴，大纲共 ${Math.min(9, outlineTips.length)} 条图注。必须输出对应行数短图注（最多 9 格）。`
+                        : '本页是图鉴，输出 2～9 行短图注。')
                   : (outlineTips.length
               ? `本页大纲共 ${outlineTips.length} 条，必须且只能输出 ${outlineTips.length} 个小点。每条要点对应 1 个小点：标题对应该要点，描述只写该要点多出来的事实；各点描述禁止雷同，不要把同一段品牌故事整段粘到多点。`
               : '');
@@ -2196,9 +2251,19 @@ export class Ppt{
 
   /**
    * 为 PPT 模板补齐 item1..itemN，避免占位符 {vItem.itemN} 原样残留。
+   * 按非空条数选 2～9 槽（list 克隆后可超原生 5）；禁止 Math.max(3) 抬槽造空卡（P5）。
    */
   static padVItemForTemplate(vItem: Dictionary<string>, itemCounts: number) {
-    const n = Math.max(3, Math.min(5, itemCounts || 3));
+    let filled = 0;
+    for (let i = 1; i <= 9; i++) {
+      if (
+        (vItem[`item${i}`] || '').trim() ||
+        (vItem[`item${i}_Desc`] || '').trim()
+      ) {
+        filled = i;
+      }
+    }
+    const n = Math.max(2, Math.min(9, filled || itemCounts || 2));
     for (let i = 1; i <= n; i++) {
       if (vItem[`item${i}`] === undefined) vItem[`item${i}`] = '';
       if (vItem[`item${i}_Desc`] === undefined) vItem[`item${i}_Desc`] = '';
@@ -2209,20 +2274,29 @@ export class Ppt{
   /** 数据卡标题都是原数字时才用数据卡模板，否则调用方应退回 list。 */
   static canFillMetric(vItem: Dictionary<string>): boolean {
     const titles: string[] = [];
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 9; i++) {
       const t = (vItem[`item${i}`] || '').trim();
       if (t) titles.push(t);
     }
-    if (titles.length < 2 || titles.length > 5) return false;
+    if (titles.length < 2 || titles.length > 9) return false;
     return titles.every((t) => metricTitleOk(t));
   }
 
-  /** 2～5 条按实际卡数补空槽（对齐模板 24～27 页）。 */
+  /** 2～9 条按实际卡数补空槽（克隆后可超过模板原生 5 卡）。 */
   static padMetricVItem(vItem: Dictionary<string>, itemCounts: number) {
-    const slots = Math.max(2, Math.min(5, itemCounts || 3));
+    let filled = 0;
+    for (let i = 1; i <= 9; i++) {
+      if (
+        (vItem[`item${i}`] || "").trim() ||
+        (vItem[`item${i}_Desc`] || "").trim()
+      ) {
+        filled = i;
+      }
+    }
+    const slots = Math.max(2, Math.min(9, filled || itemCounts || 3));
     for (let i = 1; i <= slots; i++) {
-      if (vItem[`item${i}`] === undefined) vItem[`item${i}`] = '';
-      if (vItem[`item${i}_Desc`] === undefined) vItem[`item${i}_Desc`] = '';
+      if (vItem[`item${i}`] === undefined) vItem[`item${i}`] = "";
+      if (vItem[`item${i}_Desc`] === undefined) vItem[`item${i}_Desc`] = "";
     }
     return slots;
   }

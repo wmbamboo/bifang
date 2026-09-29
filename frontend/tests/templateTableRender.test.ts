@@ -44,7 +44,7 @@ async function fill(page: number, sub: string) {
 }
 
 describe("灌模：新表格规格端到端", () => {
-  test("6 行 5 列榜单 → 取页 45，槽位全填、无残留", async () => {
+  test("6 行 5 列榜单 → 取页 47，槽位全填、无残留", async () => {
     const rows = Array.from(
       { length: 5 },
       (_, i) => `${i + 1}|店铺${i + 1}|${i + 1}.2万件|${1200 + i * 100}万|+${10 + i * 2}%`,
@@ -54,7 +54,7 @@ describe("灌模：新表格规格端到端", () => {
       pipeSub("排名|店铺|销量|销售额|同比", rows),
     );
     expect([R, C]).toEqual([6, 5]);
-    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(45);
+    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(47);
     // 无任何残留占位符（含未提供的 slideTitle）
     expect(content).not.toMatch(/\{[A-Za-z_][\w.]*(?:\[[\w.]+\])?\}/);
     expect(content).not.toMatch(/\{[{}]/);
@@ -66,7 +66,7 @@ describe("灌模：新表格规格端到端", () => {
     expect(text).not.toContain("cell_r");
   });
 
-  test("8 行 5 列长榜单 → 取页 46", async () => {
+  test("8 行 5 列长榜单 → 取页 48", async () => {
     const rows = Array.from(
       { length: 7 },
       (_, i) => `${i + 1}|店铺${i + 1}|${i + 1}.2万件|${1200 + i * 100}万|+${10 + i * 2}%`,
@@ -76,12 +76,12 @@ describe("灌模：新表格规格端到端", () => {
       pipeSub("排名|店铺|销量|销售额|同比", rows),
     );
     expect([R, C]).toEqual([8, 5]);
-    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(46);
+    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(48);
     expect(content).not.toMatch(/\{[A-Za-z_][\w.]*(?:\[[\w.]+\])?\}/);
     expect(decodeXml(content)).toContain("店铺7");
   });
 
-  test("6 行 4 列 → 取页 44，且不误用 5 列页", async () => {
+  test("6 行 4 列 → 取页 46，且不误用 5 列页", async () => {
     const rows = Array.from(
       { length: 5 },
       (_, i) => `￥${i}0-${i}9|${i}00.5万(1${i}.3%)|+${i}.2%|3.${i}亿(1${i}.0%)`,
@@ -91,13 +91,13 @@ describe("灌模：新表格规格端到端", () => {
       pipeSub("价格带|本期销量(占比)|销量同比|本期销售额(占比)", rows),
     );
     expect([R, C]).toEqual([6, 4]);
-    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(44);
+    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(46);
     expect(content).not.toMatch(/\{[A-Za-z_][\w.]*(?:\[[\w.]+\])?\}/);
     // 4 列页不应出现第 5 列槽
     expect(content).not.toContain("cell_r0c4");
   });
 
-  test("5 行 4 列仍走老的页 42（回归）", async () => {
+  test("5 行 4 列 → 页 45（回归）", async () => {
     const rows = Array.from(
       { length: 4 },
       (_, i) => `￥${i}0-${i}9|${i}00.5万(1${i}.3%)|+${i}.2%|3.${i}亿(1${i}.0%)`,
@@ -107,6 +107,6 @@ describe("灌模：新表格规格端到端", () => {
       pipeSub("价格带|本期销量(占比)|销量同比|本期销售额(占比)", rows),
     );
     expect([R, C]).toEqual([5, 4]);
-    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(42);
+    expect((t as { usedSlidePages: number[] }).usedSlidePages).toContain(45);
   });
 });

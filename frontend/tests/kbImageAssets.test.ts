@@ -1,4 +1,5 @@
 import {
+  inferImageGridCategory,
   selectImageGridByCaptions,
   selectImageGridCandidates,
   scoreAssetAgainstCaption,
@@ -91,5 +92,49 @@ describe("kbImageAssets", () => {
     });
     // slot2=manual(p11); slot0/1/3 顺序补 p10 → dense [p10, p11]
     expect(picked.map((p) => p.page)).toEqual([10, 11]);
+  });
+
+  it("infers polo vs shirt category from title", () => {
+    expect(inferImageGridCategory("polo热销款式与店铺", [])).toBe("polo");
+    expect(inferImageGridCategory("衬衫热销款式与店铺", [])).toBe("shirt");
+  });
+
+  it("polo page never picks shirt-only product_grid assets", () => {
+    const all = [
+      asset(5, 1, "image", "罗蒙 男士衬衫 5.3万件 店铺榜"),
+      asset(8, 1, "image", "凉感冰丝天丝衬衫 ¥99 本期销量"),
+      asset(16, 1, "image", "编织肌理Polo衫 ¥119.90 本期销量9219"),
+      asset(16, 2, "image", "编织肌理Polo衫 ¥99.00 本期销量3822"),
+      asset(16, 3, "image", "编织肌理Polo衫 ¥65.80–68.80"),
+      asset(16, 4, "image", "编织肌理Polo衫 ¥29.90"),
+    ];
+    const picked = selectImageGridByCaptions(
+      all,
+      [
+        "编织肌理Polo衫 销量9219",
+        "编织肌理Polo衫 ¥99",
+        "编织肌理Polo衫 ¥65.8",
+        "编织肌理Polo衫 ¥29.9",
+      ],
+      {title: "polo热销款式与店铺", count: 4, strictCategory: true},
+    );
+    expect(picked.every((p) => p.page === 16)).toBe(true);
+    expect(picked.map((p) => p.idx)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("shirt page never picks polo-only product_grid assets", () => {
+    const all = [
+      asset(5, 1, "image", "罗蒙 男士衬衫 5.3万件"),
+      asset(5, 2, "image", "啄木鸟 男士衬衫 2.3万件"),
+      asset(16, 1, "image", "编织肌理Polo衫 ¥119.90"),
+      asset(16, 2, "image", "编织肌理Polo衫 ¥99.00"),
+    ];
+    const picked = selectImageGridByCaptions(
+      all,
+      ["罗蒙 男士衬衫5.3万件", "啄木鸟 男士衬衫2.3万"],
+      {title: "衬衫热销款式与店铺", count: 2, strictCategory: true},
+    );
+    expect(picked.every((p) => p.page === 5)).toBe(true);
+    expect(picked.some((p) => /polo/i.test(p.snippet || ""))).toBe(false);
   });
 });

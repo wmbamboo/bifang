@@ -1,6 +1,6 @@
 /**
- * 表格规格闸：manifest 多规格解析 + 填格变量（缺口治理 2026-09-26）
- * 页 42=5×4 / 44=6×4 / 45=6×5 / 46=8×5
+ * 表格规格闸：manifest 多规格解析 + 填格变量（缺口治理 2026-09-26；页号随 50 页模板迁至 45–48）
+ * 页 45=5×4 / 46=6×4 / 47=6×5 / 48=8×5
  */
 import {
   resolveTableGrid,
@@ -19,34 +19,34 @@ describe("template manifest table specs", () => {
     const m = getTemplateManifest();
     const tables = m.pages.filter((p) => p.layout === "table");
     expect(tables.map((p) => `${p.page}:${p.rows}x${p.cols}`)).toEqual([
-      "42:5x4",
-      "44:6x4",
-      "45:6x5",
-      "46:8x5",
+      "45:5x4",
+      "46:6x4",
+      "47:6x5",
+      "48:8x5",
     ]);
     expect(m.reserved || []).toEqual([]);
   });
 
   test("精确命中：5×4 / 6×4 / 6×5 / 8×5", () => {
-    expect(resolveTableGrid(5, 4)).toMatchObject({ page: 42, rows: 5, cols: 4 });
-    expect(resolveTableGrid(6, 4)).toMatchObject({ page: 44, rows: 6, cols: 4 });
-    expect(resolveTableGrid(6, 5)).toMatchObject({ page: 45, rows: 6, cols: 5 });
-    expect(resolveTableGrid(8, 5)).toMatchObject({ page: 46, rows: 8, cols: 5 });
+    expect(resolveTableGrid(5, 4)).toMatchObject({ page: 45, rows: 5, cols: 4 });
+    expect(resolveTableGrid(6, 4)).toMatchObject({ page: 46, rows: 6, cols: 4 });
+    expect(resolveTableGrid(6, 5)).toMatchObject({ page: 47, rows: 6, cols: 5 });
+    expect(resolveTableGrid(8, 5)).toMatchObject({ page: 48, rows: 8, cols: 5 });
   });
 
   test("最小够用：装不满的取最省规格，并回报真实规格", () => {
     // 5 行 5 列 → 6×5（比 8×5 省）
-    expect(resolveTableGrid(5, 5)).toMatchObject({ page: 45, rows: 6, cols: 5 });
+    expect(resolveTableGrid(5, 5)).toMatchObject({ page: 47, rows: 6, cols: 5 });
     // 7 行 4 列 → 只有 8×5 能装
-    expect(resolveTableGrid(7, 4)).toMatchObject({ page: 46, rows: 8, cols: 5 });
+    expect(resolveTableGrid(7, 4)).toMatchObject({ page: 48, rows: 8, cols: 5 });
     // 2 行 2 列 → 5×4
-    expect(resolveTableGrid(2, 2)).toMatchObject({ page: 42, rows: 5, cols: 4 });
+    expect(resolveTableGrid(2, 2)).toMatchObject({ page: 45, rows: 5, cols: 4 });
   });
 
   test("超限与缺省：夹到 8×5 / 默认 5×4", () => {
-    expect(resolveTableGrid(12, 9)).toMatchObject({ page: 46, rows: 8, cols: 5 });
-    expect(resolveTableGrid()).toMatchObject({ page: 42, rows: 5, cols: 4 });
-    expect(resolveTableGrid(undefined, 3)).toMatchObject({ page: 42, rows: 5, cols: 4 });
+    expect(resolveTableGrid(12, 9)).toMatchObject({ page: 48, rows: 8, cols: 5 });
+    expect(resolveTableGrid()).toMatchObject({ page: 45, rows: 5, cols: 4 });
+    expect(resolveTableGrid(undefined, 3)).toMatchObject({ page: 45, rows: 5, cols: 4 });
   });
 
   test("resolveTemplatePage 与 resolveTableGrid 页码一致", () => {
@@ -69,10 +69,10 @@ describe("buildTableFillVars 动态行列", () => {
   const rec = (i: number) =>
     `￥${i}0-${i}9|${i}00.5万(1${i}.3%)|+${i}.2%|3.${i}亿(1${i}.0%)`;
 
-  test("4 列 5 行 → 页 42，20 格全覆盖", () => {
+  test("4 列 5 行 → 页 45，20 格全覆盖", () => {
     const sub = [header, rec(1), rec(2), rec(3), rec(4)].join("\n");
     const { vars, rows, cols, page } = buildTableFillVars(sub, {});
-    expect({ rows, cols, page }).toEqual({ rows: 5, cols: 4, page: 42 });
+    expect({ rows, cols, page }).toEqual({ rows: 5, cols: 4, page: 45 });
     expect(Object.keys(vars).filter((k) => k.startsWith("cell_"))).toHaveLength(20);
     expect(vars["cell_r0c0"]).toBe("价格带");
     expect(vars["cell_r1c1"]).toBe("100.5万(11.3%)");
@@ -81,22 +81,22 @@ describe("buildTableFillVars 动态行列", () => {
     expect(vars["cell_r5c0"]).toBeUndefined();
   });
 
-  test("5 列 6 行 → 页 45，30 格全覆盖", () => {
+  test("5 列 6 行 → 页 47，30 格全覆盖", () => {
     const h5 = "排名|店铺|销量|销售额|同比";
     const r5 = (i: number) => `${i}|店铺${i}|${i}.2万件|${i}00万|+${i}0%`;
     const sub = [h5, r5(1), r5(2), r5(3), r5(4), r5(5)].join("\n");
     const { vars, rows, cols, page } = buildTableFillVars(sub, {});
-    expect({ rows, cols, page }).toEqual({ rows: 6, cols: 5, page: 45 });
+    expect({ rows, cols, page }).toEqual({ rows: 6, cols: 5, page: 47 });
     expect(Object.keys(vars).filter((k) => k.startsWith("cell_"))).toHaveLength(30);
     expect(vars["cell_r5c4"]).toBe("+50%");
   });
 
-  test("8 行 5 列 → 页 46；全角 ｜ 也认", () => {
+  test("8 行 5 列 → 页 48；全角 ｜ 也认", () => {
     const h5 = "排名｜店铺｜销量｜销售额｜同比";
     const r5 = (i: number) => `${i}｜店铺${i}｜${i}.2万件｜${i}00万｜+${i}0%`;
     const sub = [h5, r5(1), r5(2), r5(3), r5(4), r5(5), r5(6), r5(7)].join("\n");
     const { vars, rows, cols, page } = buildTableFillVars(sub, {});
-    expect({ rows, cols, page }).toEqual({ rows: 8, cols: 5, page: 46 });
+    expect({ rows, cols, page }).toEqual({ rows: 8, cols: 5, page: 48 });
     expect(Object.keys(vars).filter((k) => k.startsWith("cell_"))).toHaveLength(40);
     expect(vars["cell_r7c1"]).toBe("店铺7");
   });
@@ -107,7 +107,7 @@ describe("buildTableFillVars 动态行列", () => {
       vItem[`item${i}`] = `单元格${i}`;
     }
     const { vars, rows, cols, page } = buildTableFillVars("", vItem);
-    expect({ rows, cols, page }).toEqual({ rows: 5, cols: 4, page: 42 });
+    expect({ rows, cols, page }).toEqual({ rows: 5, cols: 4, page: 45 });
     expect(vars["cell_r0c0"]).toBe("单元格1");
     expect(vars["cell_r1c3"]).toBe("单元格8");
   });
@@ -136,7 +136,6 @@ describe("buildTableFillVars 动态行列", () => {
     expect(items![2].title).toBe("¥50-100 销量占比");
     expect(items![2].content).toBe("机会价带可核对");
 
-    // 旧误拆：title=男士衬衫|¥50  desc=100|129.4万…
     const vItem = {
       item1: "男士衬衫|¥50",
       item1_Desc: "100|129.4万(43.69%)|+15.67%|1.0亿(31.15%)",

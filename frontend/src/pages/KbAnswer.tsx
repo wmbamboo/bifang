@@ -8,6 +8,7 @@ import * as React from 'react';
 import { CloseOutlined, FileTextOutlined, LinkOutlined } from '@ant-design/icons';
 import { OpenAI } from 'openai';
 import KbListSnlComp from '@/components/KbMgt/KbListCompSnl';
+import {getCachedKbName, setCachedKbName} from '@/components/DocUtil/kbSelectorModal';
 import SpeechToTextButton from '@/components/DocUtil/SpeechToTextButton';
 import styles from './KbAnswer.less';
 
@@ -133,7 +134,7 @@ const KbAnswerPage: React.FC = () => {
   const { initialState } = useModel('@@initialState');
   const [relatedDocs, setRelatedDocs] = useState<RelatedDoc[]>([]);
   const [docsPanelOpen, setDocsPanelOpen] = useState(false);
-  const [selectKbName, setSelectKbName] = useState('samples');
+  const [selectKbName, setSelectKbName] = useState(() => getCachedKbName('samples'));
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [followUpsVisible, setFollowUpsVisible] = useState(false);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
@@ -165,6 +166,7 @@ const KbAnswerPage: React.FC = () => {
   };
 
   const handleSelectedKbItem = (kb_name: string) => {
+    setCachedKbName(kb_name);
     setSelectKbName(kb_name);
   };
 
@@ -445,7 +447,7 @@ const KbAnswerPage: React.FC = () => {
           className={styles.sideCol}
           style={{ background: theme.colorBgContainer }}
         >
-          <KbListSnlComp onSelectionChange={handleSelectedKbItem} />
+          <KbListSnlComp value={selectKbName} onSelectionChange={handleSelectedKbItem} />
         </ProCard>
 
         <ProCard

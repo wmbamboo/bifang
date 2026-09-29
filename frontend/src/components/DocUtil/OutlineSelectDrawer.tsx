@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from "react";
 import {Button, Col, Divider, Drawer, Flex, message, Modal, Row, Space, Typography, Tooltip} from "antd";
 import {ProCard} from "@ant-design/pro-components";
-import MdViewer from "@/components/DocUtil/mdViewer";
+import DocOutlineView from "@/components/DocUtil/DocOutlineView";
 import OutlineRec, {outlineType, outlineTypeAiPPT, outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectRadio from "@/components/DocUtil/OutlineSelectRadio";
 import {ContainerOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined} from "@ant-design/icons";
@@ -76,10 +76,12 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
       }else{
         const chapters=Doc.getChaptersFromContent(or.outlineContent)
         const chkMsg=Doc.checkChapter(chapters);
-        if(chkMsg.code!==0){
+        if(chkMsg.code < 0){
           const msg1="因此无法选择该大纲，请检查或告知管理员。"
           message.error(chkMsg.msg+"\n"+msg1)
           return false;
+        }else if(chkMsg.code > 0){
+          message.warning(chkMsg.msg)
         }else{
           message.success(`该大纲（${or.outlineId} [${or.outlineName}]）格式没问题。`)
         }
@@ -271,9 +273,11 @@ const OutlineDrawer: React.FC<OutlineSelectDrawerProps> = (props:OutlineSelectDr
                 <Typography.Text type="secondary">请选择左侧大纲</Typography.Text>
               )
             ) : (
-              <Typography style={{height:'750px',overflowY:'auto'}}>
-                <MdViewer source={getContent(currentId)}/>
-              </Typography>
+              <DocOutlineView
+                key={currentId}
+                markdown={getContent(currentId)}
+                fallbackTitle={OutlineRec.getRecById(olRecs, currentId)?.outlineName || ""}
+              />
             )}
           </div>
         </ProCard>

@@ -52,11 +52,14 @@ type Sel =
   | { kind: "slide"; chapterKey: string; slideKey: string };
 
 const tipLimits = (layout: SlideLayout) => {
-  if (layout === "metric" || layout === "metric_list") return { min: 2, max: 5 };
+  if (layout === "metric") return { min: 2, max: 9 };
+  if (layout === "metric_list") return { min: 2, max: 5 };
   if (layout === "columns" || layout === "metric_columns") return { min: 2, max: 20 };
   if (layout === "table") return { min: 2, max: 5 };
-  if (layout === "image_grid") return { min: 2, max: 4 };
-  return { min: 3, max: 5 };
+  if (layout === "image_grid") return { min: 2, max: 9 };
+  if (layout === "progress") return { min: 3, max: 9 };
+  // list：克隆后可到 9
+  return { min: 3, max: 9 };
 };
 
 const normalizeLayout = (layout: SlideLayout | string | undefined): SlideLayout => {
@@ -64,6 +67,7 @@ const normalizeLayout = (layout: SlideLayout | string | undefined): SlideLayout 
     layout === "metric" ||
     layout === "metric_list" ||
     layout === "list" ||
+    layout === "progress" ||
     layout === "columns" ||
     layout === "metric_columns" ||
     layout === "table" ||
@@ -81,11 +85,13 @@ const layoutTagColor = (layout: SlideLayout | string | undefined) => {
   if (layout === "metric_columns") return "blue";
   if (layout === "table") return "orange";
   if (layout === "image_grid") return "magenta";
+  if (layout === "progress") return "green";
   return "default";
 };
 
 const LAYOUT_SELECT_OPTIONS = [
   { value: "list", label: "列表" },
+  { value: "progress", label: "进度" },
   { value: "metric", label: "数据卡" },
   { value: "metric_list", label: "数据卡+要点" },
   { value: "columns", label: "分栏" },

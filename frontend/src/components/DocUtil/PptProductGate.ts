@@ -28,9 +28,10 @@ export type ProductGateReport = {
 };
 
 const SLOT_RE = /\{[A-Za-z_][\w.]*(?:\[[\w.]+\])?\}/g;
-/** 模板伪槽：progress1 / progress1-3 / progress2-5 */
-export const PROGRESS_MARKER_RE = /\bprogress\d*(?:-\d+)?\b/gi;
-const PROGRESS_RE = /\bprogress\d*(?:-\d+)?\b/i;
+/** 模板伪槽：progress1-3 / list1-4 / imageList1-4 等右上角维护标记 */
+export const PROGRESS_MARKER_RE =
+  /\b(?:progress|list|imageList)\d*(?:-\d+)?\b/gi;
+const PROGRESS_RE = /\b(?:progress|list|imageList)\d*(?:-\d+)?\b/i;
 /** 检索引注：完整 [文档1] / 残缺 [文档1 / 粘连 [文档1][文档7 */
 export const DOC_CITE_MARKER_RE = /\[文档\s*\d+\]?/g;
 const DOC_CITE_RE = /\[文档\s*\d+\]?/;
@@ -229,7 +230,7 @@ function scanOnePage(
       page,
       slideName,
       level: 'error',
-      reason: '残留内部标记 progress*',
+      reason: '残留内部标记 progress*/list*/imageList*',
     });
   }
   if (DOC_CITE_RE.test(text) || DOC_CITE_RE.test(raw)) {
@@ -301,11 +302,20 @@ function scanOnePage(
   }
   const dupLine = findCrossCardDuplicateLine(lines);
   if (dupLine) {
+    const exactKey = String(dupLine).replace(/\s+/g, '').toLowerCase();
+    // ≥8 字精确同文：硬拒（P17）；短核/去价签同款仍 warn
+    const exactDup =
+      exactKey.length >= 8 &&
+      lines.filter(
+        (l) => String(l || '').replace(/\s+/g, '').toLowerCase() === exactKey,
+      ).length >= 2;
     issues.push({
       page,
       slideName,
-      level: 'warn',
-      reason: `跨卡重复文案「${dupLine.slice(0, 20)}」（已放行下载，请人工复核）`,
+      level: exactDup ? 'error' : 'warn',
+      reason: exactDup
+        ? `跨卡精确同文「${dupLine.slice(0, 20)}」`
+        : `跨卡重复文案「${dupLine.slice(0, 20)}」（已放行下载，请人工复核）`,
     });
   }
   return issues;

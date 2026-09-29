@@ -258,6 +258,32 @@ async def asset_file(
     return FileResponse(path, media_type=media, filename=path.name)
 
 
+@router.post("/material_pool/allocate")
+async def allocate_material_pool(request: Request):
+    """任务 4B / 方案 B：一次建池并返回「章节→片段」互斥分配表。"""
+    body = await _read_json(request)
+    kb = str(body.get("knowledge_base_name") or body.get("kb_name") or "").strip()
+    if not kb:
+        return fail("knowledge_base_name 必填", 400)
+    topic = str(body.get("topic") or "").strip()
+    chapters = body.get("chapters") or []
+    if not isinstance(chapters, list) or not chapters:
+        return fail("chapters 必填（非空数组）", 400)
+    pool_size = int(body.get("pool_size") or 250)
+    max_per = int(body.get("max_per_chapter") or 8)
+    try:
+        data = kb_service.build_writing_material_pool(
+            topic,
+            kb,
+            chapters,
+            pool_size=max(20, min(pool_size, 400)),
+            max_per_chapter=max(1, min(max_per, 20)),
+        )
+    except Exception as ex:  # noqa: BLE001
+        return fail(f"材料池分配失败: {ex}", 500)
+    return ok(data)
+
+
 @router.get("/corpus_profile")
 async def get_corpus_profile(knowledge_base_name: str = Query("")):
     """KB 语料画像：assets/profile.json，无则回退内置 apparel。"""

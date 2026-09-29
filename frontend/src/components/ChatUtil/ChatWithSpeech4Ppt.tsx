@@ -44,6 +44,10 @@ import {
   type OutlineStructureJson,
 } from "@/components/DocUtil/outlineJson";
 import {inferSlideIntentOrUndefined} from "@/components/DocUtil/outlineEvidenceValidate";
+import {
+  mergeImageAssetTips,
+  pickEvidenceAssetsForGrid,
+} from "@/components/DocUtil/outlineImageBind";
 import {retrievalBiasLineForTitle} from "@/components/DocUtil/corpusProfile";
 import {
   buildCoverageChecklist,
@@ -618,7 +622,15 @@ const Chat=(props:ChatProps)=> {
                   const page = d?.page ?? '';
                   const src = String(d?.source || d?.title || '').trim();
                   const srcPart = src ? `|src:${src}` : '';
-                  return `⟦chunk:${cid}|page:${page}${srcPart}⟧\n${body}`;
+                  const aids = Array.isArray(d?.asset_ids)
+                    ? d.asset_ids
+                        .map((x: unknown) => String(x || '').trim())
+                        .filter(Boolean)
+                    : [];
+                  const assetsPart = aids.length
+                    ? `|assets:${aids.join(',')}`
+                    : '';
+                  return `⟦chunk:${cid}|page:${page}${srcPart}${assetsPart}⟧\n${body}`;
                 })
                 .filter(Boolean)
                 .join('\n\n');
@@ -844,6 +856,28 @@ const Chat=(props:ChatProps)=> {
                 );
                 if (parsed.ok) {
                   filledSlide = parsed.value;
+                  // image_grid：把证据 chunk.asset_ids 写成 img: 行，灌模按 id 绑定
+                  if (
+                    normalizeSlideLayout(layout) === 'image_grid' &&
+                    evidence
+                  ) {
+                    const caps = (filledSlide.tips || []).filter(
+                      (t) => t && !/^img\s*[:：]/i.test(t),
+                    );
+                    const gridN = Math.max(2, Math.min(9, caps.length || 4));
+                    const refs = pickEvidenceAssetsForGrid(
+                      evidence,
+                      caps,
+                      gridN,
+                      slTitle,
+                    );
+                    if (refs.length) {
+                      filledSlide = {
+                        ...filledSlide,
+                        tips: mergeImageAssetTips(filledSlide.tips || [], refs),
+                      };
+                    }
+                  }
                   if (fidelityHitOnSlide && fillAttempts > 1) {
                     timing.fidelityRecovered += 1;
                   }

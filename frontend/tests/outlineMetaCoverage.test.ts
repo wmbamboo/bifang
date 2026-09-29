@@ -18,6 +18,9 @@ import {
 import {
   validateFilledSlideInChapter,
   validateOutlineStructure,
+  coerceProgressLayoutByTips,
+  hasProgressOrderSignal,
+  parseFilledSlideFromModel,
 } from "@/components/DocUtil/outlineJson";
 import {
   decodeXmlEntities,
@@ -134,12 +137,14 @@ describe("meta diagnostic + column coverage gates", () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it("stripProgressMarkers eats progress1-3 whole (no leftover -3)", () => {
+  it("stripProgressMarkers eats progress/list/imageList markers whole", () => {
     for (const raw of [
       "progress1-3",
       "progress2-5",
-      "progress1-5",
-      "progress2-4",
+      "list1-4",
+      "List3-5",
+      "imageList1-4",
+      "imageList2-3",
     ]) {
       const cleaned = stripProgressMarkers(raw);
       expect(cleaned).toBe("");
@@ -269,7 +274,7 @@ describe("v2026826 residual locks", () => {
     expect(msg).toMatch(/衬衫/);
   });
 
-  it("product gate catches trailing orphan 0; cross-card dup is warn only", () => {
+  it("product gate catches trailing orphan 0; exact cross-card dup is error", () => {
     expect(hasTrailingOrphanDigit("年货节、双11超会买、618超会买0")).toBe(
       true,
     );
@@ -282,8 +287,9 @@ describe("v2026826 residual locks", () => {
         <a:t>本期销量5.3万，为高弹加宽款最高</a:t>
       </p:sld>`;
     const r1 = scanFilledSlides([{slideName: "s", fileContent: xmlDup}]);
-    expect(r1.ok).toBe(true);
-    expect(r1.warnings[0]?.reason).toMatch(/跨卡重复/);
+    // 五·3 P17：≥8 字精确同文硬拒
+    expect(r1.ok).toBe(false);
+    expect(r1.errors[0]?.reason).toMatch(/跨卡精确同文/);
 
     const xmlOrphan = `
       <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
@@ -479,5 +485,53 @@ describe("v2026826 residual locks", () => {
     const r = scanFilledSlides([{slideName: "s", fileContent: xml}]);
     expect(r.ok).toBe(false);
     expect(r.errors[0]?.reason).toMatch(/图表|刻度/);
+  });
+});
+
+describe("progress 顺序信号（六·5·补）", () => {
+  it("有顺序词保留 progress", () => {
+    const tips = [
+      "选品定锚：锁定高增速品类与价格带",
+      "内容起量：以卖点短视频撬动自然流",
+      "货架承接：搜索与推荐位同步放量",
+      "复购沉淀：私域承接拉长生命周期",
+    ];
+    expect(hasProgressOrderSignal(tips)).toBe(true);
+    expect(coerceProgressLayoutByTips("progress", tips).layout).toBe("progress");
+  });
+
+  it("无顺序词 → Warn 语义降为 list", () => {
+    const tips = [
+      "价格带50-100占比18.8%",
+      "面料以棉为主",
+      "袖型常规最多",
+    ];
+    expect(hasProgressOrderSignal(tips)).toBe(false);
+    const r = coerceProgressLayoutByTips("progress", tips);
+    expect(r.layout).toBe("list");
+    expect(r.warn).toMatch(/顺序/);
+  });
+
+  it("parseFilledSlideFromModel 降级不拒单", () => {
+    const raw = JSON.stringify({
+      title: "面料与图案概览",
+      layout: "progress",
+      tips: [
+        "面料以棉为主，占比 52.3%",
+        "图案印花居多，条纹次之 18.1%",
+        "厚薄适中，四季可穿占比 33%",
+      ],
+    });
+    const parsed = parseFilledSlideFromModel(
+      raw,
+      "面料与图案概览",
+      "progress",
+      [{ title: "面料与图案概览", layout: "progress", tips: [] }],
+      0,
+    );
+    if (!parsed.ok) {
+      throw new Error("unexpected reject: " + parsed.msg);
+    }
+    expect(parsed.value.layout).toBe("list");
   });
 });

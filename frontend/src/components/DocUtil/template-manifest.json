@@ -1,59 +1,1617 @@
 {
   "template": "pptTemplate-simple.pptx",
-  "slideMax": 47,
+  "slideMax": 50,
   "pages": [
-    { "page": 1, "layout": "cover", "slots": ["title", "subtitle", "company", "author", "department", "curDate"] },
-    { "page": 2, "layout": "chapterCover", "slots": ["chapterTitle", "chapterSubTitle"] },
-    { "page": 3, "layout": "catalog", "cards": 3, "slots": ["chapterTitle1", "chapterTitle2", "chapterTitle3"] },
-    { "page": 4, "layout": "catalog", "cards": 4, "slots": ["chapterTitle1", "chapterTitle2", "chapterTitle3", "chapterTitle4"] },
-    { "page": 5, "layout": "catalog", "cards": 5, "slots": ["chapterTitle1", "chapterTitle2", "chapterTitle3", "chapterTitle4", "chapterTitle5"] },
-    { "page": 6, "layout": "list", "cards": 3 },
-    { "page": 7, "layout": "list", "cards": 4 },
-    { "page": 8, "layout": "list", "cards": 5 },
-    { "page": 9, "layout": "list", "cards": 3, "skin": 1 },
-    { "page": 10, "layout": "list", "cards": 4, "skin": 1 },
-    { "page": 11, "layout": "list", "cards": 5, "skin": 1 },
-    { "page": 12, "layout": "list", "cards": 3, "skin": 2 },
-    { "page": 13, "layout": "list", "cards": 4, "skin": 2 },
-    { "page": 14, "layout": "list", "cards": 5, "skin": 2 },
-    { "page": 15, "layout": "list", "cards": 3, "skin": 3 },
-    { "page": 16, "layout": "list", "cards": 4, "skin": 3 },
-    { "page": 17, "layout": "list", "cards": 5, "skin": 3 },
-    { "page": 18, "layout": "list", "cards": 3, "skin": 4 },
-    { "page": 19, "layout": "list", "cards": 4, "skin": 4 },
-    { "page": 20, "layout": "list", "cards": 5, "skin": 4 },
-    { "page": 21, "layout": "list", "cards": 3, "skin": 5 },
-    { "page": 22, "layout": "list", "cards": 4, "skin": 5 },
-    { "page": 23, "layout": "list", "cards": 5, "skin": 5 },
-    { "page": 24, "layout": "metric", "cards": 2 },
-    { "page": 25, "layout": "metric", "cards": 3 },
-    { "page": 26, "layout": "metric", "cards": 4 },
-    { "page": 27, "layout": "metric", "cards": 5 },
-    { "page": 28, "layout": "columns", "cols": 2 },
-    { "page": 29, "layout": "columns", "cols": 3 },
-    { "page": 30, "layout": "columns", "cols": 4 },
-    { "page": 31, "layout": "columns", "cols": 5 },
-    { "page": 32, "layout": "metric_columns", "cards": 2, "cols": 2 },
-    { "page": 33, "layout": "metric_columns", "cards": 3, "cols": 2 },
-    { "page": 34, "layout": "metric_columns", "cards": 4, "cols": 2 },
-    { "page": 35, "layout": "metric_columns", "cards": 5, "cols": 2 },
-    { "page": 36, "layout": "metric_columns", "cards": 5, "cols": 3 },
-    { "page": 37, "layout": "metric_list", "cards": 2, "lists": 2 },
-    { "page": 38, "layout": "metric_list", "cards": 3, "lists": 2 },
-    { "page": 39, "layout": "metric_list", "cards": 4, "lists": 2 },
-    { "page": 40, "layout": "metric_list", "cards": 5, "lists": 2 },
-    { "page": 41, "layout": "metric_list", "cards": 5, "lists": 3 },
-    { "page": 42, "layout": "table", "rows": 5, "cols": 4, "slots": ["slideTitle", "tableTitle", "cell_r0c0", "cell_r0c1", "cell_r0c2", "cell_r0c3", "cell_r1c0", "cell_r1c1", "cell_r1c2", "cell_r1c3", "cell_r2c0", "cell_r2c1", "cell_r2c2", "cell_r2c3", "cell_r3c0", "cell_r3c1", "cell_r3c2", "cell_r3c3", "cell_r4c0", "cell_r4c1", "cell_r4c2", "cell_r4c3"] },
-    { "page": 43, "layout": "image_grid", "cards": 4, "slots": ["slideTitle", "cap1", "cap2", "cap3", "cap4"] },
-    { "page": 44, "layout": "table", "rows": 6, "cols": 4 },
-    { "page": 45, "layout": "table", "rows": 6, "cols": 5 },
-    { "page": 46, "layout": "table", "rows": 8, "cols": 5 },
-    { "page": 47, "layout": "tail", "slots": ["title", "company", "author", "department", "curDate"] }
+    {
+      "page": 1,
+      "layout": "cover",
+      "slots": [
+        "author",
+        "company",
+        "department",
+        "subtitle",
+        "title"
+      ]
+    },
+    {
+      "page": 2,
+      "layout": "chapterCover",
+      "slots": [
+        "chapterTitle",
+        "chapterSubTitle"
+      ]
+    },
+    {
+      "page": 3,
+      "layout": "catalog",
+      "cards": 3,
+      "slots": [
+        "chapterTitle1",
+        "chapterTitle2",
+        "chapterTitle3"
+      ]
+    },
+    {
+      "page": 4,
+      "layout": "catalog",
+      "cards": 4,
+      "slots": [
+        "chapterTitle1",
+        "chapterTitle2",
+        "chapterTitle3",
+        "chapterTitle4"
+      ]
+    },
+    {
+      "page": 5,
+      "layout": "catalog",
+      "cards": 5,
+      "slots": [
+        "chapterTitle1",
+        "chapterTitle2",
+        "chapterTitle3",
+        "chapterTitle4",
+        "chapterTitle5"
+      ]
+    },
+    {
+      "page": 6,
+      "layout": "progress",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.1574,
+          1.5545,
+          11.0185,
+          4.8542
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          11.0185,
+          4.8542
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      }
+    },
+    {
+      "page": 7,
+      "layout": "progress",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.6748,
+          1.6513,
+          10.3708,
+          4.8357
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          10.3708,
+          4.8357
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      }
+    },
+    {
+      "page": 8,
+      "layout": "progress",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.8515,
+          1.6263,
+          11.6303,
+          4.7519
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          11.6303,
+          4.7519
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      }
+    },
+    {
+      "page": 9,
+      "layout": "progress",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.126,
+          1.4058,
+          11.0996,
+          4.3737
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          3.1496,
+          4.3737
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 3.975
+      },
+      "skin": 1
+    },
+    {
+      "page": 10,
+      "layout": "progress",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.9894,
+          1.8753,
+          11.4097,
+          3.546
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.3226,
+          3.546
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 3.029
+      },
+      "skin": 1
+    },
+    {
+      "page": 11,
+      "layout": "progress",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.6236,
+          1.9478,
+          11.8649,
+          3.546
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.3226,
+          3.546
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.3856
+      },
+      "skin": 1
+    },
+    {
+      "page": 12,
+      "layout": "progress",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.856,
+          1.71,
+          9.8295,
+          4.141
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.3227,
+          4.141
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 3.7534
+      },
+      "skin": 2
+    },
+    {
+      "page": 13,
+      "layout": "progress",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.0,
+          1.3077,
+          13.3333,
+          4.0758
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          13.3333,
+          4.0758
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      },
+      "skin": 2
+    },
+    {
+      "page": 14,
+      "layout": "progress",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.0,
+          1.454,
+          13.3333,
+          4.1193
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          13.3333,
+          4.1193
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      },
+      "skin": 2
+    },
+    {
+      "page": 15,
+      "layout": "list",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "y",
+        "band": [
+          0.7222,
+          1.9037,
+          11.8908,
+          4.0974
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          11.8908,
+          4.0974
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      }
+    },
+    {
+      "page": 16,
+      "layout": "list",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "y",
+        "band": [
+          0.7222,
+          1.5139,
+          12.3081,
+          4.8625
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          12.3081,
+          4.8625
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      }
+    },
+    {
+      "page": 17,
+      "layout": "list",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "y",
+        "band": [
+          0.7222,
+          1.5139,
+          12.3081,
+          4.8351
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          12.3081,
+          4.8351
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      }
+    },
+    {
+      "page": 18,
+      "layout": "list",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "y",
+        "band": [
+          0.7292,
+          1.5142,
+          11.875,
+          5.0131
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          11.875,
+          5.0131
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      },
+      "skin": 1
+    },
+    {
+      "page": 19,
+      "layout": "list",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.0601,
+          1.5773,
+          11.175,
+          4.3994
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.2429,
+          4.3994
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.9773
+      },
+      "skin": 1
+    },
+    {
+      "page": 20,
+      "layout": "list",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.7993,
+          3.7675,
+          11.6287,
+          2.9355
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          1.5748,
+          0.3937
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.373
+      },
+      "skin": 1
+    },
+    {
+      "page": 21,
+      "layout": "list",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.7361,
+          1.8382,
+          11.6076,
+          4.7244
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          3.1496,
+          4.7244
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 4.2271
+      },
+      "skin": 2
+    },
+    {
+      "page": 22,
+      "layout": "list",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.4622,
+          1.8107,
+          12.4541,
+          4.7244
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.7559,
+          4.7244
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 3.2327
+      },
+      "skin": 2
+    },
+    {
+      "page": 23,
+      "layout": "list",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.7361,
+          1.8599,
+          11.7632,
+          4.252
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.1615,
+          4.2518
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.4047
+      },
+      "skin": 2
+    },
+    {
+      "page": 24,
+      "layout": "list",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "y",
+        "proto": "vItem.item1",
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch"
+      },
+      "skin": 3
+    },
+    {
+      "page": 25,
+      "layout": "list",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "y",
+        "band": [
+          0.0,
+          0.7505,
+          13.3333,
+          6.5426
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          13.3333,
+          6.5426
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      },
+      "skin": 3
+    },
+    {
+      "page": 26,
+      "layout": "list",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "list_row",
+      "unit": {
+        "axis": "y",
+        "band": [
+          0.0,
+          0.7232,
+          13.3333,
+          6.6113
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          13.3333,
+          6.6113
+        ],
+        "minN": 3,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 0.0
+      },
+      "skin": 3
+    },
+    {
+      "page": 27,
+      "layout": "metric",
+      "cards": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          3.2296,
+          2.5255,
+          6.6906,
+          0.9101
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 4.6706
+      }
+    },
+    {
+      "page": 28,
+      "layout": "metric",
+      "cards": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          2.4317,
+          2.6691,
+          8.0049,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.9898
+      }
+    },
+    {
+      "page": 29,
+      "layout": "metric",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          2.1167,
+          2.4404,
+          9.25,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 30,
+      "layout": "metric",
+      "cards": 5,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem.itemN_Desc"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.9211,
+          2.6904,
+          11.66,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 31,
+      "layout": "columns",
+      "cols": 2,
+      "slots": [
+        "slideTitle",
+        "colKTitle",
+        "colKSub",
+        "colK.itemM"
+      ],
+      "unitKind": "col_group",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.5957,
+          1.9194,
+          9.7128,
+          3.4104
+        ],
+        "proto": "col1Title",
+        "unitSize": [
+          4.0745,
+          3.3625
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 5.6383
+      }
+    },
+    {
+      "page": 32,
+      "layout": "columns",
+      "cols": 3,
+      "slots": [
+        "slideTitle",
+        "colKTitle",
+        "colKSub",
+        "colK.itemM"
+      ],
+      "unitKind": "col_group",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.2076,
+          1.8592,
+          12.9282,
+          3.5308
+        ],
+        "proto": "col1Title",
+        "unitSize": [
+          4.1169,
+          3.4706
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 4.3989
+      }
+    },
+    {
+      "page": 33,
+      "layout": "columns",
+      "cols": 4,
+      "slots": [
+        "slideTitle",
+        "colKTitle",
+        "colKSub",
+        "colK.itemM"
+      ],
+      "unitKind": "col_group",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.2275,
+          1.6943,
+          12.9938,
+          3.3622
+        ],
+        "proto": "col1Title",
+        "unitSize": [
+          3.1496,
+          3.3622
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 3.2814
+      }
+    },
+    {
+      "page": 34,
+      "layout": "columns",
+      "cols": 5,
+      "slots": [
+        "slideTitle",
+        "colKTitle",
+        "colKSub",
+        "colK.itemM"
+      ],
+      "unitKind": "col_group",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.2222,
+          1.6943,
+          12.9656,
+          3.3622
+        ],
+        "proto": "col1Title",
+        "unitSize": [
+          2.3622,
+          3.3622
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.6509
+      }
+    },
+    {
+      "page": 35,
+      "layout": "metric_columns",
+      "cards": 2,
+      "cols": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "colKTitle",
+        "colK.itemM"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          3.2833,
+          1.2119,
+          6.5072,
+          2.3653
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.7559,
+          2.3622
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 3.7513
+      }
+    },
+    {
+      "page": 36,
+      "layout": "metric_columns",
+      "cards": 3,
+      "cols": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "colKTitle",
+        "colK.itemM"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          3.0647,
+          1.7511,
+          6.84,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 37,
+      "layout": "metric_columns",
+      "cards": 4,
+      "cols": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "colKTitle",
+        "colK.itemM"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.9211,
+          1.6353,
+          9.25,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 38,
+      "layout": "metric_columns",
+      "cards": 5,
+      "cols": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "colKTitle",
+        "colK.itemM"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.7509,
+          1.7511,
+          11.6599,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 39,
+      "layout": "metric_columns",
+      "cards": 5,
+      "cols": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "colKTitle",
+        "colK.itemM"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.7509,
+          1.7511,
+          11.6599,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 40,
+      "layout": "metric_list",
+      "cards": 2,
+      "lists": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem2.itemN"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          3.2833,
+          1.2119,
+          6.5072,
+          2.3653
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.7559,
+          2.3622
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 3.7513
+      }
+    },
+    {
+      "page": 41,
+      "layout": "metric_list",
+      "cards": 3,
+      "lists": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem2.itemN"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          3.0647,
+          1.7511,
+          6.84,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 42,
+      "layout": "metric_list",
+      "cards": 4,
+      "lists": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem2.itemN"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          1.9211,
+          1.6353,
+          9.25,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 43,
+      "layout": "metric_list",
+      "cards": 5,
+      "lists": 2,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem2.itemN"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.7509,
+          1.7511,
+          11.6599,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 44,
+      "layout": "metric_list",
+      "cards": 5,
+      "lists": 3,
+      "slots": [
+        "slideTitle",
+        "vItem.itemN",
+        "vItem2.itemN"
+      ],
+      "unitKind": "card",
+      "unit": {
+        "axis": "x",
+        "band": [
+          0.7509,
+          1.7511,
+          11.6599,
+          0.8751
+        ],
+        "proto": "vItem.item1",
+        "unitSize": [
+          2.02,
+          0.8751
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch",
+        "pitch": 2.41
+      }
+    },
+    {
+      "page": 45,
+      "layout": "table",
+      "rows": 5,
+      "cols": 4,
+      "slots": [
+        "slideTitle",
+        "tableTitle",
+        "cell_r0c0",
+        "cell_r0c1",
+        "cell_r0c2",
+        "cell_r0c3",
+        "cell_r1c0",
+        "cell_r1c1",
+        "cell_r1c2",
+        "cell_r1c3",
+        "cell_r2c0",
+        "cell_r2c1",
+        "cell_r2c2",
+        "cell_r2c3",
+        "cell_r3c0",
+        "cell_r3c1",
+        "cell_r3c2",
+        "cell_r3c3",
+        "cell_r4c0",
+        "cell_r4c1",
+        "cell_r4c2",
+        "cell_r4c3"
+      ]
+    },
+    {
+      "page": 46,
+      "layout": "table",
+      "rows": 6,
+      "cols": 4,
+      "slots": [
+        "slideTitle",
+        "tableTitle",
+        "cell_r0c0",
+        "cell_r0c1",
+        "cell_r0c2",
+        "cell_r0c3",
+        "cell_r1c0",
+        "cell_r1c1",
+        "cell_r1c2",
+        "cell_r1c3",
+        "cell_r2c0",
+        "cell_r2c1",
+        "cell_r2c2",
+        "cell_r2c3",
+        "cell_r3c0",
+        "cell_r3c1",
+        "cell_r3c2",
+        "cell_r3c3",
+        "cell_r4c0",
+        "cell_r4c1",
+        "cell_r4c2",
+        "cell_r4c3",
+        "cell_r5c0",
+        "cell_r5c1",
+        "cell_r5c2",
+        "cell_r5c3"
+      ]
+    },
+    {
+      "page": 47,
+      "layout": "table",
+      "rows": 6,
+      "cols": 5,
+      "slots": [
+        "slideTitle",
+        "tableTitle",
+        "cell_r0c0",
+        "cell_r0c1",
+        "cell_r0c2",
+        "cell_r0c3",
+        "cell_r0c4",
+        "cell_r1c0",
+        "cell_r1c1",
+        "cell_r1c2",
+        "cell_r1c3",
+        "cell_r1c4",
+        "cell_r2c0",
+        "cell_r2c1",
+        "cell_r2c2",
+        "cell_r2c3",
+        "cell_r2c4",
+        "cell_r3c0",
+        "cell_r3c1",
+        "cell_r3c2",
+        "cell_r3c3",
+        "cell_r3c4",
+        "cell_r4c0",
+        "cell_r4c1",
+        "cell_r4c2",
+        "cell_r4c3",
+        "cell_r4c4",
+        "cell_r5c0",
+        "cell_r5c1",
+        "cell_r5c2",
+        "cell_r5c3",
+        "cell_r5c4"
+      ]
+    },
+    {
+      "page": 48,
+      "layout": "table",
+      "rows": 8,
+      "cols": 5,
+      "slots": [
+        "slideTitle",
+        "tableTitle",
+        "cell_r0c0",
+        "cell_r0c1",
+        "cell_r0c2",
+        "cell_r0c3",
+        "cell_r0c4",
+        "cell_r1c0",
+        "cell_r1c1",
+        "cell_r1c2",
+        "cell_r1c3",
+        "cell_r1c4",
+        "cell_r2c0",
+        "cell_r2c1",
+        "cell_r2c2",
+        "cell_r2c3",
+        "cell_r2c4",
+        "cell_r3c0",
+        "cell_r3c1",
+        "cell_r3c2",
+        "cell_r3c3",
+        "cell_r3c4",
+        "cell_r4c0",
+        "cell_r4c1",
+        "cell_r4c2",
+        "cell_r4c3",
+        "cell_r4c4",
+        "cell_r5c0",
+        "cell_r5c1",
+        "cell_r5c2",
+        "cell_r5c3",
+        "cell_r5c4",
+        "cell_r6c0",
+        "cell_r6c1",
+        "cell_r6c2",
+        "cell_r6c3",
+        "cell_r6c4",
+        "cell_r7c0",
+        "cell_r7c1",
+        "cell_r7c2",
+        "cell_r7c3",
+        "cell_r7c4"
+      ]
+    },
+    {
+      "page": 49,
+      "layout": "image_grid",
+      "cards": 4,
+      "slots": [
+        "slideTitle",
+        "cap1",
+        "cap2",
+        "cap3",
+        "cap4"
+      ],
+      "unitKind": "pic_with_cap",
+      "unit": {
+        "axis": "grid",
+        "band": [
+          0.5,
+          1.3,
+          11.7,
+          4.9937
+        ],
+        "proto": "cap1",
+        "unitSize": [
+          5.6,
+          2.0
+        ],
+        "minN": 2,
+        "maxN": 9,
+        "fontLadder": {
+          "3": 0,
+          "6": -1,
+          "8": -2
+        },
+        "align": "stretch"
+      }
+    },
+    {
+      "page": 50,
+      "layout": "tail",
+      "slots": [
+        "author",
+        "company",
+        "department"
+      ]
+    }
   ],
   "reserved": [],
-  "futureLayouts": ["chart"],
+  "futureLayouts": [
+    "chart"
+  ],
   "downgrade": {
-    "metric_columns": "无精确组合时：栏数>2 且卡数<5 → 降为 2 栏同卡数；仍无则 metric_list",
-    "table": "按 (rows, cols) 取最小够用规格；42=5×4 / 44=6×4 / 45=6×5 / 46=8×5；都装不下取 46"
+    "metric_columns": "无精确组合时：栏数>2 且卡数不足 → 降为 2 栏同卡数；仍无则 metric_list",
+    "table": "按 (rows, cols) 取最小够用规格；45=5×4 / 46=6×4 / 47=6×5 / 48=8×5；都装不下取 48",
+    "N_gt_8": "N>8 优先转 table 或拆页，不缩字号硬塞"
+  },
+  "notes": {
+    "markers": "页内 progress*/List*/imageList* 小字已从模板清除；运行时 strip 仍保留兜底"
   }
 }

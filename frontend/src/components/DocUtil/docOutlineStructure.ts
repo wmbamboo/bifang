@@ -1,14 +1,14 @@
 /**
  * Word 大纲的**结构化视图模型**（纯函数，无 React/antd 依赖，便于单测）。
  *
- * 用途：大纲查询/选择抽屉右侧「大纲内容」把 markdown 大纲渲染成 章→段 结构，
+ * 用途：大纲查询/选择抽屉右侧「大纲内容」把 markdown 大纲渲染成 章→段→子点 结构，
  * 让层级可见（此前是 `Typography + react-markdown` 裸渲染，章/段/要点几乎无差别）。
  *
  * 注意：解析**不做 cleanString 清洗**——`ViewItem4Doc.cleanString` 会吃掉阿拉伯数字
  * 与部分字母（标题丢字 B1），视图必须显示大纲原文，否则用户看到的与存储的不一致。
  *
  * 与 `ViewItem4Doc.getChaptersFromContent` 的口径保持一致：
- * `## ` = 章，`### ` = 段，`* - +` = 段（兼容写法，标 heading=false），
+ * `## ` = 章，`### ` = 段，`#### ` = 子点（十三·B），`* - +` = 段（兼容写法，标 heading=false），
  * ` ```table` / ` ```figure` 围栏归属到所在段，PPT 元数据行丢弃。
  */
 
@@ -19,6 +19,8 @@ export type DocOutlinePara = {
   title: string;
   /** 由 `### ` 产生为 true；由 `* - +` 兼容写法产生为 false */
   heading: boolean;
+  /** `####` 子点（数据点/对照点） */
+  points: string[];
   bullets: string[];
   hasTable: boolean;
   hasFigure: boolean;
@@ -40,9 +42,10 @@ export type DocOutlineDoc = {
   charTotal: number;
 };
 
-const RE_H1 = /^#\s+(?!#)(.+)$/;
-const RE_H2 = /^##\s+(.+)$/;
-const RE_H3 = /^###\s+(.+)$/;
+const RE_H1 = /^#(?!#)\s+(.+)$/;
+const RE_H2 = /^##(?!#)\s+(.+)$/;
+const RE_H3 = /^###(?!#)\s+(.+)$/;
+const RE_H4 = /^####\s+(.+)$/;
 const RE_BULLET = /^[*+\-]\s+(.+)$/;
 const RE_FENCE_OPEN = /^```\s*([A-Za-z]*)\s*$/;
 const RE_FENCE_CLOSE = /^```\s*$/;
@@ -103,6 +106,7 @@ export function parseDocOutlineMarkdown(
       no: `${chapSeq}.${paraSeq}`,
       title: raw.trim(),
       heading,
+      points: [],
       bullets: [],
       hasTable: false,
       hasFigure: false,
@@ -141,6 +145,13 @@ export function parseDocOutlineMarkdown(
     const h2 = line.match(RE_H2);
     if (h2) {
       pushChap(h2[1]);
+      continue;
+    }
+    // #### 须先于 ###（否则会被 ### 吞）
+    const h4 = line.match(RE_H4);
+    if (h4) {
+      if (curPara) curPara.points.push(h4[1].trim());
+      else loose.push(h4[1].trim());
       continue;
     }
     const h3 = line.match(RE_H3);

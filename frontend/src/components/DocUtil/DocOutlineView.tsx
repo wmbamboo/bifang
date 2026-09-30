@@ -143,6 +143,22 @@ const DocOutlineView: React.FC<DocOutlineViewProps> = ({markdown, fallbackTitle}
                     </Tag>
                   ) : null}
                 </div>
+                {para.points.length ? (
+                  <ul
+                    style={{
+                      margin: "4px 0 0 26px",
+                      paddingLeft: 16,
+                      color: token.colorTextSecondary,
+                      listStyleType: "square",
+                    }}
+                  >
+                    {para.points.map((pt, i) => (
+                      <li key={`pt-${i}`} style={{fontSize: 12, lineHeight: "18px"}}>
+                        {stripDocOutlineOrdinal(pt) || pt}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {para.bullets.length ? (
                   <ul
                     style={{

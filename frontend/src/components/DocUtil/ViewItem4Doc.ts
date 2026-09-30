@@ -112,6 +112,11 @@ export class Paragraph{
   blocks: DocBlock[] = [];
   /** ### → true；* + - → false（八·3：额度只算 heading） */
   heading: boolean = false;
+  /**
+   * 十三·B：`####` 子点（数据点/对照点）；模板 `{#points}{label}` → heading 3。
+   * docxtemplater 读 `label` 字段。
+   */
+  points: Array<{label: string}> = [];
 
   constructor(index:number, title:string,subTitle?:string) {
     this.index = index;
@@ -231,6 +236,23 @@ export function buildDocParagraphFormatPrompt(): string {
 /** 末章是否像结论/建议（十一·3 / 9.3） */
 export const DOC_CONCLUSION_CHAPTER_RE =
   /结论|建议|动作|取舍|下一步|筛选与打法/;
+
+/**
+ * 十三·A：段题「数据句」体检——过长 / 含阿拉伯数字 / 含引注 / 逗号并列。
+ * 命中则不应占 h2，应降级为正文首句引导。
+ */
+export function isDataLikeDocParagraphTitle(title: string): boolean {
+  const t = String(title || "").trim();
+  if (!t) return false;
+  if (t.length > 20) return true;
+  if (/\d/.test(t)) return true;
+  if (/\[文档/.test(t)) return true;
+  if (/[，,]/.test(t)) return true;
+  return false;
+}
+
+/** 最近一次 getChaptersFromContent 的段题降级记录（供 checkChapter Warn） */
+export let lastDocTitleDemotions: string[] = [];
 
 const TITLE_OVERLAP_STOP = new Set([
   "与",
@@ -593,10 +615,13 @@ export class Doc{
     const chapters: Chapter[] = [];
     let currentChapter: Chapter | null = null;
     let currentParagraph: Paragraph | null = null;
+    lastDocTitleDemotions = [];
 
     const chapterRegex = /^## (.+)$/;
-    const paragraphRegex1 = /^### (.+)$/;
+    // ### 必须负向排除 ####（否则会被吃成段题）
+    const paragraphRegex1 = /^###(?!#) (.+)$/;
     const paragraphRegex2 = /^[*|+-] (.+)$/;
+    const pointRegex = /^#### (.+)$/;
 
     const lines = content.split('\n');
     let chapterIndex=1;
@@ -616,6 +641,19 @@ export class Doc{
       }
       fenceBuf = [];
       state = "normal";
+    };
+
+    /** 十三·B：保证有当前段，再挂 #### / 降级子点 */
+    const appendPointToCurrent = (label: string) => {
+      if (!currentChapter) return;
+      if (!currentParagraph) {
+        const p = new Paragraph(paragraphIndex, "要点");
+        p.heading = false;
+        paragraphIndex++;
+        currentChapter.paragraphs.push(p);
+        currentParagraph = p;
+      }
+      currentParagraph.points.push({label});
     };
 
     for (const line of lines) {
@@ -648,6 +686,7 @@ export class Doc{
       if (DOC_META_LINE.test(trimmed)) continue;
 
       const chapterMatch = trimmed.match(chapterRegex);
+      const pointMatch = trimmed.match(pointRegex);
       const paragraphMatch1 = trimmed.match(paragraphRegex1);
       const paragraphMatch2 = trimmed.match(paragraphRegex2);
 
@@ -658,12 +697,22 @@ export class Doc{
         currentChapter = new Chapter(chapterIndex, cleanString(chapterMatch[1]));
         currentParagraph = null;
         chapterIndex++;
+      } else if (pointMatch && currentChapter) {
+        // 十三·B：#### 子点挂到当前段（允许数字/引注）
+        appendPointToCurrent(cleanString(pointMatch[1]) || pointMatch[1]);
       } else if ((paragraphMatch1 || paragraphMatch2) && currentChapter) {
         let paragraphTitle = "";
         if (paragraphMatch1) {
           paragraphTitle = paragraphMatch1[1];
         } else if (paragraphMatch2) {
           paragraphTitle = paragraphMatch2[1];
+        }
+        // 十三·A/B：数据句段题不占 h2 → 降为 #### 子点 + Warn
+        if (paragraphMatch1 && isDataLikeDocParagraphTitle(paragraphTitle)) {
+          const cleaned = cleanString(paragraphTitle);
+          lastDocTitleDemotions.push(cleaned || paragraphTitle);
+          appendPointToCurrent(cleaned || paragraphTitle);
+          continue;
         }
         const paragraph = new Paragraph(paragraphIndex, cleanString(paragraphTitle));
         paragraph.heading = !!paragraphMatch1;
@@ -706,8 +755,15 @@ export class Doc{
           `第${i + 1}章未使用【### 】段落标记（检测到 ${paragraphs.length} 行 */- 开头）。已按段落理解；建议重新生成或手工改为【### 】。`,
         );
       } else {
+        // 十三·A：段题数据句降级后可能只剩 1 个 ###；对齐「降级 Warn 不拒单」，勿因降级误杀
         if (headingCnt < 2) {
-          return {code:-2,msg:`第${i+1}章段落过少（须 2～4 个 ### 段落，当前 ${headingCnt}）。`};
+          if (lastDocTitleDemotions.length) {
+            warns.push(
+              `第${i + 1}章有效 ### 偏少（当前 ${headingCnt}，建议 2～4）；部分段题已按数据句降级为 #### 子点。`,
+            );
+          } else {
+            return {code:-2,msg:`第${i+1}章段落过少（须 2～4 个 ### 段落，当前 ${headingCnt}）。`};
+          }
         }
         if (headingCnt > 6) {
           return {code:-2,msg:`第${i+1}章段落过多（当前 ${headingCnt} 个 ###，请压到 2～4，最多 6）。`};
@@ -720,6 +776,15 @@ export class Doc{
     if (lastCh && !DOC_CONCLUSION_CHAPTER_RE.test(lastCh.title || "")) {
       warns.push(
         `末章「${lastCh.title}」不像结论/建议类；建议增加结论章或改末章题（含「结论/建议/动作」等）。`,
+      );
+    }
+    // 十三·A：段题数据句降级 Warn（读完即清空，避免串测）
+    const demotions = [...lastDocTitleDemotions];
+    lastDocTitleDemotions = [];
+    if (demotions.length) {
+      const sample = demotions.slice(0, 3).join(" / ");
+      warns.push(
+        `有 ${demotions.length} 条段题像数据句（过长/含数字/引注），已降级为 #### 子点（例：${sample}）。`,
       );
     }
     // 十一·3 / 9.4：段题互斥（Warn 不拒单）

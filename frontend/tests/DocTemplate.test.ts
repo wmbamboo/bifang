@@ -213,14 +213,18 @@ describe("DocTemplate · 模板零回归（空块）", () => {
     const tplXml = zip.file("word/document.xml")!.asText();
     expect(tplXml).toContain(DOCBLOCK_MARK);
     expect(findDocBlockAnchors(tplXml).length).toBe(1);
+    expect(tplXml).toContain("{#points}");
 
     const chapters = Doc.getChaptersFromContent(
       Doc.getContentFromMsg(
-        "# T\n\n## 市场概览\n\n### 大盘规模\n\n### 品类结构\n",
+        "# T\n\n## 市场概览\n\n### 大盘规模\n#### 销量 7280 万\n\n### 品类结构\n",
       ),
     );
     expect(chapters[0].label.length).toBeGreaterThan(0);
     expect(chapters[0].paragraphs[0].label.length).toBeGreaterThan(0);
+    expect(chapters[0].paragraphs[0].points.map((p) => p.label)).toEqual([
+      "销量 7280 万",
+    ]);
     for (const ch of chapters) {
       for (const p of ch.paragraphs) {
         p.setContent("一段测试正文。");
@@ -247,5 +251,8 @@ describe("DocTemplate · 模板零回归（空块）", () => {
     // 模板里本就有编制单位等 tbl，只断言无 drawing（空块不插图）
     expect(out).not.toContain("<w:drawing>");
     expect(out).toContain("一段测试正文");
+    expect(out).toContain("销量 7280 万");
+    // 子点应落在 heading 3
+    expect(out).toMatch(/w:pStyle w:val="3"[\s\S]{0,200}销量 7280 万/);
   });
 });

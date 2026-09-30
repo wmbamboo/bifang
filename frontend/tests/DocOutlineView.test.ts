@@ -61,6 +61,23 @@ describe("parseDocOutlineMarkdown", () => {
     expect(doc.title).toBe("我的大纲");
   });
 
+  it("#### 子点挂在段下，不另起段落", () => {
+    const doc = parseDocOutlineMarkdown(
+      [
+        "# T",
+        "## 价格带结构",
+        "### 价格带对照",
+        "#### 衬衫200元价格带",
+        "#### 结论见[文档1]",
+        "### 客群分层",
+      ].join("\n"),
+    );
+    const paras = doc.chapters[0].paras;
+    expect(paras).toHaveLength(2);
+    expect(paras[0].points).toEqual(["衬衫200元价格带", "结论见[文档1]"]);
+    expect(paras[1].points).toEqual([]);
+  });
+
   it("兼容写法 `* 1.1 …` 按段处理并标 heading=false；`### ` 段下的 * 才是要点", () => {
     const doc = parseDocOutlineMarkdown(
       ["# T", "## 一、了解市场需求", "* 1.1 趋势分析", "* 1.2 用户偏好"].join("\n"),

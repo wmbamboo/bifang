@@ -142,29 +142,74 @@ export const KB_WRITING_CONSTRAINT_PROMPT =
   '4. 具体数字、专有名词须与检索内容一致，可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）。\n' +
   '5. 必须按【输出格式】逐行编号输出（1. 标题 - 描述）。数据卡行以原数字开头；禁止整段叙述、禁止只写一段话。\n';
 
+export type KbDocConstraintOpts = {
+  /**
+   * 是否有知识库检索。Ai 页必须传 false，否则模型会按第 4 条编造 `[文档N]`（十九·2）。
+   * 缺省 true（KB 页）。
+   */
+  hasRetrieval?: boolean;
+  /** 二十一·9：无图资产时禁止 figure 围栏 */
+  allowFigure?: boolean;
+};
+
 /**
  * Word/文章知识库约束：散文忠实检索，禁止套用 PPT 编号行格式。
- * 十四·14.3.4：字数区间走 WordBudget，与 setAllPrompt / format_prompt 共用。
+ * 十四·14.3.4 / 十七：字数走 WordBudget；十九·2：无检索时禁止引注。
  */
 export function buildKbDocWritingConstraintPrompt(
   budget?: WordBudget | null,
+  opts?: KbDocConstraintOpts,
 ): string {
   const zh = formatWordBudgetZh(
     budget && (budget.min > 0 || budget.max > 0)
       ? budget
       : { min: 150, max: 150 },
   );
-  return (
-    '\n\n【知识库约束·文章】\n' +
-    '1. 只依据系统消息中的知识库检索结果撰写连贯正文段落。\n' +
-    '2. 不得使用检索结果之外的常识补全，不得编造数据、案例或结论。\n' +
-    '3. 检索中已出现的数字、专名必须写进正文；大纲用词与检索不一致时以检索为准。\n' +
-    '4. 可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）；禁止整段以「根据知识库」「材料显示」等套话开头。\n' +
-    `5. 输出形态是文章段落（约 ${zh} 字），禁止「1. 标题 - 描述」编号清单，禁止只写 bullet 列表替代正文。\n` +
-    '6. 仅当该段落主题在检索中完全无依据时，用一两句说明「本段知识库未提供依据」，不要拒绝整章。\n'
-  );
+  const hasRetrieval = opts?.hasRetrieval !== false;
+  const allowFigure = opts?.allowFigure !== false;
+  const citeRule = hasRetrieval
+    ? "4. 可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）；禁止整段以「根据知识库」「材料显示」等套话开头。\n"
+    : "4. 本页无知识库检索，禁止输出任何 [文档N]/[文档1] 类引注标记，禁止编造出处；禁止整段以「根据知识库」「材料显示」等套话开头。\n";
+  const figureRule = allowFigure
+    ? ""
+    : "7. 本页无可用插图资产，禁止输出 ```figure 围栏；需要图示时用文字描述，禁止编造 kb: 路径。\n";
+  const body = hasRetrieval
+    ? "1. 只依据系统消息中的知识库检索结果撰写连贯正文段落。\n" +
+      "2. 不得使用检索结果之外的常识补全，不得编造数据、案例或结论。\n" +
+      "3. 检索中已出现的数字、专名必须写进正文；大纲用词与检索不一致时以检索为准。\n" +
+      citeRule +
+      `5. 输出形态是文章段落（约 ${zh} 字），禁止「1. 标题 - 描述」编号清单，禁止只写 bullet 列表替代正文。\n` +
+      "6. 仅当该段落主题在检索中完全无依据时，用一两句说明「本段知识库未提供依据」，不要拒绝整章。\n" +
+      figureRule
+    : "1. 依据用户提示与已知材料撰写连贯正文段落；本页无检索结果注入。\n" +
+      "2. 不得编造无法核实的数据、案例、出处或文档编号。\n" +
+      "3. 数字与专名须可溯；没有依据的数据不要写。\n" +
+      citeRule +
+      `5. 输出形态是文章段落（约 ${zh} 字），禁止「1. 标题 - 描述」编号清单，禁止只写 bullet 列表替代正文。\n` +
+      "6. 材料不足时用一两句说明依据不足，不要拒绝整章。\n" +
+      figureRule;
+  return "\n\n【知识库约束·文章】\n" + body;
 }
 
-/** 默认预算版本（兼容旧 import；十七：单值 150） */
+/** 剥离幻觉/误用的 `[文档N]` 引注（十九·2 生成后闸） */
+export function stripHallucinatedDocCitations(text: string): {
+  text: string;
+  stripped: number;
+} {
+  const re = /\[文档\d+\]/g;
+  const src = String(text || "");
+  const matches = src.match(re);
+  const stripped = matches ? matches.length : 0;
+  if (!stripped) return {text: src, stripped: 0};
+  const cleaned = src
+    .replace(re, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ *([，。；：,.!?])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return {text: cleaned, stripped};
+}
+
+/** 默认预算版本（兼容旧 import；十七：单值 150；默认有检索） */
 export const KB_DOC_WRITING_CONSTRAINT_PROMPT =
   buildKbDocWritingConstraintPrompt({ min: 150, max: 150 });

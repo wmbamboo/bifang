@@ -114,6 +114,35 @@ export function formatKbAssetRef(fileName: string, assetId: string): string {
 }
 
 /**
+ * 二十三·13：与 prepareChaptersBlocks / collectParagraphBlocks 同序的段级白名单。
+ * - 有 allowedFigureRefs → 原样列表
+ * - allowFigure===false → 空数组（禁全部）
+ * - 否则 undefined（不做白名单校验，兼容旧态）
+ */
+export function collectParagraphAllowedFigureRefLists(
+  chapters: Array<{
+    paragraphs?: Array<{
+      allowedFigureRefs?: string[];
+      allowFigure?: boolean;
+    }>;
+  }>,
+): Array<string[] | undefined> {
+  const out: Array<string[] | undefined> = [];
+  for (const ch of chapters || []) {
+    for (const p of ch.paragraphs || []) {
+      if (Array.isArray(p.allowedFigureRefs) && p.allowedFigureRefs.length) {
+        out.push([...p.allowedFigureRefs]);
+      } else if (p.allowFigure === false) {
+        out.push([]);
+      } else {
+        out.push(undefined);
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * 拼进段落写作 prompt 的附录。
  * 空清单 → 明令禁止 figure（九·2 硬约束）。
  */

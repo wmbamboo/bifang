@@ -3,6 +3,7 @@
  */
 import {
   buildFigureAssetAppendix,
+  collectParagraphAllowedFigureRefLists,
   countUnresolvedFigures,
   figureAssetsFromAssignedKeys,
   figureAssetsFromKbDocs,
@@ -11,6 +12,7 @@ import {
 import {
   filterTableBlockByEvidence,
   resolveAssetBytes,
+  resolveBlocksToPayloads,
 } from "@/components/DocUtil/DocBlockInjector";
 import {readFileSync} from "fs";
 import {join} from "path";
@@ -141,5 +143,63 @@ describe("九·3 kbName 回归", () => {
     expect(src).not.toMatch(/resolveBlocksToPayloads\(\s*blockLists\s*,\s*\{\s*\}\s*\)/);
     expect(src).toMatch(/fetchKbAsset/);
     expect(src).toMatch(/kbName/);
+    expect(src).toMatch(/allowedFigureRefsByList/);
+  });
+});
+
+describe("二十三·13 ref 白名单", () => {
+  it("collectParagraphAllowedFigureRefLists 同序", () => {
+    const lists = collectParagraphAllowedFigureRefLists([
+      {
+        paragraphs: [
+          {allowedFigureRefs: ["kb:a.pdf/x.png"], allowFigure: true},
+          {allowFigure: false},
+          {allowFigure: true},
+        ],
+      },
+    ]);
+    expect(lists).toEqual([["kb:a.pdf/x.png"], [], undefined]);
+  });
+
+  it("脏 ref → figure-missing 且保留 caption；白名单命中才取图", async () => {
+    const okRef = "kb:demo.pdf/elements/p1.png";
+    const dirtyRef = "kb:demo.pdf/elements/p1_chart.png";
+    let fetched = 0;
+    const payloads = await resolveBlocksToPayloads(
+      [
+        [
+          {kind: "figure", assetRef: dirtyRef, caption: "概览题"},
+          {kind: "figure", assetRef: okRef, caption: "真图"},
+        ],
+      ],
+      {
+        kbName: "服装",
+        allowedFigureRefs: [okRef],
+        fetchKbAsset: async () => {
+          fetched += 1;
+          return new ArrayBuffer(16);
+        },
+      },
+    );
+    expect(payloads[0]).toHaveLength(2);
+    expect(payloads[0]![0]).toMatchObject({
+      kind: "figure-missing",
+      caption: "概览题",
+    });
+    expect(String((payloads[0]![0] as any).ref)).toMatch(/不在可用清单/);
+    expect(payloads[0]![1]).toMatchObject({kind: "figure", caption: "真图"});
+    expect(fetched).toBe(1);
+  });
+
+  it("空白名单禁全部 figure", async () => {
+    const payloads = await resolveBlocksToPayloads(
+      [[{kind: "figure", assetRef: "kb:a.pdf/x.png", caption: "c"}]],
+      {
+        kbName: "服装",
+        allowedFigureRefsByList: [[]],
+        fetchKbAsset: async () => new ArrayBuffer(8),
+      },
+    );
+    expect(payloads[0]![0].kind).toBe("figure-missing");
   });
 });

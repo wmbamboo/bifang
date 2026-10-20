@@ -7,6 +7,11 @@ import {
   formatWordBudgetZh,
   wordBudgetFor,
 } from "@/components/DocUtil/docWordBudget";
+import {
+  preprocessDegradedFences,
+  matchFenceOpen,
+  seedFenceBuffer,
+} from "@/components/DocUtil/docFenceNormalize";
 export type { WordBudget } from "@/components/DocUtil/docWordBudget";
 export {
   DOC_WORD_BUDGET,
@@ -149,6 +154,11 @@ export class Paragraph{
   allowTable: boolean = true;
   allowFigure: boolean = true;
   /**
+   * 二十三·13：本段生成时注入的 figure ref 白名单（formatKbAssetRef）。
+   * 渲染时精确匹配；空且 allowFigure=false → 禁全部。
+   */
+  allowedFigureRefs: string[] = [];
+  /**
    * 十四·14.3.5：高级层手改过整串 prompt 后为 true；
    * 简单层改字段时若为 false 则重拼 prompt。
    */
@@ -277,7 +287,9 @@ export function buildDocParagraphFormatPrompt(
     '\n\n【输出格式·文章段落】\n' +
     `直接输出约 ${zh} 字连贯正文，可分 1～3 个自然段。\n` +
     '禁止「1. 标题 - 描述」编号清单；禁止只写 bullet 列表替代正文。\n' +
-    '禁止以「根据知识库」「材料显示」「综上所述」等套话开头或结尾。\n' +
+    '禁止以「根据知识库」「材料显示」「综上所述」等套话开头或结尾；\n' +
+    '禁止以「从……来看 / 在……上 / 落到……上」这类视角介词短语开头——\n' +
+    '首句必须直接切入本段的主体（实体名、数据或判断），不得先声明观察角度。\n' +
     '数字与专名须可溯；材料没有的数据禁止编造。\n';
   if (allowTable) {
     s +=
@@ -339,7 +351,9 @@ export function assembleDocParagraphPrompt(
     (opts.docTitle || "").trim() || "未命名文档";
   let prompt =
     `文章标题是<${docTitle}>，请为它的【${opts.chapterTitle}】章节中的段落： [${paragraph.title}]撰写约${zh}字的具体内容。` +
-    `直接输出正文，不要以「根据知识库内容」等套话开头。`;
+    `直接输出正文；禁止以「根据知识库内容」等套话开头；` +
+    `禁止以「从……来看 / 在……上 / 落到……上」这类视角介词短语开头——` +
+    `首句须直接切入本段主体（实体名、数据或判断）。`;
   const guide = paragraph.pointGuide || "";
   if (paragraph.points.length) {
     const labels = paragraph.points
@@ -580,6 +594,11 @@ export type DocParagraphPromptCtx = {
   role?: string;
   /** 十五：体裁上界；缺省 3（#### 折进要点，不另起标题） */
   maxLevel?: number;
+  /**
+   * 二十一·9：无图资产时传 false（Ai 页恒 false；KB 按清单）。
+   * 缺省 true。
+   */
+  allowFigure?: boolean;
 };
 
 /**
@@ -590,6 +609,27 @@ export function paragraphsToGenerate(chapter: Chapter): Paragraph[] {
   const paras = (chapter?.paragraphs || []).filter((p) => !p.isContainer());
   const headings = paras.filter((p) => p.heading);
   return headings.length ? headings : paras;
+}
+
+/** 二十三·6：空段占位（勿静默留白） */
+export const DOC_EMPTY_CONTENT_PLACEHOLDER = "（本段生成失败）";
+
+/**
+ * 扫描应生成却 content 为空的段：warn + 写入占位。
+ * 返回被占位的段 key 列表。
+ */
+export function flagEmptyDocParagraphs(chapters: Chapter[]): string[] {
+  const emptyKeys: string[] = [];
+  for (const ch of chapters || []) {
+    for (const p of paragraphsToGenerate(ch)) {
+      if ((p.content || "").trim()) continue;
+      emptyKeys.push(p.key);
+      console.warn(`[空段] ${p.key}「${p.title}」content 为空，已写入占位`);
+      p.content = DOC_EMPTY_CONTENT_PLACEHOLDER;
+      p.blocks = [];
+    }
+  }
+  return emptyKeys;
 }
 
 /**
@@ -610,8 +650,6 @@ export const DOC_OUTLINE_MARKDOWN_INIT =
   "### 优先跟进方向\n\n" +
   "### 近两周动作\n";
 
-const TABLE_FENCE = /^```\s*table\s*$/i;
-const FIGURE_FENCE = /^```\s*figure\s*$/i;
 const FENCE_END = /^```\s*$/;
 const TABLE_SEP = /^\|?[\s:\-|]+ \|/;
 /** PPT 元数据行：不进 Word 段落（八·2） */
@@ -719,11 +757,12 @@ export function countChapterMedia(chapter: Chapter): {
 
 /** 从已生成正文剥离 ```table/figure 并入 paragraph.blocks，返回清洁正文 */
 export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
-  const raw = paragraph.content || "";
+  const raw0 = paragraph.content || "";
   // 正文已无围栏（曾吸收过）→ 保留既有 blocks，避免下载前二次吸收清空
-  if (!/```\s*(?:table|figure)\b/i.test(raw)) {
-    return raw.trim();
+  if (!/```/.test(raw0)) {
+    return raw0.trim();
   }
+  const raw = preprocessDegradedFences(raw0);
   paragraph.blocks = [];
   const lines = raw.split("\n");
   const out: string[] = [];
@@ -733,6 +772,7 @@ export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
     if (state === "table") {
       const block = parseTableFenceLines(buf);
       if (block) paragraph.blocks.push(block);
+      // 无法归一 → 丢弃，不把原文塞回正文（十九·3）
     } else if (state === "figure") {
       const block = parseFigureFenceLines(buf);
       if (block) paragraph.blocks.push(block);
@@ -743,14 +783,15 @@ export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
   for (const line of lines) {
     const t = line.trim();
     if (state === "normal") {
-      if (TABLE_FENCE.test(t)) {
-        state = "table";
-        buf = [];
+      if (FENCE_END.test(t)) {
+        // 孤立闭合忽略
         continue;
       }
-      if (FIGURE_FENCE.test(t)) {
-        state = "figure";
+      const open = matchFenceOpen(t);
+      if (open) {
+        state = open.kind;
         buf = [];
+        seedFenceBuffer(open.kind, open.rest, buf);
         continue;
       }
       if (/^```/.test(t)) {
@@ -765,6 +806,15 @@ export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
       flush();
       continue;
     }
+    // 围栏内又开新栏（紧邻退化）：先收束再开
+    const nested = matchFenceOpen(t);
+    if (nested) {
+      flush();
+      state = nested.kind;
+      buf = [];
+      seedFenceBuffer(nested.kind, nested.rest, buf);
+      continue;
+    }
     if (state !== "unknown") buf.push(line);
   }
   if (state !== "normal") flush();
@@ -773,21 +823,47 @@ export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
   return plain;
 }
 
+function pushTableRowChunks(blob: string, rows: string[][]) {
+  const s = String(blob || "").trim();
+  if (!s) return;
+  // 退化：多行粘在一行，用 || 分隔
+  const chunks = s.includes("||") ? s.split(/\|\|/) : [s];
+  for (const chunk of chunks) {
+    const c = chunk.trim();
+    if (!c || isTableSepLine(c) || TABLE_SEP.test(c)) continue;
+    if (!c.includes("|")) continue;
+    const parts = splitTableRow(c.includes("|") ? c : `|${c}|`);
+    if (parts.length) rows.push(parts);
+  }
+}
+
 function parseTableFenceLines(lines: string[]): DocBlock | null {
+  // 二十一·18：只在 table 缓冲内把 || 拆成多行，避免全文误伤
+  const expanded = lines
+    .join("\n")
+    .replace(/\|[ \t]*\|/g, "|\n|")
+    .split("\n");
   let caption = "";
   const rows: string[][] = [];
-  for (const raw of lines) {
+  for (const raw of expanded) {
     const t = raw.trim();
     if (!t) continue;
     const cap = t.match(/^caption\s*[:：]\s*(.+)$/i);
     if (cap) {
-      caption = cap[1].trim();
+      let body = cap[1].trim();
+      // tablecaption 粘连：caption 值里夹着 | 表头
+      if (body.includes("|")) {
+        const i = body.indexOf("|");
+        caption = body.slice(0, i).trim();
+        pushTableRowChunks(body.slice(i), rows);
+      } else {
+        caption = body;
+      }
       continue;
     }
     if (isTableSepLine(t) || TABLE_SEP.test(t)) continue;
     if (t.includes("|")) {
-      const parts = splitTableRow(t);
-      if (parts.length) rows.push(parts);
+      pushTableRowChunks(t, rows);
     }
   }
   if (!rows.length) return null;
@@ -808,16 +884,26 @@ function parseFigureFenceLines(lines: string[]): DocBlock | null {
   let caption = "";
   let assetRef = "";
   for (const raw of lines) {
-    const t = raw.trim();
+    const t = raw.trim().replace(/```\s*$/, "").trim();
     if (!t) continue;
     const cap = t.match(/^(?:caption|图)\s*[:：]\s*(.+)$/i);
     if (cap) {
-      caption = cap[1].trim();
+      caption = cap[1].trim().replace(/```\s*$/, "").trim();
       continue;
     }
     const ref = t.match(/^(?:ref|assetRef|asset)\s*[:：]\s*(.+)$/i);
     if (ref) {
-      assetRef = ref[1].trim();
+      let r = ref[1].trim().replace(/```\s*$/, "").trim();
+      // 残留 …pngcaption: 题
+      const glued = r.match(
+        /^(.*\.(?:png|jpe?g|gif|webp))\s*(?:caption|图)\s*[:：]\s*(.*)$/i,
+      );
+      if (glued) {
+        assetRef = glued[1].trim();
+        if (!caption) caption = glued[2].trim();
+      } else {
+        assetRef = r;
+      }
       continue;
     }
   }
@@ -902,7 +988,7 @@ export class Doc{
     const paragraphRegex2 = /^[*|+-] (.+)$/;
     const pointRegex = /^#### (.+)$/;
 
-    const lines = content.split('\n');
+    const lines = preprocessDegradedFences(content).split('\n');
     let chapterIndex=1;
     let paragraphIndex=1;
     /** 十四·3.1：本章已经出现过 ### 之后，* / - / + 归入当前段的 points */
@@ -942,19 +1028,27 @@ export class Doc{
       if (state !== "normal") {
         if (FENCE_END.test(trimmed)) {
           flushFence();
-        } else if (state !== "unknown") {
-          fenceBuf.push(line);
+        } else {
+          const nested = matchFenceOpen(trimmed);
+          if (nested) {
+            flushFence();
+            state = nested.kind;
+            fenceBuf = [];
+            seedFenceBuffer(nested.kind, nested.rest, fenceBuf);
+          } else if (state !== "unknown") {
+            fenceBuf.push(line);
+          }
         }
         continue;
       }
-      if (TABLE_FENCE.test(trimmed)) {
-        state = "table";
-        fenceBuf = [];
+      if (FENCE_END.test(trimmed)) {
         continue;
       }
-      if (FIGURE_FENCE.test(trimmed)) {
-        state = "figure";
+      const fenceOpen = matchFenceOpen(trimmed);
+      if (fenceOpen) {
+        state = fenceOpen.kind;
         fenceBuf = [];
+        seedFenceBuffer(fenceOpen.kind, fenceOpen.rest, fenceBuf);
         continue;
       }
       if (/^```/.test(trimmed)) {
@@ -1209,7 +1303,7 @@ export class Doc{
         paragraph.question =
           `围绕「${chapter.title}」说明本段「${paragraph.title}」对该问题的贡献`;
         paragraph.allowTable = true;
-        paragraph.allowFigure = true;
+        paragraph.allowFigure = ctx?.allowFigure !== false;
         paragraph.promptManual = false;
         // format_prompt 第三参已弃用：字数/表图契约一律由 assemble 按段预算拼，避免全局硬编码覆盖
         void fmt;
@@ -1295,8 +1389,10 @@ export class Doc{
      * 先初始化chapters结构，再设置所有提示词(重设)。
      */
     let chapters =Doc.getChaptersFromContent(or.outlineContent);
+    // 二十一·9：Ai 页无图资产 → allowFigure=false，从源头禁 figure 围栏
     chapters = Doc.setAllPrompt(chapters, or.outlineName, formatPrompt, {
       role: inferDocWritingRole(or.outlineName || ""),
+      allowFigure: outlineType !== "aiDoc",
     });
     return [
       or.outlineName? or.outlineName: "",

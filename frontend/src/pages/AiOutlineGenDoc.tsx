@@ -2,10 +2,10 @@ import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {Button, Spin, Row, Col, message, Flex, Progress} from 'antd';
 import React, {useState} from "react";
 import axios from "axios";
-import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, buildKbDocWritingConstraintPrompt} from "@/components/DocUtil/parseChatCompletion";
+import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, buildKbDocWritingConstraintPrompt, stripHallucinatedDocCitations} from "@/components/DocUtil/parseChatCompletion";
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
-import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT, paragraphsToGenerate, wordBudgetFor, DocPromptSavePatch, applyDocPromptSavePatch} from "@/components/DocUtil/ViewItem4Doc";
+import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT, paragraphsToGenerate, wordBudgetFor, DocPromptSavePatch, applyDocPromptSavePatch, flagEmptyDocParagraphs} from "@/components/DocUtil/ViewItem4Doc";
 import {applyDocHeadingNumbers} from "@/components/DocUtil/docHeadingDepth";
 import {
   prepareChaptersBlocks,
@@ -19,7 +19,12 @@ import {
   patchTocOutlineLevels,
 } from "@/components/DocUtil/docHeadingLevels";
 import {fetchAssetBytes} from "@/services/chatchat/kb";
-import {scrubConclusionChapters} from "@/components/DocUtil/conclusionGate";
+import {scrubConclusionChapters, isConclusionChapter} from "@/components/DocUtil/conclusionGate";
+import {collectParagraphAllowedFigureRefLists} from "@/components/DocUtil/docFigureAssets";
+import {
+  buildFactLedger,
+  formatFactLedgerAppendix,
+} from "@/components/DocUtil/docFactLedger";
 import PizZipUtils from "pizzip/utils";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
@@ -172,6 +177,7 @@ const AiOutlineGenDoc: React.FC = () => {
             const curDate = new Date();
             const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
             const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
+            flagEmptyDocParagraphs(chapters);
             const blockLists = prepareChaptersBlocks(chapters);
             applyDocHeadingNumbers(chapters);
             const zip = new PizZip(content);
@@ -201,6 +207,9 @@ const AiOutlineGenDoc: React.FC = () => {
                   file_name,
                   asset_id,
                 }),
+              // 二十一·9 / 二十三·13：Ai 无图资产 → 段级空白名单
+              allowedFigureRefsByList:
+                collectParagraphAllowedFigureRefLists(chapters),
             });
             const inj = injectDocBlocks(doc.getZip(), payloads);
             if (inj.warning) {
@@ -261,109 +270,187 @@ const AiOutlineGenDoc: React.FC = () => {
       return JSON.stringify(msg);
     }
 
-    let startTime=new Date().getTime();
-    let promiseArr= [];
-    let index=0;
-    for (let chapter of chapters){
-      if(Array.isArray(chapter.paragraphs)){
-        for (let paragraph of paragraphsToGenerate(chapter)){
-          /*** 生成全部 ***/
-          if(genKey.length===0) {
-            if (paragraph.prompt.length > 0) {
-              // 十·7 ⑦-0：Ai 无 KB 资产，勿拼空清单硬禁（此前 buildFigureAssetAppendix([])）
-              const kbC = buildKbDocWritingConstraintPrompt(wordBudgetFor(paragraph));
-              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + kbC), {headers: headers}));
-              tArray.push({key: paragraph.key, idx: index});
-              index++;
-            } else {
-              message.warning("提示词未填写。")
-            }
-            /***各段落独立生成****/
-          }else{
-            if(genKey===paragraph.key){
-              if (paragraph.prompt.length > 0) {
-                const kbC = buildKbDocWritingConstraintPrompt(wordBudgetFor(paragraph));
-                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + kbC), {headers: headers}));
-                tArray.push({key: paragraph.key, idx: index});
-                index++;
-              }else{
-                message.warning("提示词未填写。")
-              }
-              break;
-            }
-          }
+    type GenJob = {
+      key: string;
+      chapterIndex: number;
+      baseBody: string;
+      needsLedger: boolean;
+    };
+    const jobs: GenJob[] = [];
+    const startTime = new Date().getTime();
+    for (let ci = 0; ci < chapters.length; ci++) {
+      const chapter = chapters[ci];
+      if (!Array.isArray(chapter.paragraphs)) continue;
+      for (const paragraph of paragraphsToGenerate(chapter)) {
+        // 二十一·9：Ai 无图资产
+        paragraph.allowFigure = false;
+        paragraph.allowedFigureRefs = [];
+        if (genKey.length > 0 && genKey !== paragraph.key) continue;
+        if (!paragraph.prompt.length) {
+          message.warning("提示词未填写。");
+          if (genKey.length > 0) break;
+          continue;
         }
+        // 十九·2 + 二十一·9：无检索、无图
+        const kbC = buildKbDocWritingConstraintPrompt(wordBudgetFor(paragraph), {
+          hasRetrieval: false,
+          allowFigure: false,
+        });
+        jobs.push({
+          key: paragraph.key,
+          chapterIndex: ci,
+          baseBody: paragraph.prompt + kbC,
+          needsLedger: isConclusionChapter(chapters, ci),
+        });
+        if (genKey.length > 0) break;
       }
+      if (genKey.length > 0 && jobs.length) break;
     }
-    console.log(promiseArr);
+    jobs.forEach((j, i) => tArray.push({key: j.key, idx: i}));
     console.log(`hezl setkey:${JSON.stringify(tArray)}`);
     setProgress(1);
     setProgressHidden(false);
-    try{
-      let completeCnts=0;
-      let wordCnts=0;
-      Promise.allSettled(promiseArr.map(
-        (p,idx)=>
-          p.then(value=>{
-            completeCnts++;
-            setProgress(Math.min(100, parseFloat(((100 * completeCnts) / promiseArr.length).toFixed(1))));
-            const parsed = parseChatCompletionData(value.data);
-            if (parsed.ok) {
-              const key = getKeyFromTArray(idx);
-              Doc.setContent(chapters, key, parsed.content);
-              wordCnts += parsed.content.length;
-            } else {
-              console.warn("段落生成失败:", parsed.error, value.data);
-            }
-            return value
-          }).catch(error=>{
-            const key=getKeyFromTArray(idx);
-            message.warning(`Key为${key}的段落文本生成请求失败了。`)
-          })
-      )).then(results=>{
-        const completeCount=results.filter(r=>r.status==='fulfilled').length;
-        console.info("返回的所有结果："+results.length+"个;results："+JSON.stringify(results))
-        const errMsgs=results
-          .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
+
+    try {
+      let completeCnts = 0;
+      let wordCnts = 0;
+      const totalJobs = Math.max(1, jobs.length);
+
+      const runPhase = async (
+        phaseJobs: GenJob[],
+        appendLedger: string,
+      ): Promise<PromiseSettledResult<any>[]> => {
+        if (!phaseJobs.length) return [];
+        return Promise.allSettled(
+          phaseJobs.map((job) =>
+            axios
+              .post(url, buildMsg(job.baseBody + appendLedger), {headers})
+              .then((value) => {
+                completeCnts++;
+                setProgress(
+                  Math.min(
+                    100,
+                    parseFloat(((100 * completeCnts) / totalJobs).toFixed(1)),
+                  ),
+                );
+                const parsed = parseChatCompletionData(value.data);
+                if (parsed.ok) {
+                  const scrubbed = stripHallucinatedDocCitations(parsed.content);
+                  if (scrubbed.stripped > 0) {
+                    console.warn(
+                      `Ai 段 ${job.key} 剥离幻觉引注 ${scrubbed.stripped} 处`,
+                    );
+                  }
+                  Doc.setContent(chapters, job.key, scrubbed.text);
+                  wordCnts += scrubbed.text.length;
+                } else {
+                  console.warn("段落生成失败:", parsed.error, value.data);
+                }
+                return value;
+              })
+              .catch(() => {
+                message.warning(`Key为${job.key}的段落文本生成请求失败了。`);
+                throw new Error(job.key);
+              }),
+          ),
+        );
+      };
+
+      const finishBatch = (
+        results: PromiseSettledResult<any>[],
+        expected: number,
+      ) => {
+        const completeCount = results.filter((r) => r.status === "fulfilled")
+          .length;
+        const errMsgs = results
+          .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
           .map((r) => parseChatCompletionData(r.value?.data))
-          .filter((p): p is { ok: false; error: string } => !p.ok)
+          .filter((p): p is {ok: false; error: string} => !p.ok)
           .map((p) => p.error);
-        if(errMsgs&&errMsgs.length>0){
-          message.warning("内容生成请求有"+errMsgs.length+"个文档段落返回错误："+errMsgs[0]+"(...)");
-          if (errMsgs.length===completeCount) {
+        if (errMsgs.length > 0) {
+          message.warning(
+            "内容生成请求有" +
+              errMsgs.length +
+              "个文档段落返回错误：" +
+              errMsgs[0] +
+              "(...)",
+          );
+          if (errMsgs.length === completeCount) {
             setLoading(false);
             setProgressHidden(true);
             setDownloadable(false);
             return;
           }
         }
-        if(completeCount===promiseArr.length){
-          console.log(JSON.stringify(tArray));
-          console.log("共完成了："+completeCount+"段文字写作。")
-          let endTime=new Date().getTime();
-          const timeDiff=((endTime-startTime)/1000/60).toFixed(1);
-          console.log("共耗时约:"+timeDiff+"分钟");
+        if (completeCount === expected) {
+          const timeDiff = (
+            (new Date().getTime() - startTime) /
+            1000 /
+            60
+          ).toFixed(1);
           const cg = scrubConclusionChapters(chapters);
           if (cg.report.blocked_count > 0 || cg.report.tagged_count > 0) {
             console.info("[结论闸]", cg.report);
           }
-          const wordCntsStr=(wordCnts/10000).toFixed(2);
-          message.info("共完成了："+completeCount+"段"+wordCntsStr+"万字写作, 总耗时约:"+timeDiff+"分钟");
-          console.log("---------------------------"+JSON.stringify(tArray));
-          console.log("!!!!docGen result::::---------------------------"+JSON.stringify(chapters));
+          const emptyKeys = flagEmptyDocParagraphs(chapters);
+          if (emptyKeys.length) {
+            message.warning(
+              `${emptyKeys.length} 个段落生成结果为空，已写入「本段生成失败」占位`,
+            );
+          }
+          message.info(
+            "共完成了：" +
+              completeCount +
+              "段" +
+              (wordCnts / 10000).toFixed(2) +
+              "万字写作, 总耗时约:" +
+              timeDiff +
+              "分钟",
+          );
           setLoading(false);
           setProgressHidden(true);
           setChapters(chapters);
           setDownloadable(true);
-        }else{
-          message.warning("发生了一些错，完成个数："+completeCount+";少于请求文档段落个数："+promiseArr.length)
+        } else {
+          message.warning(
+            "发生了一些错，完成个数：" +
+              completeCount +
+              ";少于请求文档段落个数：" +
+              expected,
+          );
           setLoading(false);
           setProgressHidden(true);
         }
+      };
+
+      (async () => {
+        if (!jobs.length) {
+          setLoading(false);
+          setProgressHidden(true);
+          return;
+        }
+        const bodyJobs = jobs.filter((j) => !j.needsLedger);
+        const conclJobs = jobs.filter((j) => j.needsLedger);
+        let allResults: PromiseSettledResult<any>[] = [];
+        if (genKey.length > 0) {
+          const ledger = jobs[0].needsLedger
+            ? formatFactLedgerAppendix(buildFactLedger(chapters))
+            : "";
+          allResults = await runPhase(jobs, ledger);
+        } else {
+          allResults = await runPhase(bodyJobs, "");
+          const ledger = formatFactLedgerAppendix(buildFactLedger(chapters));
+          allResults = allResults.concat(await runPhase(conclJobs, ledger));
+        }
+        finishBatch(allResults, jobs.length);
+      })().catch((error) => {
+        console.error("出错了:", error?.message || error);
+        setLoading(false);
+        setProgressHidden(true);
       });
-    }catch(error){
+    } catch (error) {
       // @ts-ignore
-      console.error('出错了:',error.message);
+      console.error("出错了:", error.message);
     }
   };
 

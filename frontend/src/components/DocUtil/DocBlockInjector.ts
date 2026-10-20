@@ -36,6 +36,17 @@ export type DocBlockResolveOpts = {
   fetchKbAsset?: FetchKbAssetBytes;
   /** 九·5：有证据时校验表内数字；无证据则不过闸 */
   evidenceText?: string;
+  /**
+   * 二十三·13：可用 ref 白名单（formatKbAssetRef 输出）。
+   * 精确匹配才取图；不命中 → figure-missing（保留 caption）。
+   * 空集合 = 禁全部 figure（Ai / 无资产段）。
+   */
+  allowedFigureRefs?: Set<string> | string[];
+  /**
+   * 与 blockLists 同序的段级白名单；某项为 undefined 则回退到 allowedFigureRefs；
+   * 某项为空数组/空 Set = 该段禁图。
+   */
+  allowedFigureRefsByList?: Array<Set<string> | string[] | undefined | null>;
 };
 
 export type DocBlockPayloadItem =
@@ -365,16 +376,31 @@ export function collectParagraphBlocks(
 /**
  * 将 DocBlock 转为可注入 payload；取图失败 → figure-missing（七·7）。
  */
+function toAllowedRefSet(
+  src: Set<string> | string[] | undefined | null,
+): Set<string> | undefined {
+  if (src == null) return undefined;
+  return src instanceof Set ? src : new Set(src);
+}
+
 export async function resolveBlocksToPayloads(
   blockLists: DocBlock[][],
   opts: DocBlockResolveOpts = {},
 ): Promise<Array<DocBlockPayloadItem[] | null>> {
   let totalImg = 0;
   const seq: Array<DocBlockPayloadItem[] | null> = [];
-  for (const blocks of blockLists) {
+  const globalAllow = toAllowedRefSet(opts.allowedFigureRefs);
+  for (let li = 0; li < blockLists.length; li++) {
+    const blocks = blockLists[li];
     if (!blocks.length) {
       seq.push(null);
       continue;
+    }
+    // 段级列表：undefined/null 项回退全局；[] / 空 Set = 禁全部
+    let allow: Set<string> | undefined = globalAllow;
+    if (opts.allowedFigureRefsByList != null) {
+      const raw = opts.allowedFigureRefsByList[li];
+      allow = raw == null ? globalAllow : toAllowedRefSet(raw);
     }
     const items: DocBlockPayloadItem[] = [];
     for (const b of blocks) {
@@ -385,6 +411,14 @@ export async function resolveBlocksToPayloads(
         continue;
       }
       const ref = (b.assetRef || "").trim();
+      if (allow != null && !allow.has(ref)) {
+        items.push({
+          kind: "figure-missing",
+          caption: b.caption || "",
+          ref: `${ref || "(空)"}（不在可用清单）`,
+        });
+        continue;
+      }
       const resolved = await resolveAssetBytes(ref, opts);
       if (!resolved) {
         items.push({

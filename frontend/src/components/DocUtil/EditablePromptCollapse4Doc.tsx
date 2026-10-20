@@ -16,6 +16,7 @@ import {
 import React, {useEffect, useState} from "react";
 import {
   CompassTwoTone,
+  CloseOutlined,
   EditTwoTone,
   SaveOutlined,
   SettingOutlined,
@@ -47,6 +48,8 @@ interface EditablePromptCollapse4DocProps extends CollapseProps {
   cbEditPromptFn: (key: string) => void;
   editKey: string;
   cbSaveResultFn: (key: string, patch: DocPromptSavePatch | string) => void;
+  /** 取消编辑（不保存） */
+  cbExitEditFn?: () => void;
 }
 
 type EditDraft = {
@@ -269,17 +272,20 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
         <div>
           <p>
             <Tag color={"volcano"}>提示词（存量整串）</Tag>
-            <Tooltip title="提示词保存">
-              <SaveOutlined
-                style={{
-                  fontSize: "x-large",
-                  float: "right",
-                  color: "darkcyan",
-                  marginRight: "15px",
-                }}
-                onClick={() => onSave(paragraph)}
-              />
-            </Tooltip>
+            <Space style={{ float: "right", marginRight: 8 }}>
+              <Tooltip title="取消编辑">
+                <CloseOutlined
+                  style={{ fontSize: "x-large", color: "#999" }}
+                  onClick={() => props.cbExitEditFn?.()}
+                />
+              </Tooltip>
+              <Tooltip title="保存">
+                <SaveOutlined
+                  style={{ fontSize: "x-large", color: "darkcyan" }}
+                  onClick={() => onSave(paragraph)}
+                />
+              </Tooltip>
+            </Space>
           </p>
           <Input.TextArea
             key={"ta-" + paragraph.key}
@@ -303,6 +309,12 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
                 type="text"
                 icon={<SettingOutlined />}
                 onClick={() => setAdvOpen(true)}
+              />
+            </Tooltip>
+            <Tooltip title="取消编辑（不保存）">
+              <CloseOutlined
+                style={{ fontSize: "x-large", color: "#999" }}
+                onClick={() => props.cbExitEditFn?.()}
               />
             </Tooltip>
             <Tooltip title="保存">
@@ -454,6 +466,7 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
           >
             {buildKbDocWritingConstraintPrompt(
               clampWordBudget({ min: draft.wordMin, max: draft.wordMax }),
+              {allowFigure: draft.allowFigure},
             )}
             {"\n"}
             【可用插图资产】…（有材料池时按段注入）
@@ -464,7 +477,16 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
   };
 
   const onChange = (e: string[]) => {
-    props.fn(e[0]);
+    const next = e?.[0];
+    // 切到其他段或收起 → 退出编辑（与章级切换一致）
+    if (
+      props.editKey &&
+      props.editKey !== "-1" &&
+      (!next || next !== props.editKey)
+    ) {
+      props.cbExitEditFn?.();
+    }
+    props.fn(next);
   };
   const genDocIcon = (
     <>

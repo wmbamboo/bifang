@@ -24,13 +24,18 @@ const OutlinePromptDoc: React.FC <DocOutlinePromptProps>
 
   const keys =Doc.getKeysFromKey(chapters,activeKey);
   /**
-   * 这是章节间的切换。
-   * @param e
+   * 章/段切换：切走当前编辑段或收起 → 退出编辑（未保存草稿丢弃）。
    */
   const onChange=(e:string[])=>{
-    console.log(e);
+    const next = e?.[0];
+    if (
+      editPromptParagraphKey !== "-1" &&
+      (!next || next !== editPromptParagraphKey)
+    ) {
+      setEditPromptParagraphKey("-1");
+    }
     if(fn) {
-      fn(e[0]);
+      fn(next);
     }
   }
   if (!keys) {
@@ -44,11 +49,18 @@ const OutlinePromptDoc: React.FC <DocOutlinePromptProps>
     console.log(`outlineGenDoc.tsx#cb4Edit,prompt:${key}`);
     const paragraph = Doc.getParagraph(chapters, key);
     if (paragraph) {
-      setEditPromptParagraphKey(key)
+      // 再点一次同一段的编辑 = 取消编辑
+      if (editPromptParagraphKey === key) {
+        setEditPromptParagraphKey("-1");
+      } else {
+        setEditPromptParagraphKey(key);
+      }
     } else {
       console.error(`出错了，要编辑提示词的章节key为${key}。`)
     }
   }
+
+  const cbExitEdit = () => setEditPromptParagraphKey("-1");
 
   /**
    * 根据子组件传递来的新prompt，传递给上一级组件。
@@ -85,7 +97,8 @@ const OutlinePromptDoc: React.FC <DocOutlinePromptProps>
                                                   onChange={onChange} fn={fn}
                                                   activeKey={keys.paragraphKey} cbEditPromptFn={cb4EditParagraph_prompt}
                                                   genFn={genFn} editKey={editPromptParagraphKey}
-                                                  cbSaveResultFn={onSaveResultFn}/>,
+                                                  cbSaveResultFn={onSaveResultFn}
+                                                  cbExitEditFn={cbExitEdit}/>,
           }
         )
       }

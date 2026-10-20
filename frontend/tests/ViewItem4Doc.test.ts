@@ -73,6 +73,7 @@ describe('ViewItem Class', () => {
     console.log(chapters[5].paragraphs[1].content)
     expect(chapters[5].paragraphs[1].content).toBe("你好2");
   })
+  // 注：本文件在 jest testPathIgnorePatterns；见 outlineDocMedia.test.ts
   test('getParagraph-1', async () => {
     const chapters=Doc.getChaptersFromContent(docOutlineMsg)
     const p=Doc.getParagraph(chapters,"paragraph-18")

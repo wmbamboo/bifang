@@ -1,5 +1,19 @@
 import OutlineRec, {outlineType} from "@/components/DocUtil/OutlineStore";
 import {stripDocOutlineOrdinal} from "@/components/DocUtil/docOutlineStructure";
+import {normalizeDocDepth} from "@/components/DocUtil/docHeadingDepth";
+import {
+  WordBudget,
+  clampWordBudget,
+  formatWordBudgetZh,
+  wordBudgetFor,
+} from "@/components/DocUtil/docWordBudget";
+export type { WordBudget } from "@/components/DocUtil/docWordBudget";
+export {
+  DOC_WORD_BUDGET,
+  clampWordBudget,
+  formatWordBudgetZh,
+  wordBudgetFor,
+} from "@/components/DocUtil/docWordBudget";
 export type CheckMsg={
   code:number;
   msg:string;
@@ -112,11 +126,33 @@ export class Paragraph{
   blocks: DocBlock[] = [];
   /** ### → true；* + - → false（八·3：额度只算 heading） */
   heading: boolean = false;
+  /** 十五·3：2=章级生成单元，3=段；4+ 留给 P1 */
+  level: number = 3;
+  /**
+   * 显式容器（不发 HTTP）。不能用「content 为空」判断——生成前正文本来就是空的。
+   */
+  container: boolean = false;
+  /** 十五·R2：超深子点折进写作提示后留在这里，避免 setAllPrompt 覆盖丢失 */
+  pointGuide: string = "";
   /**
    * 十三·B：`####` 子点（数据点/对照点）；模板 `{#points}{label}` → heading 3。
    * docxtemplater 读 `label` 字段。
    */
   points: Array<{label: string}> = [];
+  /** 十四·14.3.4：段级字数预算；null 则按 heading/container 取默认 */
+  wordBudget: WordBudget | null = null;
+  /** 十四·14.3.5：岗位视角（简单层） */
+  role: string = "";
+  /** 十四·14.3.5：本章要回答的问题（简单层） */
+  question: string = "";
+  /** 十四·14.3.5：是否允许出表 / 出图 */
+  allowTable: boolean = true;
+  allowFigure: boolean = true;
+  /**
+   * 十四·14.3.5：高级层手改过整串 prompt 后为 true；
+   * 简单层改字段时若为 false 则重拼 prompt。
+   */
+  promptManual: boolean = false;
 
   constructor(index:number, title:string,subTitle?:string) {
     this.index = index;
@@ -125,6 +161,9 @@ export class Paragraph{
     // this.key = index-1;
     this.key = "paragraph-"+index;
     this.label= title;
+  }
+  isContainer(): boolean {
+    return this.container;
   }
   setPrompt(prompt:string){
     this.prompt = prompt;
@@ -160,6 +199,8 @@ export class Paragraph{
    */
   setContent(content:string){
     this.content=content;
+    // 生成当刻剥离 ```table/figure → blocks，右栏即可显示「表/图」状态
+    absorbBlocksFromParagraphContent(this);
     return true
   }
 }
@@ -174,6 +215,10 @@ export class Chapter {
   label: string; //used by Collapse ,it's label==slide's title
   prompt: string = ""; //大部分没用，预留
   paragraphs:Array<Paragraph> = new Array<Paragraph>();
+  /** 十五·R1：单子塌陷后要点上提到章；生成前再物化成一个段落 */
+  points: Array<{label: string}> = [];
+  collapsed: boolean = false;
+  pointGuide: string = "";
 
   constructor(index: number, title: string) {
     this.index = index;
@@ -207,30 +252,210 @@ export class Chapter {
 
 }*/
 
+export type DocFormatPromptOpts = {
+  allowTable?: boolean;
+  allowFigure?: boolean;
+};
+
 /**
  * 文章段落写作契约（对齐 PPT format prompt 角色，输出散文而非编号行）。
- * 七·3 围栏 + 九·4 可判定表/图判据。
+ * 七·3 围栏 + 九·4 可判定表/图判据；十四·14.3.4 字数取自 WordBudget。
  */
-export function buildDocParagraphFormatPrompt(): string {
-  return (
+export function buildDocParagraphFormatPrompt(
+  budget?: WordBudget | null,
+  opts?: DocFormatPromptOpts,
+): string {
+  const b = clampWordBudget(
+    budget && (budget.min > 0 || budget.max > 0)
+      ? budget
+      : wordBudgetFor({ heading: true }),
+  );
+  const zh = formatWordBudgetZh(b);
+  const allowTable = opts?.allowTable !== false;
+  const allowFigure = opts?.allowFigure !== false;
+  let s =
     '\n\n【输出格式·文章段落】\n' +
-    '直接输出约 200～400 字连贯正文，可分 1～3 个自然段。\n' +
+    `直接输出约 ${zh} 字连贯正文，可分 1～3 个自然段。\n` +
     '禁止「1. 标题 - 描述」编号清单；禁止只写 bullet 列表替代正文。\n' +
     '禁止以「根据知识库」「材料显示」「综上所述」等套话开头或结尾。\n' +
-    '数字与专名须可溯；材料没有的数据禁止编造。\n' +
-    '\n【表·须同时满足才可追加 ```table】\n' +
-    '- 材料里同一组字段被复述给 ≥2 个对象（品类×指标、价格带×销量、时段×值等）；\n' +
-    '- 该组 ≥2 行 × ≥2 列，且行与行同质可比；\n' +
-    '- 反例（不要出表）：① 只有 1 个对象；② 只是把正文已列数字再抄一遍；③ 为一句结论配表。\n' +
-    '- 表格 ≤8 行 × 5 列。\n' +
-    '\n【图·须同时满足才可追加 ```figure】\n' +
-    '- 本段对象在【可用插图资产】里有对应条目，且 ref 只能原样复制清单字符串；\n' +
-    '- 该图就在本段上下文（不是别段的对象）；一段最多 1 张图；\n' +
-    '- 清单为空或未提供【可用插图资产】→ **禁止**写 figure。\n' +
-    '\n【围栏格式】表/图紧跟正文之后：\n' +
-    '```table\ncaption: 表题\n| 列1 | 列2 |\n| 值 | 值 |\n```\n' +
-    '```figure\nref: kb:文档名/相对路径\ncaption: 图题\n```\n'
-  );
+    '数字与专名须可溯；材料没有的数据禁止编造。\n';
+  if (allowTable) {
+    s +=
+      '\n【表·须同时满足才可追加 ```table】\n' +
+      '- 材料里同一组字段被复述给 ≥2 个对象（品类×指标、价格带×销量、时段×值等）；\n' +
+      '- 该组 ≥2 行 × ≥2 列，且行与行同质可比；\n' +
+      '- 反例（不要出表）：① 只有 1 个对象；② 只是把正文已列数字再抄一遍；③ 为一句结论配表。\n' +
+      '- 表格 ≤8 行 × 5 列。\n';
+  } else {
+    s += '\n【表】本段禁止输出 ```table 围栏。\n';
+  }
+  if (allowFigure) {
+    s +=
+      '\n【图·须同时满足才可追加 ```figure】\n' +
+      '- 本段对象在【可用插图资产】里有对应条目，且 ref 只能原样复制清单字符串；\n' +
+      '- 该图就在本段上下文（不是别段的对象）；一段最多 1 张图；\n' +
+      '- 清单为空或未提供【可用插图资产】→ **禁止**写 figure。\n';
+  } else {
+    s += '\n【图】本段禁止输出 ```figure 围栏。\n';
+  }
+  if (allowTable || allowFigure) {
+    s +=
+      '\n【围栏格式】表/图紧跟正文之后：\n' +
+      '```table\ncaption: 表题\n| 列1 | 列2 |\n| 值 | 值 |\n```\n' +
+      '```figure\nref: kb:文档名/相对路径\ncaption: 图题\n```\n';
+  }
+  return s;
+}
+
+export type AssembleDocParagraphOpts = {
+  docTitle: string;
+  chapterTitle: string;
+  siblings?: string[];
+  isConclusionChapter?: boolean;
+  /** 是否追加 format 契约；默认 true */
+  includeFormat?: boolean;
+};
+
+/**
+ * 十四·14.3.5：由段级结构化字段拼写作 prompt。
+ * 若 promptManual 且 prompt 非空，直接返回存量整串（兼容旧大纲）。
+ */
+export function assembleDocParagraphPrompt(
+  paragraph: Paragraph,
+  opts: AssembleDocParagraphOpts,
+): string {
+  if (paragraph.promptManual && (paragraph.prompt || "").trim()) {
+    return paragraph.prompt;
+  }
+  const budget = wordBudgetFor(paragraph);
+  const zh = formatWordBudgetZh(budget);
+  const role =
+    (paragraph.role || "").trim() ||
+    inferDocWritingRole(opts.docTitle);
+  const question =
+    (paragraph.question || "").trim() ||
+    `围绕「${opts.chapterTitle}」说明本段「${paragraph.title}」对该问题的贡献`;
+  const docTitle =
+    (opts.docTitle || "").trim() || "未命名文档";
+  let prompt =
+    `文章标题是<${docTitle}>，请为它的【${opts.chapterTitle}】章节中的段落： [${paragraph.title}]撰写约${zh}字的具体内容。` +
+    `直接输出正文，不要以「根据知识库内容」等套话开头。`;
+  const guide = paragraph.pointGuide || "";
+  if (paragraph.points.length) {
+    const labels = paragraph.points
+      .map((pt) => pt.label)
+      .filter(Boolean)
+      .slice(0, 6);
+    if (labels.length) prompt += `【本段要点】${labels.join("、")}。`;
+  } else if (guide) {
+    prompt += guide.endsWith("。") ? guide : `${guide}。`;
+  }
+  if (role) {
+    prompt += `请以「${role}」岗位视角撰写，用该岗位的判断口径，勿写成百科介绍。`;
+  }
+  prompt += `本章要回答的问题：${question}；勿跑题。`;
+  const siblings = (opts.siblings || []).filter(Boolean);
+  if (siblings.length) {
+    prompt += `同章其他段落（内容勿重复）：${siblings.join("、")}。`;
+  }
+  if (opts.isConclusionChapter) {
+    prompt +=
+      `本段属结论/建议归属章：给出可执行判断与动作，勿堆砌前文已写过的同一组数字；` +
+      `凡建议/预判/取舍类判断句末须标「（推演）」；结论中的数值必须前文正文已出现过。`;
+  } else {
+    prompt +=
+      `结论与行动建议留给末章；本段只写本段题所需的事实与分析。`;
+  }
+  if (opts.includeFormat !== false) {
+    prompt += buildDocParagraphFormatPrompt(budget, {
+      allowTable: paragraph.allowTable !== false,
+      allowFigure: paragraph.allowFigure !== false,
+    });
+  }
+  return prompt;
+}
+
+/** 段是否已带结构化字段（相对「仅整串 prompt」的存量） */
+export function paragraphHasStructuredPrompt(p: Paragraph): boolean {
+  if (p.wordBudget != null) return true;
+  if (p.role && p.role.trim()) return true;
+  if (p.question && p.question.trim()) return true;
+  return false;
+}
+
+/** 从 pointGuide / 整串里的【本段要点】抽出标签列表 */
+export function labelsFromPointGuide(guide: string): string[] {
+  let g = String(guide || "").trim();
+  if (!g) return [];
+  const m = g.match(/【本段要点】([^】\n]*)/);
+  if (m) g = m[1];
+  else g = g.replace(/^【本段要点】/, "");
+  g = g.replace(/[。．]\s*$/, "").trim();
+  if (!g) return [];
+  return g
+    .split(/[、,，;；]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 简单层「要点」回显源：points 优先；
+ * maxLevel≤3 时 normalizeDocDepth 会把 #### 折进 pointGuide 并清空 points，须回读 guide；
+ * 再不行从已拼 prompt 里抠【本段要点】。
+ */
+export function paragraphPointLabels(p: {
+  points?: Array<{ label: string }>;
+  pointGuide?: string;
+  prompt?: string;
+}): string[] {
+  const fromPts = (p.points || []).map((x) => x.label).filter(Boolean);
+  if (fromPts.length) return fromPts;
+  const fromGuide = labelsFromPointGuide(p.pointGuide || "");
+  if (fromGuide.length) return fromGuide;
+  return labelsFromPointGuide(p.prompt || "");
+}
+
+/** 写作提示用的要点串（与 normalizeDocDepth 的 pointLine 同形） */
+export function pointGuideFromLabels(labels: string[]): string {
+  const xs = (labels || []).map((s) => String(s || "").trim()).filter(Boolean);
+  return xs.length ? `【本段要点】${xs.join("、")}` : "";
+}
+
+/** 十四·14.3.5：提示词保存补丁（简单层字段 + 拼好的 prompt） */
+export type DocPromptSavePatch = {
+  prompt: string;
+  wordBudget?: WordBudget | null;
+  role?: string;
+  question?: string;
+  allowTable?: boolean;
+  allowFigure?: boolean;
+  promptManual?: boolean;
+  /** 简单层编辑的要点；落盘时同步进 pointGuide，并清空 points（对齐 maxLevel≤3 折进提示） */
+  points?: Array<{ label: string }>;
+};
+
+export function applyDocPromptSavePatch(
+  paragraph: Paragraph,
+  patch: DocPromptSavePatch | string,
+): void {
+  if (typeof patch === "string") {
+    paragraph.setPrompt(patch);
+    paragraph.promptManual = true;
+    return;
+  }
+  if (patch.wordBudget !== undefined) paragraph.wordBudget = patch.wordBudget;
+  if (patch.role !== undefined) paragraph.role = patch.role;
+  if (patch.question !== undefined) paragraph.question = patch.question;
+  if (patch.allowTable !== undefined) paragraph.allowTable = patch.allowTable;
+  if (patch.allowFigure !== undefined) paragraph.allowFigure = patch.allowFigure;
+  if (patch.promptManual !== undefined) paragraph.promptManual = patch.promptManual;
+  if (patch.points !== undefined) {
+    const labels = patch.points.map((x) => x.label).filter(Boolean);
+    // 折进写作提示：简单层改的要点写 pointGuide；points 清空以免 docx 再出三级标题
+    paragraph.pointGuide = pointGuideFromLabels(labels);
+    paragraph.points = [];
+  }
+  paragraph.setPrompt(patch.prompt);
 }
 
 /** 末章是否像结论/建议（十一·3 / 9.3） */
@@ -353,7 +578,19 @@ export function inferDocWritingRole(title: string): string {
 export type DocParagraphPromptCtx = {
   /** 岗位；缺省则按标题推断 */
   role?: string;
+  /** 十五：体裁上界；缺省 3（#### 折进要点，不另起标题） */
+  maxLevel?: number;
 };
+
+/**
+ * 十四·3.2：只生成真正的 ### 段。整章没有 ### 时退回全部段落（存量 `*` 大纲）。
+ * 容器段不发请求。
+ */
+export function paragraphsToGenerate(chapter: Chapter): Paragraph[] {
+  const paras = (chapter?.paragraphs || []).filter((p) => !p.isContainer());
+  const headings = paras.filter((p) => p.heading);
+  return headings.length ? headings : paras;
+}
 
 /**
  * 本地无大纲时的种子样例：### 段落 + 结论章（替换遗留 * 1.1 / 六章无关总结，十一·2）。
@@ -444,9 +681,51 @@ function isTableSepLine(line: string): boolean {
   return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c) || c === "");
 }
 
+/** 段内表/图块计数（优先 blocks；正文仍含围栏时兜底扫描） */
+export function countParagraphMedia(paragraph: Paragraph): {
+  tables: number;
+  figures: number;
+} {
+  let tables = 0;
+  let figures = 0;
+  for (const b of paragraph.blocks || []) {
+    if (b.kind === "table") tables += 1;
+    else if (b.kind === "figure") figures += 1;
+  }
+  if (!tables && !figures) {
+    const c = String(paragraph.content || "");
+    const tm = c.match(/```\s*table\b/gi);
+    const fm = c.match(/```\s*figure\b/gi);
+    tables = tm ? tm.length : 0;
+    figures = fm ? fm.length : 0;
+  }
+  return {tables, figures};
+}
+
+/** 章内表/图合计 */
+export function countChapterMedia(chapter: Chapter): {
+  tables: number;
+  figures: number;
+} {
+  let tables = 0;
+  let figures = 0;
+  for (const p of chapter.paragraphs || []) {
+    const n = countParagraphMedia(p);
+    tables += n.tables;
+    figures += n.figures;
+  }
+  return {tables, figures};
+}
+
 /** 从已生成正文剥离 ```table/figure 并入 paragraph.blocks，返回清洁正文 */
 export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
-  const lines = (paragraph.content || "").split("\n");
+  const raw = paragraph.content || "";
+  // 正文已无围栏（曾吸收过）→ 保留既有 blocks，避免下载前二次吸收清空
+  if (!/```\s*(?:table|figure)\b/i.test(raw)) {
+    return raw.trim();
+  }
+  paragraph.blocks = [];
+  const lines = raw.split("\n");
   const out: string[] = [];
   let state: "normal" | "table" | "figure" | "unknown" = "normal";
   let buf: string[] = [];
@@ -626,6 +905,8 @@ export class Doc{
     const lines = content.split('\n');
     let chapterIndex=1;
     let paragraphIndex=1;
+    /** 十四·3.1：本章已经出现过 ### 之后，* / - / + 归入当前段的 points */
+    let chapterSawH3 = false;
     let state: "normal" | "table" | "figure" | "unknown" = "normal";
     let fenceBuf: string[] = [];
 
@@ -696,14 +977,19 @@ export class Doc{
         }
         currentChapter = new Chapter(chapterIndex, cleanString(chapterMatch[1]));
         currentParagraph = null;
+        chapterSawH3 = false;
         chapterIndex++;
       } else if (pointMatch && currentChapter) {
         // 十三·B：#### 子点挂到当前段（允许数字/引注）
         appendPointToCurrent(cleanString(pointMatch[1]) || pointMatch[1]);
+      } else if (paragraphMatch2 && currentChapter && chapterSawH3) {
+        const cleaned = cleanString(paragraphMatch2[1]);
+        appendPointToCurrent(cleaned || paragraphMatch2[1]);
       } else if ((paragraphMatch1 || paragraphMatch2) && currentChapter) {
         let paragraphTitle = "";
         if (paragraphMatch1) {
           paragraphTitle = paragraphMatch1[1];
+          chapterSawH3 = true;
         } else if (paragraphMatch2) {
           paragraphTitle = paragraphMatch2[1];
         }
@@ -733,6 +1019,7 @@ export class Doc{
    * 检查文章大纲格式。code：0 通过；>0 Warn 可保存；<0 拒收（八·3）。
    */
   static checkChapter(chapters:Array<Chapter>):CheckMsg{
+    const depth = normalizeDocDepth(chapters || [], {maxLevel: 3});
     if (!chapters || chapters.length==0) {
       return {code:-1,msg:"大纲格式不正确，没有发现任何章节，章节前缀应该为【## 】，注意空格"};
     }
@@ -743,9 +1030,13 @@ export class Doc{
       return {code:-3,msg:`文章大纲章节过多（当前 ${chapters.length} 章），请压缩为 3～5 章（最多 6）。`};
     }
     let paragraphsCnt=0
-    const warns: string[] = [];
+    const warns: string[] = [...depth.notes];
     for (let i=0;i<chapters.length;i++) {
       const paragraphs=chapters[i].paragraphs;
+      if (chapters[i].collapsed) {
+        paragraphsCnt += paragraphs?.length || 0;
+        continue;
+      }
       if(!paragraphs || paragraphs.length==0){
         return {code:-2,msg:`大纲格式不正确，第${i+1}章没发现任何段落，段落标题前缀应为【### 】（* + - 为兼容写法，推荐 ###），注意空格。`}
       }
@@ -876,6 +1167,17 @@ export class Doc{
     const fmt = (format_prompt || "").trim();
     const role =
       (ctx?.role || "").trim() || inferDocWritingRole(pptTitle);
+    normalizeDocDepth(chapters, {maxLevel: ctx?.maxLevel ?? 3});
+    for (const chapter of chapters) {
+      if (chapter.collapsed && chapter.paragraphs.length === 0) {
+        const p = new Paragraph(1, chapter.title);
+        p.heading = true;
+        p.level = 2;
+        p.points = [...(chapter.points || [])];
+        p.pointGuide = chapter.pointGuide || "";
+        chapter.paragraphs.push(p);
+      }
+    }
     const nCh = chapters.length;
     for (let ci = 0; ci < nCh; ci++) {
       const chapter = chapters[ci];
@@ -883,32 +1185,41 @@ export class Doc{
       if (!Array.isArray(paragraphs)) continue;
       const isConclusionChapter =
         ci === nCh - 1 || DOC_CONCLUSION_CHAPTER_RE.test(chapter.title || "");
+      const useHeading = paragraphs.some((p) => p.heading);
       for (const paragraph of paragraphs) {
+        if (paragraph.isContainer()) continue;
         const siblings = paragraphs
-          .filter((p) => p !== paragraph)
+          .filter(
+            (p) =>
+              p !== paragraph &&
+              !p.isContainer() &&
+              (!useHeading || p.heading),
+          )
           .map((p) => p.title)
           .filter(Boolean);
-        let prompt =
-          `文章标题是<${pptTitle}>，请为它的【${chapter.title}】章节中的段落： [${paragraph.title}]撰写大约200~400个字左右的具体内容。` +
-          `直接输出正文，不要以「根据知识库内容」等套话开头。`;
-        if (role) {
-          prompt += `请以「${role}」岗位视角撰写，用该岗位的判断口径，勿写成百科介绍。`;
-        }
-        prompt +=
-          `本章要回答的问题：围绕「${chapter.title}」说明本段「${paragraph.title}」对该问题的贡献；勿跑题。`;
-        if (siblings.length) {
-          prompt +=
-            `同章其他段落（内容勿重复）：${siblings.join("、")}。`;
-        }
-        if (isConclusionChapter) {
-          prompt +=
-            `本段属结论/建议归属章：给出可执行判断与动作，勿堆砌前文已写过的同一组数字；` +
-            `凡建议/预判/取舍类判断句末须标「（推演）」；结论中的数值必须前文正文已出现过。`;
-        } else {
-          prompt +=
-            `结论与行动建议留给末章；本段只写本段题所需的事实与分析。`;
-        }
-        if (fmt) prompt += fmt;
+        // 十七·2：按要点数算单值预算（勿传旧 wordBudget，否则不会重算）
+        paragraph.wordBudget = wordBudgetFor({
+          heading: paragraph.heading,
+          container: paragraph.container,
+          points: paragraph.points,
+          pointGuide: paragraph.pointGuide,
+          prompt: paragraph.prompt,
+        });
+        paragraph.role = role;
+        paragraph.question =
+          `围绕「${chapter.title}」说明本段「${paragraph.title}」对该问题的贡献`;
+        paragraph.allowTable = true;
+        paragraph.allowFigure = true;
+        paragraph.promptManual = false;
+        // format_prompt 第三参已弃用：字数/表图契约一律由 assemble 按段预算拼，避免全局硬编码覆盖
+        void fmt;
+        const prompt = assembleDocParagraphPrompt(paragraph, {
+          docTitle: (pptTitle || "").trim() || "未命名文档",
+          chapterTitle: chapter.title,
+          siblings,
+          isConclusionChapter,
+          includeFormat: true,
+        });
         paragraph.setPrompt(prompt);
       }
     }

@@ -283,11 +283,15 @@ export const PPT_DOMAIN_PACK_OPTIONS = (
 /** 文章大纲：骨架进 system 时用（对齐 PPT 的「定框强度」，但不引入 layout） */
 export const DOC_OUTLINE_SKELETON =
   '你是文章大纲撰写助手。只输出符合契约的中文 Markdown 大纲，不要前言后语，不要解释。\n' +
-  '【层级·缺一级即不合格】\n' +
-  '1. 全文只有 1 行一级标题，以「# 」开头（短名 ≤20 字，勿把长主题整句塞进标题）。\n' +
-  '2. 章节以「## 」开头；全文 **3～5 章**（推荐 4；禁止 1 章或超过 6 章）。不要用「第一章」代替层级。\n' +
-  '3. 每章下必须有 **2～4 个段落**，段落以「### 」开头。禁止只写到 ## 就结束；禁止一章堆 8 个以上 ###。\n' +
-  '4. 数据点/对照点用「#### 」写在对应 ### 之下（可选；每段 0～4 个）。#### 允许数字与 `[文档N]`。\n' +
+  '【层级·按内容需要分层，不按固定层数】\n' +
+  '1. 全文 1 行一级标题（「# 」，短名 ≤20 字）。\n' +
+  '2. 最深不超过 {maxLevel} 级。用几级由内容决定：\n' +
+  '   - 同一父节点下不足 2 个子节点时，禁止分这一层（宁可少一级，不要空壳层）。\n' +
+  '   - 同一父节点下超过 6 个子节点时，应再分一层。\n' +
+  '   - 禁止「只有 1 个子节点」的中间层（如 1.1 下面只有 1.1.1），那是空壳。\n' +
+  '3. 章用「## 」，段用「### 」，数据点/对照点用「#### 」。\n' +
+  '4. 严禁「* / + / -」充当层级（会被当成新段落独立成文）。\n' +
+  '5. 标题不得为空壳词（概述/小结/其他/背景）；命中则并入父层。\n' +
   '【内容】\n' +
   '- 章/段标题要能独立成题（读者只看标题能懂要写什么）；禁止「概述/小结/其他」空壳标题。\n' +
   '- **段题（###）瘦身**：≤14 字；禁止阿拉伯数字、禁止 `[文档N]`、禁止逗号/顿号并列堆砌；数字与引用写进 #### 子点或正文。\n' +
@@ -584,13 +588,18 @@ export type DocDomainPack =
   | 'research'
   | 'review';
 
-export const DOC_DOMAIN_PACKS: Record<DocDomainPack, {label: string; prompt: string}> = {
+export const DOC_DOMAIN_PACKS: Record<
+  DocDomainPack,
+  {label: string; prompt: string; maxLevel: number}
+> = {
   generic: {
     label: '通用',
+    maxLevel: 3,
     prompt: '【体裁：通用】按读者理解路径组织章节；不照搬材料原目录。',
   },
   selection: {
     label: '选品',
+    maxLevel: 3,
     prompt:
       '【体裁：选品】按选品决策顺序合并为 3～5 章（推荐 4）。章主题参考（改写勿照抄）：' +
       '机会面 → 证据对照 → 风险与不选什么 → 选品结论与动作。\n' +
@@ -598,14 +607,17 @@ export const DOC_DOMAIN_PACKS: Record<DocDomainPack, {label: string; prompt: str
   },
   report: {
     label: '汇报总结',
+    maxLevel: 2,
     prompt: '【体裁：汇报总结】结论先行 → 依据 → 问题与风险 → 结论建议。',
   },
   research: {
     label: '调研研究',
+    maxLevel: 4,
     prompt: '【体裁：调研研究】背景与方法 → 现状与结构 → 归因 → 判断与建议；判断须有材料依据。',
   },
   review: {
     label: '复盘归因',
+    maxLevel: 3,
     prompt: '【体裁：复盘】目标 → 结果 → 归因 → 改进；不得编造未提供的基数。',
   },
 };
@@ -642,7 +654,12 @@ export type DocOutlineVars = {
 
 export function buildDocOutlineSystemPrompt(pack?: DocDomainPack): string {
   const p = pack && DOC_DOMAIN_PACKS[pack] ? pack : 'generic';
-  return DOC_OUTLINE_SKELETON + '\n' + DOC_DOMAIN_PACKS[p].prompt;
+  const L = DOC_DOMAIN_PACKS[p].maxLevel ?? 3;
+  return (
+    DOC_OUTLINE_SKELETON.replace(/\{maxLevel\}/g, String(L)) +
+    '\n' +
+    DOC_DOMAIN_PACKS[p].prompt
+  );
 }
 
 export type DocOutlineRetrievalHint = {

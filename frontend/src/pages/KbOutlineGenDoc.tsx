@@ -4,16 +4,23 @@ import { useTheme } from 'antd-style';
 import {Button, Empty, Spin, message, Flex, Progress, Tag} from 'antd';
 import React, {useEffect, useState} from "react";
 import axios from "axios";
-import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_DOC_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
+import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, buildKbDocWritingConstraintPrompt, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
 
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
-import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT} from "@/components/DocUtil/ViewItem4Doc";
+import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT, paragraphsToGenerate, wordBudgetFor, DocPromptSavePatch, applyDocPromptSavePatch} from "@/components/DocUtil/ViewItem4Doc";
+import {applyDocHeadingNumbers} from "@/components/DocUtil/docHeadingDepth";
 import {
   prepareChaptersBlocks,
   resolveBlocksToPayloads,
   injectDocBlocks,
 } from "@/components/DocUtil/DocBlockInjector";
+import {
+  applyHeadingLevels,
+  buildHeadingLevelPlan,
+  inferDocMaxHeadingLevel,
+  patchTocOutlineLevels,
+} from "@/components/DocUtil/docHeadingLevels";
 import {allocateMaterialPool, fetchAssetBytes} from "@/services/chatchat/kb";
 import {applyEntityGate, docsToEvidence} from "@/components/DocUtil/entityGate";
 import {applyRankingGate} from "@/components/DocUtil/rankingGate";
@@ -189,6 +196,7 @@ const KbOutlineGenDoc: React.FC = () => {
             const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
             const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
             const blockLists = prepareChaptersBlocks(chapters);
+            applyDocHeadingNumbers(chapters);
             const zip = new PizZip(content);
             const doc = new Docxtemplater(zip, {
               paragraphLoop: true,
@@ -236,6 +244,14 @@ const KbOutlineGenDoc: React.FC = () => {
               console.warn(inj.warning);
               message.warning(inj.warning);
             }
+            // 十八·P1-a：按 level 写样式 + TOC 收录级别随大纲深度
+            const maxLvl = inferDocMaxHeadingLevel(chapters);
+            patchTocOutlineLevels(doc.getZip(), maxLvl);
+            const hl = applyHeadingLevels(
+              doc.getZip(),
+              buildHeadingLevelPlan(chapters, maxLvl),
+            );
+            if (hl.warning) console.warn(hl.warning);
             const blob = doc.getZip().generate({
               type: "blob",
               mimeType:
@@ -372,9 +388,10 @@ const KbOutlineGenDoc: React.FC = () => {
       if(Array.isArray(chapter.paragraphs)){
         const chId = chapter.key || "";
         const chKeys = byChapterKeys[chId] || [];
-        const paraCount = chapter.paragraphs.length;
+        const targets = paragraphsToGenerate(chapter);
+        const paraCount = targets.length;
         let paraIndex = 0;
-        for (let paragraph of chapter.paragraphs){
+        for (let paragraph of targets){
           const assigned = splitKeysForParagraph(chKeys, paraIndex, paraCount);
           const excludeKeys = excludeKeysFor(assigned);
           const figureAppendix = buildFigureAssetAppendix(
@@ -384,7 +401,8 @@ const KbOutlineGenDoc: React.FC = () => {
           /*** 生成全部 ***/
           if(genKey.length===0) {
             if (paragraph.prompt.length > 0) {
-              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned, excludeKeys), {headers: headers}));
+              const kbC = buildKbDocWritingConstraintPrompt(wordBudgetFor(paragraph));
+              promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + kbC + figureAppendix, assigned, excludeKeys), {headers: headers}));
               tArray.push({key: paragraph.key, idx: index});
               index++;
             } else {
@@ -394,7 +412,8 @@ const KbOutlineGenDoc: React.FC = () => {
           }else{
             if(genKey === paragraph.key){
               if (paragraph.prompt.length > 0) {
-                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + KB_DOC_WRITING_CONSTRAINT_PROMPT + figureAppendix, assigned, excludeKeys), {headers: headers}));
+                const kbC = buildKbDocWritingConstraintPrompt(wordBudgetFor(paragraph));
+                promiseArr.push(axios.post(url, buildMsg(paragraph.prompt + kbC + figureAppendix, assigned, excludeKeys), {headers: headers}));
                 tArray.push({key: paragraph.key, idx: index});
                 index++;
               }else{
@@ -589,12 +608,12 @@ const KbOutlineGenDoc: React.FC = () => {
     genDoc(key)
     // message.info("独立生成:"+key)
   }
-  const cbSavePromptResult =(key:string,newPrompt :string)=>{
+  const cbSavePromptResult =(key:string, patch: DocPromptSavePatch | string)=>{
     console.log(`outlineGenPpt.tsx#cb4Save,prompt:${key}`);
     const paragraph =Doc.getParagraph(chapters,key);
     if(paragraph){
-      Doc.setPrompt(chapters,key,newPrompt)
-      setChapters(chapters)
+      applyDocPromptSavePatch(paragraph, patch);
+      setChapters([...chapters])
     }else{
       message.warning(`保存出错，要保存提示词的文档段落key为${key}。`)
     }
@@ -644,7 +663,7 @@ const KbOutlineGenDoc: React.FC = () => {
           {noOutline ? (
             <Empty style={{marginTop: 48}} description={emptyHint} />
           ) : (
-            <OutlinePromptDoc id="prompt-container" chapters={chapters}
+            <OutlinePromptDoc id="prompt-container" chapters={chapters} docTitle={title}
                             activeKey={key} fn={cbFn} genFn={genFn} cbSaveResultFn={cbSavePromptResult}/>
           )}
         </ProCard>

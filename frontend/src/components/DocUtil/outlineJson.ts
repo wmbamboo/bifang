@@ -524,8 +524,14 @@ function coerceSlideItem(sl: unknown): {title: string} | null {
   return title ? {title} : null;
 }
 
-/** Markdown 标题树 → 结构 JSON（模型不听话时的兜底） */
-export function markdownToOutlineStructure(text: string): OutlineStructureJson | null {
+/**
+ * Markdown 标题树 → 结构 JSON（模型不听话时的兜底）。
+ * 十七·3：无 `#` 时不要用首个 `##` 章名冒充文题；走 fallbackTitle →「未命名文档」。
+ */
+export function markdownToOutlineStructure(
+  text: string,
+  fallbackTitle?: string,
+): OutlineStructureJson | null {
   const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
   let docTitle = "";
   const chapters: OutlineStructureJson["chapters"] = [];
@@ -559,7 +565,9 @@ export function markdownToOutlineStructure(text: string): OutlineStructureJson |
   }
   if (chapters.length < 3) return null;
   if (chapters.some((c) => c.slides.length < 2)) return null;
-  return {title: docTitle || chapters[0].title, chapters};
+  const fb = String(fallbackTitle || "").trim();
+  const title = docTitle.trim() || fb || "未命名文档";
+  return {title, chapters};
 }
 
 export function validateOutlineStructure(
@@ -1493,7 +1501,7 @@ export function assistantContentToOutlineMarkdown(
   }
 
   // 纯标题 Markdown（无 layout/要点）才走标题树回写
-  const mdStruct = markdownToOutlineStructure(s0);
+  const mdStruct = markdownToOutlineStructure(s0, fallbackTitle);
   if (mdStruct && !/^- layout\s*[:：]/im.test(s0) && !/^- /m.test(s0)) {
     return structureToMarkdown(
       fallbackTitle && isWeakDocTitle(mdStruct.title)

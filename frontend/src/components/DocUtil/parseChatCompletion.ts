@@ -1,3 +1,6 @@
+import type { WordBudget } from "@/components/DocUtil/docWordBudget";
+import { formatWordBudgetZh } from "@/components/DocUtil/docWordBudget";
+
 /**
  * 解析聊天补全接口返回。
  * 兼容：OpenAI 对象、旧版 JSON 字符串、毕方 {code,msg} 错误体。
@@ -139,12 +142,29 @@ export const KB_WRITING_CONSTRAINT_PROMPT =
   '4. 具体数字、专有名词须与检索内容一致，可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）。\n' +
   '5. 必须按【输出格式】逐行编号输出（1. 标题 - 描述）。数据卡行以原数字开头；禁止整段叙述、禁止只写一段话。\n';
 
-/** Word/文章知识库约束：散文忠实检索，禁止套用 PPT 编号行格式。 */
+/**
+ * Word/文章知识库约束：散文忠实检索，禁止套用 PPT 编号行格式。
+ * 十四·14.3.4：字数区间走 WordBudget，与 setAllPrompt / format_prompt 共用。
+ */
+export function buildKbDocWritingConstraintPrompt(
+  budget?: WordBudget | null,
+): string {
+  const zh = formatWordBudgetZh(
+    budget && (budget.min > 0 || budget.max > 0)
+      ? budget
+      : { min: 150, max: 150 },
+  );
+  return (
+    '\n\n【知识库约束·文章】\n' +
+    '1. 只依据系统消息中的知识库检索结果撰写连贯正文段落。\n' +
+    '2. 不得使用检索结果之外的常识补全，不得编造数据、案例或结论。\n' +
+    '3. 检索中已出现的数字、专名必须写进正文；大纲用词与检索不一致时以检索为准。\n' +
+    '4. 可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）；禁止整段以「根据知识库」「材料显示」等套话开头。\n' +
+    `5. 输出形态是文章段落（约 ${zh} 字），禁止「1. 标题 - 描述」编号清单，禁止只写 bullet 列表替代正文。\n` +
+    '6. 仅当该段落主题在检索中完全无依据时，用一两句说明「本段知识库未提供依据」，不要拒绝整章。\n'
+  );
+}
+
+/** 默认预算版本（兼容旧 import；十七：单值 150） */
 export const KB_DOC_WRITING_CONSTRAINT_PROMPT =
-  '\n\n【知识库约束·文章】\n' +
-  '1. 只依据系统消息中的知识库检索结果撰写连贯正文段落。\n' +
-  '2. 不得使用检索结果之外的常识补全，不得编造数据、案例或结论。\n' +
-  '3. 检索中已出现的数字、专名必须写进正文；大纲用词与检索不一致时以检索为准。\n' +
-  '4. 可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）；禁止整段以「根据知识库」「材料显示」等套话开头。\n' +
-  '5. 输出形态是文章段落（约 200～400 字），禁止「1. 标题 - 描述」编号清单，禁止只写 bullet 列表替代正文。\n' +
-  '6. 仅当该段落主题在检索中完全无依据时，用一两句说明「本段知识库未提供依据」，不要拒绝整章。\n';
+  buildKbDocWritingConstraintPrompt({ min: 150, max: 150 });

@@ -43,8 +43,13 @@ describe("Doc.checkChapter", () => {
     expect(Doc.checkChapter(mk(7, 2)).code).toBe(-3);
   });
 
-  test("章内 1 段拒收", () => {
-    expect(Doc.checkChapter(mk(3, 1)).code).toBe(-2);
+  test("章内 1 段塌陷为章级生成单元，不拒单", () => {
+    const chapters = mk(3, 1);
+    const t = Doc.checkChapter(chapters);
+    expect(t.code).toBeGreaterThanOrEqual(0);
+    expect(chapters.every((c) => c.collapsed)).toBe(true);
+    expect(chapters.every((c) => c.paragraphs.length === 0)).toBe(true);
+    expect(t.msg).toMatch(/塌陷|子节点/);
   });
 
   test("全 bullet 无 ### → Warn 可保存", () => {
@@ -147,7 +152,7 @@ describe("doc writing contracts", () => {
 
   test("段落 format 含表图判据", () => {
     const fmt = buildDocParagraphFormatPrompt();
-    expect(fmt).toMatch(/200～400/);
+    expect(fmt).toMatch(/约 150 字/);
     expect(fmt).toMatch(/禁止.*编号清单/);
     expect(fmt).toMatch(/≥2 个对象/);
     expect(fmt).toMatch(/不要写 figure|禁止.*figure/);

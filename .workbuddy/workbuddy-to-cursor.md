@@ -1693,3 +1693,552 @@ V2 的「二级标题繁复 / 没有第三级 / 目录全错」是**同一批结
 - **不碰** `docOutlineStructure.ts` / `DocOutlineView.tsx`（WB 已改，见 十一·5）；新解析若加 `points`，那两处需**同步**支持（届时先说一声）。
 - 与 §十二（4B 材料池）无交集，可并行；但两者**都别与任务 2 同 PR**。
 - **回归硬要求**：模板一改，必须重跑 `frontend/tests/DocTemplate.test.ts`（七章金标）+ 离线目检 `frontend/tests/DocBlockPreview.test.ts`（产出 `.workbuddy/out/docblock-preview.docx`），确认 `⟦DOCBLOCK⟧` 残留 0、锚点数 == 段数。
+
+
+---
+
+## 十四、层级塌陷复检：`*` 行不是"第三级"，是"独立生成单元"（P0）
+
+> 触发：用户贴「大纲是三级、生成页只显示两级，第三级与第二级平级」+ 生成页提示词截图。
+> 结论：十三·B（`####` → points）**已落地**，但**模型写的是 `*` 不是 `####`**，而 `*` 分支至今仍产段落 —— 它不只是"显示平级"，**它会各拿 200~400 字预算独立生成一次**，是正文膨胀与段间重复的直接来源。
+
+### 十四·1 已落地部分（勿重做）
+
+| 事实 | 证据 |
+|---|---|
+| 契约已有三级，且 `####` 可选 0~4 | `OutlinePromptComposer.tsx:290`；`:296` 明令「禁止用 `* + -` 代替 `###/####`」 |
+| 模板已有 `{#points}` 子循环（h3） | `docTemplate-simple.docx` 标签实测含 `{#points}/{/points}`，mtime 09-29 15:25（commit `ef3a2bd`） |
+| 解析器 B 已认 `####` → `paragraph.points` | `ViewItem4Doc.ts:668` `pointRegex`；`:744-746` |
+| 数据句 `###` 已降级为子点 + Warn | `ViewItem4Doc.ts:754-759`；`isDataLikeDocParagraphTitle` `:246-254` |
+| 抽屉（解析器 A）已是三级 | `docOutlineStructure.ts:150-175`；`DocOutlineView.tsx:146-176` |
+
+### 十四·2 五个缺口（按严重度）
+
+| # | 缺口 | 证据 | 后果 |
+|---|---|---|---|
+| **C** | **生成循环不过滤 `heading`** | `KbOutlineGenDoc.tsx:377`、`AiOutlineGenDoc.tsx:254` 均 `for (const paragraph of chapter.paragraphs)` | `*` 行生成的段落各发一次 HTTP、各写 200~400 字 → 一章 4 个 `###` + 8 个 `*` = **12 个生成单元**，正文膨胀 3 倍、同组数字反复复述 |
+| B | `*` 分支仍新建段落 | `ViewItem4Doc.ts:667` `paragraphRegex2`；`:747-766` `heading=false` | 与抽屉口径不一致 → 用户看到"第三级平级" |
+| A | 生成页不渲染 `points` | `OutlineResultDoc.tsx` 只渲染 `label + content`（`:97`） | 即便写的是 `####`，生成页也看不到第三级 |
+| D | `siblings` 取全量 paragraphs | `ViewItem4Doc.ts:931-934` | 数据句混进「同章其他段落（内容勿重复）」清单（截图实证：`男装大盘总销量 7,280.1 万…`） |
+| E | `points` 不注入写作 prompt | `setAllPrompt` `:914-959` 从不用 `paragraph.points` | 子点信息在写作时**静默丢失**，只在大纲/docx 里存在 |
+| F | 字数三处硬编码 | `ViewItem4Doc.ts:219`、`:936`、`parseChatCompletion.ts:149`；无 `wordBudget` | 一刀切；「大约…左右」叠词；改一处漏两处 |
+
+### 十四·3 修法（按批，均无 UI 阻塞）
+
+**14.3.1（P0）解析口径统一 —— 不破坏存量**
+
+- 规则：**章内一旦出现过 `###`**，其后所有 `* - +` 行一律归入「当前段」的 `points`，**不新建 Paragraph**；章内从未出现 `###` 时保持旧行为（`*` = 兼容段落，`checkChapter` 已有 Warn）。
+- 落点：`ViewItem4Doc.ts:747-766` 的 `paragraphMatch2` 分支加上述判别；`docOutlineStructure.ts:164-166` 已是同规则 → 两处对齐后天然一致。
+- 断言：构造「4 个 `###` + 8 个 `*`」→ `paragraphs.length === 4`、`points` 合计 8。
+
+**14.3.2（P0）生成闸双保险**
+
+- `KbOutlineGenDoc.tsx:377` / `AiOutlineGenDoc.tsx:254`：只生成 `p.heading === true` 的段落；若整章 `headingCnt === 0`（存量旧大纲）则退化为全部生成。
+- 与 14.3.1 独立生效：即使将来再出现别的兼容写法，也不会被当成生成单元。
+
+**14.3.3（P0）展示与注入**
+
+- `OutlineResultDoc.tsx`：段内渲染 `points`（缩进、次级、只读，视觉对齐 `DocOutlineView`）。
+- `setAllPrompt`：注入 `【本段要点】…`（`points.label`，≤6 条）；`siblings` 改为只取 `heading` 段落。
+
+**14.3.1b（P0，与 14.3.1 同 PR）大纲侧措辞 —— 不写死三级**
+
+替换 `OutlinePromptComposer.tsx:290` 那一行（保留「可选」，加**条件触发**而非强制）：
+
+```
+4. 数据点/对照点用「#### 」写在对应 ### 之下（每段 0～4 个；#### 允许数字与 [文档N]）。
+   - 若本段要讲清楚的数据对象 ≥2 个（多个价格带 / 多个品类 / 多个属性维度），必须逐个写成 ####，
+     每个对象一行；只讲单一主题、无并列数据时可写 0 个。
+   - 严禁使用「* / + / -」代替 #### —— 它们会被当成新段落独立成文。
+```
+
+- 「必须」只绑在「数据对象 ≥2」这个**可判定的条件**上，不是「每段必须三级」。
+- 落闸位置：`checkChapter` 加一条 **Warn（不拒单）**：章内存在「### 段且 points 为空且段题含品类×指标语义」→ 提示补子点。
+
+**14.3.4（P1）字数变量化（用户问题 3）**
+
+**保留「字数写进 prompt」——但写的是变量，不是常数。** LLM 需要显式目标，不给反而更差；只改两件事：常数 → 变量、区间 → 单值。
+
+- 常量集中一处：
+
+  ```ts
+  export const DOC_WORD_BUDGET = {base: 150, perPoint: 60, min: 150, max: 600} as const;
+  export const wordBudgetFor = (p: Paragraph, chapter?: Chapter) =>
+    clamp(DOC_WORD_BUDGET.base + (p.points?.length || 0) * DOC_WORD_BUDGET.perPoint, ...);
+  ```
+
+- **取值公式（本段要点数驱动）**：`budget = 150 + points数 × 60`，clamp `[150, 600]`。
+
+  | 要点数 | 0 | 1 | 2 | 3 | 4 |
+  |---|---|---|---|---|---|
+  | 字数 | 150 | 210 | 270 | 330 | 390 |
+
+  依据：一条数据点至少要「数值 + 口径 + 一句解读」≈60 字；段首引入与收口 ≈150 字。
+- **总预算归一化（可选，默认关）**：若用户设了「全文字数」（页内数字输入），生成前一次性算好并按 `budget_i × total / Σbudget` 缩放。
+  **注意**：段落是 `Promise.allSettled` 全并行发请求（见十二·②），**不存在"边生成边调整"**，字数必须在解析后、生成前一次算完。
+- 文案改为单值、去叠词：`撰写约 ${budget} 字的正文`（不写「大约…左右」，实测模型易取下界）。
+- `buildDocParagraphFormatPrompt(budget)`、`ViewItem4Doc.ts:936`、`parseChatCompletion.ts:149`（改 `buildKbConstraintPrompt(budget)`）三处共用同一常量。
+- **字数只做软目标，不做硬闸**：不截断、不因超字数拒收；仅在导出前对偏差 >50% 的段给 Warn。
+
+**14.3.5（P1）提示词双层编辑（用户问题 4）**
+
+- 数据模型：`Paragraph` 增 `wordBudget / role / question / allowTable / allowFigure`；`prompt` 保留为 legacy 回退。
+- 页内简单层：字数（number）、岗位视角（text）、本段要点（chips，来自 `points`，可增删）、表/图开关、「本段要回答什么」（单行）。
+- 「高级」抽屉：完整模板（`{{slot}}` 高亮）+ 恢复默认 + **只读展示运行时追加**（`KB_DOC_WRITING_CONSTRAINT_PROMPT`、`figureAppendix`）——现在这段是静默追加（`KbOutlineGenDoc.tsx:387/397`），用户看到的"全可编辑"实际只可控一半。
+- 组装：`assemblePrompt(paragraph, template)` 生成时拼装；页内只改变量。
+- 存量：`prompt` 非空且无结构化字段 → 走原整串编辑（零迁移）。
+
+### 十四·4 边界与验收
+
+- **不硬性规定三级层级数**；硬性的是：① 全链路一套解析口径；② 数据密集段 ≥1 子点（Warn 不拒单）；③ 第三级不占段落额度、不单独生成。
+- 新增 `frontend/tests/DocOutlineHierarchy.test.ts`：`*` 归并、`points` 注入、`siblings` 不含子点、`heading` 过滤四条断言。
+- 人工目检：生成页逐章展开，章内条目数 == 该章 `###` 数（不再等于 `###` + `*`）。
+
+## 十五、动态标题层级：级数 = f(体裁, 体量)，提示词禁写固定数字（P0 措辞 / P1 承载）
+
+> 触发：用户问「文章到底写几级合适？有的一级够、有的要 4 级甚至 6 级，知识库写作怎么实现」。
+> 结论（**用户已确认**）：级数不是系统常量，由两轴决定——**体裁轴给上界 `maxLevel`，体量轴给实际深度**，两者取小。
+> 「写死三级」的真错不在"三"这个数字，而在**把结构决策放进了提示词**：不可单测、不可按文档取不同值、改一次要重跑全部金标。
+> 分工原则：**模型管分层（内容该分几层），代码管压平（把任意层数压进架构）**。
+
+### 十五·1 事实核对（本轮实测，旧结论有两处已失效）
+
+| 事实 | 证据 | 与旧备忘的差异 |
+|---|---|---|
+| 模板循环已是**三层** | 解 `docTemplate-simple.docx` 的 `word/document.xml`，循环标签实测为 `{#chapters}{#paragraphs}{#points}{/points}{/paragraphs}{/chapters}`；可见标签仅 `{title}{company}{department}{author}{curDate}` + 3×`{label}` + 1×`{content}` | 旧「只有两层循环」**作废** |
+| `{#points}` **没有 `{content}`** | 同上：全文仅一个 `{content}`，位于 `{#paragraphs}` 内 | ⇒ `####` 只有 label，**无正文承载位** |
+| 目录已是真 TOC 域 | `w:dirty` 实测存在 | 旧「手搓目录 + `_Toc182955958` 重名」**作废**，勿再引用 |
+| `DocBlockInjector.ts` **不解析 Markdown** | 全文 grep 无 `heading`/`pStyle`/`styleId`/`markdown`；只做块注入与题注（`buildTableXml`:95、`buildFigureXml`:139、`captionParagraph`:61） | ⇒ 段正文里写 `#####` 只会变成字面文本 |
+| styleId 实测存在 1/2/3 | document.xml `w:val` 取值集合含 1/2/3 | heading 4～6 **需补 styles.xml** |
+| 提示词三个固定数字 | `OutlinePromptComposer.tsx:288`（3～5 章）、`:289`（2～4 段）、`:290`（0～4 个 ####） | 这就是"写死"的落点 |
+| skeleton 与体裁包直接拼接 | `buildDocOutlineSystemPrompt` `:643-646` = `DOC_OUTLINE_SKELETON + '\n' + DOC_DOMAIN_PACKS[p].prompt` | ⇒ **插值点在这里** |
+| 体裁包无层数字段 | `DOC_DOMAIN_PACKS` `:587-611`，类型 `{label, prompt}`，5 个包 generic/selection/report/research/review | 需加 `maxLevel` |
+
+**承载位天花板（动手前务必记住）**
+
+| 级 | Markdown | 数据对象 | 正文承载 | 生成单元 |
+|---|---|---|---|---|
+| 1 | `#` | docTitle | 有（`{title}` 封面） | 否 |
+| 2 | `##` | `Chapter`（`ViewItem4Doc.ts:169`） | 无（纯容器） | 否 |
+| 3 | `###` | `Paragraph`（`:100`） | 有（`{content}` + blocks） | **是**（一次 HTTP） |
+| 4 | `####` | `Paragraph.points[]`（`:119`） | **无，仅 label** | 否 |
+| 5+ | `#####` | 无对应对象 | 无 | — |
+
+推论：**当前真标题上限 = 3 级 + 1 层要点**。P0 只能把 `maxLevel` 用到 2～3；要 4～6 级必须先做 15.3.4 打开承载位。
+
+### 十五·2 设计：两轴定级
+
+**轴 1 · 体裁（上界）** —— `DOC_DOMAIN_PACKS` 每项加 `maxLevel`：
+
+| 包 | 体裁 | maxLevel | 理由 |
+|---|---|---|---|
+| report | 汇报/简报 | 2 | 结论先行，一屏一意 |
+| selection | 选品 | 3 | 章-段-数据点 |
+| review | 复盘归因 | 3 | 目标-结果-归因-改进 |
+| generic | 通用 | 3 | 兜底 |
+| research | 调研研究/白皮书 | 4 | 方法、归因需要「节」做归组 |
+| （P2 新增）standard / manual | 标准、教材手册 | 5～6 | 条-款-项 |
+
+**轴 2 · 体量（实际深度）** —— 段数 `N = 总字数 ÷ 300`（每段字数取 14.3.4 的 budget 均值），让每层平均分支落在 3～4：`depth ≈ ceil(log₃.₅ N)`
+
+| N（段数） | 总字数 | 结构深度 | 配置 |
+|---|---|---|---|
+| ≤6 | <2k | 1 层 | 章即段，无容器 |
+| 7～15 | 2k～4k | 2 层 | 章 × 段 |
+| 16～40 | 5k～12k | 3 层 | 章 × 节 × 段 |
+| 41～100 | 12k～30k | 4 层 | + 小节 |
+| >100 | >30k | 5 层 | + 条 |
+
+**实际深度 = min(体裁 maxLevel, 体量 depth)**。
+
+### 十五·3 四步修法（按 PR）
+
+**15.3.1（P0）提示词改「条件义务」，数字全部变量化**
+
+替换 `OutlinePromptComposer.tsx:286-290` 的【层级】段（骨架里用 `{maxLevel}` 占位，**在 `buildDocOutlineSystemPrompt` 插值**）：
+
+```
+【层级·按内容需要分层，不按固定层数】
+1. 全文 1 行一级标题（「# 」，短名 ≤20 字）。
+2. 最深不超过 {maxLevel} 级。用几级由内容决定：
+   - 同一父节点下不足 2 个子节点时，禁止分这一层（宁可少一级，不要空壳层）。
+   - 同一父节点下超过 6 个子节点时，应再分一层。
+   - 禁止「只有 1 个子节点」的中间层（如 1.1 下面只有 1.1.1），那是空壳。
+3. 章用「## 」，段用「### 」，数据点/对照点用「#### 」。
+4. 严禁「* / + / -」充当层级（会被当成新段落独立成文）。
+5. 标题不得为空壳词（概述/小结/其他/背景）；命中则并入父层。
+```
+
+- 插值点（`buildDocOutlineSystemPrompt` `:643-646`）：
+  ```ts
+  const p = pack && DOC_DOMAIN_PACKS[pack] ? pack : 'generic';
+  const L = DOC_DOMAIN_PACKS[p].maxLevel ?? 3;
+  return DOC_OUTLINE_SKELETON.replace(/\{maxLevel\}/g, String(L)) + '\n' + DOC_DOMAIN_PACKS[p].prompt;
+  ```
+- **保留** `:291-303` 全部质量约束（段题瘦身、数字下沉、结论章）——那些是质量约束不是层数约束，动它们会回退十三·A。
+- 注意：`selection` 包 `:595` 里的「3～5 章」是章数不是层数，属体裁惯例，**暂保留**（P2 再评估）。
+
+**15.3.2（P0）纯函数 `normalizeDocDepth` —— 压平规则，可单测**
+
+新建 `frontend/src/components/DocUtil/docHeadingDepth.ts`（与 `docOutlineStructure.ts` 同层；**纯函数、不 import 服务**，避免 UNC 下 jest 崩，见九·9·1）。
+
+```ts
+export interface DocDepthOpts {
+  maxLevel: number;      // 体裁轴
+  targetDepth?: number;  // 体量轴，可选
+  minSiblings?: number;  // 默认 2
+  maxSiblings?: number;  // 默认 6
+}
+export function normalizeDocDepth(
+  chapters: Chapter[],
+  opts: DocDepthOpts,
+): {chapters: Chapter[]; notes: string[]} {
+  // R4 空洞剔除（最先做，避免空壳层参与后续计算）
+  //   段题命中 ^(概述|小结|其他|背景|说明|前言)$ 且 points 空 且 content 空 → 删段
+  // R1 单子塌陷：章内 paragraphs.length === 1
+  //   → 章降级为「段级容器」：章保留 title，段的 points 上提为章级，
+  //     章成为唯一生成单元，原段移除
+  // R3 宽度约束：章内 paragraphs.length > maxSiblings
+  //   → 只 notes.push(Warn)，不自动拆章（拆章需语义，交给模型重出）
+  // R2 深度截断：层级 > maxLevel 的部分
+  //   → P0：把 paragraph.points 并入该段 prompt 引导语「【本段要点】a、b、c」并清空 points
+  //   → P1：points 改挂 level 字段，交 15.3.4 决定渲染成 hN 还是要点
+  return {chapters, notes};
+}
+```
+
+- 调用点：`getChaptersFromContent` 之后、`checkChapter` 之前；`notes` 走现有 Warn 通道，**不拒单**。
+- **R1 必须排在 R2 前面**：`maxLevel` 开大而内容少时，会先长出「6 层每层 1 个节点」的竹节结构 —— 要禁止的不是"更深"，是"更空"。
+
+**15.3.3（P0）容器扁平化 —— 模板零改动**
+
+不改 `Chapter/Paragraph` 两层模型，用「零内容段」表达容器：
+
+```ts
+// Paragraph 增字段（ViewItem4Doc.ts:100-128）
+level: number = 3;   // 2=章级容器 3=段 4/5/6=更深标题（P1 启用）
+isContainer(): boolean {
+  return !this.content && this.blocks.length === 0;
+}
+```
+
+- 生成循环 `KbOutlineGenDoc.tsx:377`、`AiOutlineGenDoc.tsx:254` 加：
+  ```ts
+  if (paragraph.isContainer()) { continue; }   // 容器不发 HTTP
+  ```
+  **与 14.3.2 的 `heading` 过滤是两条独立闸，都要保留**（14.3.2 拦 `*`，这条拦容器）。
+- 编号 `2.3.1`：遍历时维护 `counters[level]` 写进 `label` 前缀（渲染前完成，不进 prompt）。
+- 模板 `{#chapters}{#paragraphs}` 照跑，容器渲染成"只有标题的空段" ⇒ **模板一行不改**。
+
+**15.3.4（P1）`applyHeadingLevels` —— 按 level 定样式，打开 4～6 级**
+
+- 落点 `DocBlockInjector.ts`（已有 `injectDocBlocks(zip, seq)` `:242` 的 XML 后处理先例，可复用 `findDocBlockAnchors` `:176` 的定位思路）：
+  ```ts
+  export function applyHeadingLevels(zip: PizZip, plan: Array<{level: number}>): void
+  // 遍历 word/document.xml 的 <w:p>，命中段标题 → 改 w:pPr/w:pStyle 为 heading{level}
+  ```
+- 调用点：`KbOutlineGenDoc.tsx:234` / `AiOutlineGenDoc.tsx:197`（`injectDocBlocks` 之后）。
+- 依赖：`styles.xml` 补 heading 4/5/6；**若改样式有风险，先退化为直接格式**（`<w:rPr><w:b/><w:sz/></w:rPr>` + `w:ind` 缩进），跑通再换样式。
+
+### 十五·4 单测（新建 `frontend/tests/docHeadingDepth.test.ts`）
+
+UNC 下**必须** `jest.mock("@/services/chatchat/kb")`（九·9·1）。四个用例：
+
+| # | 用例 | 输入 | 断言 |
+|---|---|---|---|
+| 1 | R1 单子塌陷 | 章内 1 段 0 点 | 该章成为唯一生成单元、原段移除；`生成单元数 === 章数` |
+| 2 | R2 深度截断 | `maxLevel=2`，某段 3 个 points | `points.length === 0` 且该段 prompt 含「【本段要点】」三个条目 |
+| 3 | R3 宽度 Warn | 章内 8 段、`maxSiblings=6` | 结构**不变**（不自动拆章），`notes` 含 1 条 Warn |
+| 4 | R4 空洞剔除 | 段题「概述」+ 无 points + 无 content | 该段被删，`paragraphs.length` 减 1 |
+
+附加（同文件）：`buildDocOutlineSystemPrompt('report')` 输出含「最深不超过 2 级」；`('research')` 含「不超过 4 级」。
+CI：`.github/workflows/ci.yml:29` 的 `--testPathPattern` 清单加入 `docHeadingDepth`。
+
+### 十五·5 依赖顺序、验收与负面清单
+
+- **先十四，再十五**：`14.3.1`（`*` 归并）未落地前，`*` 会污染 `paragraphs` 数组，15.3.3 的容器判定会被误伤。
+- 分期：
+  - **P0**：15.3.1 + 15.3.2 + 15.3.3（级数仍限 2～3，风险最低，先解决"该 2 级被逼出 3 级"）。
+  - **P1**：15.3.4 + `styles.xml` 补 heading 4/5 → 开到 4～5 级。
+  - **P2**：体裁包 `maxLevel` 全量（含 standard/manual 的 5～6 级）。
+- 验收：
+  - 机器：`normalizeDocDepth` 输出中任何父节点的子节点数 ∈ [2, 6]，`notes` 无「单子层」告警。
+  - 人工：同一主题跑 `report`（应为 2 级，无 `####` 空层）与 `research`（应出现节级容器），对比层级分布。
+- 负面清单：**不做**自动拆章/自动合并章（需语义，交给模型重出）；**不做**运行时动态调层级（段落 `Promise.allSettled` 全并行，必须在解析后、生成前一次算完）。
+
+## 十六、字数 A/B 实测结论（**本章无执行项**，执行仍按第十五章）
+
+> 触发：用户问「第 4 条那组 A/B 验证跑了吗？还是要字数变量」。
+> 答：**已真跑**（deepseek-chat，10 段 × 3 档 = 30 次调用 + 校准档 10 次，全部成功）。十四·3.4 里两条**经验判断**现已被实测数据替换，公式不变。
+> 完整报告：`docs/2026-10-20-word-budget-ab.md`；可复跑脚本：`.workbuddy/tools/ab_word_budget.py`。
+
+### 十六·1 实测结果
+
+| 档 | 指令 | 均值 | 标准差 | CV | 命中率(±20%) | 最短/最长 |
+|---|---|---|---|---|---|---|
+| A | 不给字数 | 352.4 | 114.3 | **0.32** | 40% | 169 / 571 |
+| B | 「撰写 200~400 字」（现状） | 336.9 | 39.1 | 0.12 | **20%** | 260 / 392 |
+| C | 「撰写约 N 字」，N=150+60×要点数 | 220.8 | 35.2 | 0.16 | **90%** | 143 / 273 |
+| D | 同 C，base=170（校准用） | 249.5 | 31.3 | 0.13 | 70% | 199 / 291 |
+
+按要点数看偏差（C 档）：2 要点 −11%~+1%；1 要点 −0%~+7%；0 要点（结论段）+27% / −5%。
+
+### 十六·2 对十四·3.4 的三处更正（**请按此覆盖旧表述**）
+
+1. 「不给字数 LLM 会**偏短**且段间方差大」→ **错**。实测是**偏长且失控**：均值 352、区间 169~571、CV 0.32（B 档的 2.7 倍）。长度由材料量决定，不由段落需要决定。
+2. 「区间写法模型易取下界」→ **错**。模型挤向**区间中段**（约 336 字）。
+3. **新增（关键）**：B 档 CV 最低（0.12）是**假整齐**——所有段被拉到同一长度，0 要点结论段被写到 330~392 字（目标 150，超写 120%~161%）。**评价字数效果要看命中率/偏差，不能只看 CV。**
+
+### 十六·3 结论
+
+- **字数变量要保留，且必须是单值（「约 N 字」），区间写法（200~400）废弃。**
+- **公式确认不变**：`budget = 150 + points × 60`，clamp `[150, 600]`；base 170 的校准档命中率反而降到 70%，base 保持 150。
+- 残留偏差只有一条：0 要点结论段仍 +27%，建议结论章单独下调（×0.85 或 base 130）——**该项未实测**，不进本轮改动。
+- 十五·2 体量轴 `N = 总字数 ÷ 300` 与实测量级（220~350）一致，可沿用。
+
+### 十六·4 局限（勿过度外推）
+
+单模型（deepseek-chat）、单主题、单份固定材料（未接检索），每段每档仅 1 次采样 ⇒ 只证明「字数指令对长度的控制力」，不评价内容真实性，换模型需重跑。
+
+### 十六·5 真实大纲复跑（**修正十六·2 第 1 条**）
+
+> 输入：用户提供的真实大纲《抖音商务衬衫polo选品分析》——4 章 / 13 段 / 29 要点，**要点数全部 2~3，无 0 要点段**。
+> 材料改用大纲自带真实要点（不再用虚构摘要）。13 段 × 3 档 = 39 次调用全部成功。完整正文对照：`docs/2026-10-20-ab-samples.md`。
+
+| 档 | 均值 | CV | 命中率 | （样例大纲·要点 0~2） |
+|---|---|---|---|---|
+| A 不给字数 | 220.5 | 0.18 | **23%** | 352.4 / 0.32 / 40% |
+| B 「200~400」 | 294.4 | 0.14 | **77%** | 336.9 / 0.12 / 20% |
+| C 「约 N 字」 | 299.5 | 0.17 | **77%** | 220.8 / 0.16 / 90% |
+
+目标均值 297.7；C 299.5、B 294.4 均对准，A 220.5 系统性偏短 26%。
+
+**修正 1（覆盖十六·2 第 1 条）**：A 档不是固定"偏长"，而是**长度由材料量决定**——样例大纲材料是长摘要 → 352（偏长）；真实大纲材料只有 2~3 条要点 → 220（偏短）。统一表述：**不给字数 ⇒ 长度由材料量牵着走，不由段落需要决定。**
+
+**修正 2**：B 档这次 77% 与 C 持平，因为该大纲所有段目标都在 270~330，正好落在「200~400」中段。样例大纲有 0 要点段（目标 150）时 B 才塌到 20%。
+⇒ **变量化的真实收益 = 应对要点数不均匀的大纲**（含 0 要点结论段时 B 会系统性灌水）。保留变量的理由从"均值更准"改为"**抗不均匀 + 防灌水**"，公式 `150 + 60n` 不变（目标均值 297.7 vs 实际 299.5）。
+
+**正文质量实证**：「polo衫主力价格带」C 档 316 字，逐个解读三个价格带并给出「主战场 / 流量入口 / 溢价试探」的主次布局；A 档 216 字只有罗列、无结论。「属性配置取舍」B 档被灌到 374 字（目标 270，+39%），出现明显重复啰嗦。
+
+
+## 十七、字数公式实测修正 + docTitle 空兜底（P0，**覆盖** 十四·14.3.4 的部分实现）
+
+> 本章基于 `docs/2026-10-20-word-budget-ab.md` 与 `docs/2026-10-20-ab-samples.md` 的 39 次真实调用实测（真实 polo 大纲 4 章 13 段 × A/B/C 三档）。
+> **执行本章前须已落地**：十五·15.3.1/15.3.2/15.3.3、十四·14.3.1/14.3.2/14.3.4/14.3.5（见 `.workbuddy-handoff.md` 2026-10-20 三条回执）。
+
+### 十七·0 一句话
+
+十四·14.3.4 把字数收敛到 `docWordBudget.ts` 单一真源，**这个架构是对的，保留不动**。但公式写成了**常量区间**、且**与要点数无关**，与实测结论冲突。本章只改**公式**和**措辞**，不推翻架构、不动 UI 结构。
+
+### 十七·1 现状盘点（已实测，勿重复改）
+
+| 文件 / 位置 | 现状（Cursor 已落地） | 本章是否要改 |
+|---|---|---|
+| `docWordBudget.ts` 单一真源 | ✓ 已建，`DOC_WORD_BUDGET` / `wordBudgetFor` / `clampWordBudget` / `formatWordBudgetZh` | **改公式与格式化** |
+| `DOC_WORD_BUDGET.heading` | `{min:200, max:400}` | 改为要点数驱动 |
+| `DOC_WORD_BUDGET.body` | `{min:120, max:280}` | 同为要点数驱动（基数不同） |
+| `DOC_WORD_BUDGET.container` | `{min:0, max:0}` | **不动**（容器已被 `paragraphsToGenerate` 过滤，不发请求） |
+| `wordBudgetFor(p)` 入参 | `{heading?, container?, wordBudget?}` | **加** `points` / `pointGuide` / `prompt` |
+| `ViewItem4Doc.ts:1199` `paragraph.wordBudget = wordBudgetFor({...})` | ✓ 已接 | 传入要点源 |
+| `ViewItem4Doc.ts:278` `直接输出约 ${zh} 字连贯正文` | 区间措辞 | **改单值** |
+| `ViewItem4Doc.ts:339` `撰写大约${zh}个字左右的具体内容` | 区间措辞 | **改单值** |
+| `parseChatCompletion.ts:163` `输出形态是文章段落（约 ${zh} 字）` | 区间措辞 | **改单值** |
+| `KbOutlineGenDoc.tsx:390/401`、`AiOutlineGenDoc.tsx:261/272` `buildKbDocWritingConstraintPrompt(wordBudgetFor(paragraph))` | ✓ 已按段传预算 | 随公式自动生效，无需改 |
+| `outlineJson.ts:530-539` `docTitle` | ✗ 缺兜底 | **新增**（十七·3） |
+
+### 十七·2 P0-1：字数改成要点数驱动的单值
+
+#### 17.2.1 陷阱（**最重要，先看这条**）
+
+`maxLevel≤3` 时 `normalizeDocDepth` 会把 `####` 折进 `pointGuide` 并**清空 `points`**（你自己的实现）。所以：
+
+> **禁止用 `paragraph.points.length` 当要点数** —— 它绝大多数时候是 `0`，会让所有段都拿到 base 150。
+
+必须用已存在的 `paragraphPointLabels(p)`（`ViewItem4Doc.ts:405`，回退链 `points → pointGuide → 整串抠【本段要点】`）：
+
+```ts
+const n = paragraphPointLabels(paragraph).length;
+```
+
+#### 17.2.2 公式
+
+```
+budget = clamp(BASE + 60 × n, 150, 600)
+BASE: heading 段 = 150 ；body 段 = 120
+```
+
+实测依据（真实大纲 13 段，要点数 2~3）：目标均值 297.7 vs 实际均值 299.5；命中率（±20%）C 档 77%，与现状区间档持平但**抗不均匀**——样例大纲含 0 要点结论段时，区间档塌到 20%，单值档仍 90%。
+
+#### 17.2.3 保留 `{min, max}` 结构，加单值分支（改动最小）
+
+不要改 `WordBudget` 的类型定义，否则 `InputNumber` / `clampWordBudget` / 存量数据全要动。做法：
+
+- 让 `min === max === N`
+- `formatWordBudgetZh` 加分支：`min === max` → 返回 `${min}`（原样返回 `"270"`，而不是 `"270～270"`）
+
+这样 `ViewItem4Doc.ts:278/339`、`parseChatCompletion.ts:163` 三处的 `${zh}` 自动从「200～400」变成「270」，**措辞一行都不用改**。
+
+#### 17.2.4 措辞（**仅当三处模板句仍读起来别扭时才动**）
+
+`ViewItem4Doc.ts:339` 现在是 `撰写大约${zh}个字左右`——`"大约"` + `"左右"` 双重写模糊。建议改成：
+
+```ts
+`文章标题是<${opts.docTitle}>，请为它的【${opts.chapterTitle}】章节中的段落： [${paragraph.title}]撰写约${zh}字的具体内容。`
+```
+
+实测用的就是「撰写约 N 字的正文」这一句，命中率数据基于它。
+
+#### 17.2.5 单测补充（`frontend/tests/docWordBudget.test.ts`）
+
+在既有套件里补 4 例：
+
+1. `n=0` → 150（heading）/ 120（body）
+2. `n=3` → 330
+3. `n=20` → 600（clamp 上界生效）
+4. **要点在 `pointGuide` 里（points 为空）时，仍算出正确 n** ← 这条是 17.2.1 的回归位，缺了就会静默退化
+
+### 十七·3 P0-2：`docTitle` 空兜底（真实大纲实测暴露）
+
+`docs/2026-10-20-ab-samples.md` 用的真实大纲**第 1 行就是 `## 大盘机会与品类位次`，全文无 `#`**。
+
+`outlineJson.ts:530-539`：
+
+```ts
+let docTitle = "";
+...
+if (h1) { docTitle = h1[1].trim(); continue; }
+```
+
+无 `#` 行 → `docTitle` 保持 `""` → 模板 `{title}` 渲染成空 → **导出 docx 封面标题丢失**。这不是样例问题，用户手改/模型输出都可能没有 `#`。
+
+**修法（三级回退，在 `markdownToOutlineStructure` 末尾补）**：
+
+1. `docTitle` 非空 → 原样用
+2. 否则取**第一个 `##` 章节标题**的「上位词」——不要直接拿 `## 大盘机会与品类位次` 当文档标题（它是章名不是文名）
+3. 都没有 → 用**文件名/会话标题**（调用方传入的 `fallbackTitle`），再兜底 `"未命名文档"`
+
+**同时**：`ViewItem4Doc.ts:339` 拼的是 `文章标题是<${opts.docTitle}>`——docTitle 为空时这句变成 `文章标题是<>`，模型会失去全文定位。兜底必须同时覆盖这里。
+
+### 十七·4 P1（**未实测，本章不落地，先别写死**）
+
+实测残留一条：0 要点的结论段仍超写约 +27%。建议结论章 ×0.85，**但我没跑过这个变体**，所以：
+
+- **不要**直接把 `isConclusion ? 0.85 : 1` 写进 `docWordBudget.ts`
+- 若要落地，先用 `.workbuddy/tools/ab_word_budget.py` 跑 `--tiers C,E`（E = C×0.85 on 结论章）确认有效
+- 在此之前，`AssembleDocParagraphOpts.isConclusionChapter` 字段**保持存在但不参与计算**
+
+### 十七·5 验收与负面清单
+
+**验收**
+- `jest docWordBudget / docOutlineAlign / docHeadingDepth / docTitleFidelity` 全绿
+- 手工核对：真实 polo 大纲 13 段，要点数 2~3 → 预算应落在 270~330，无一段是 150 或 400（出现即说明 17.2.1 退化）
+
+**负面清单（禁止）**
+1. 禁止用 `paragraph.points.length` 算要点数（17.2.1）
+2. 禁止把 `WordBudget` 从 `{min,max}` 改成单数字——会牵动 `InputNumber`、存量 `promptManual` 大纲
+3. 禁止改 `DOC_WORD_BUDGET.container`（容器不生成，改了无意义且会污染 clamp）
+4. 禁止在未跑 A/B 前写死结论章系数（十七·4）
+5. 禁止动 `docWordBudget.ts` 的「单一真源」定位——三处硬编码收敛是你做对的，别退回
+
+
+## 十八、结论章系数**撤销** + 十五·15.3.4 排期（heading 4~6 承载位）
+
+> 本章基于 `docs/2026-10-20-word-budget-ab.md` 第八节（46 次调用）与 `docTemplate-simple.docx` 二进制实测。
+> 前置：十七章 P0（字数公式 + docTitle 兜底）。
+
+### 十八·0 一句话
+
+**十七·4 的「结论章 ×0.85」跑出来是负效果，予以撤销。** 十五·15.3.4 的门槛比第十五章预估的低——模板里 heading 1~9 **全部已完整定义**，但发现一个新的 P0：**TOC 域硬编码 `\o "1-3"`，开到 4 级也不会进目录。**
+
+### 十八·1 撤销十七·4（结论章系数）
+
+**实测结论：不要加任何结论章系数。**
+
+| 大纲 | C 档（原公式） | E 档（结论章 ×0.85） |
+|---|---|---|
+| 样例（10 段） | **100%** 命中 | 90% |
+| 真实 polo（13 段） | **92%** 命中 | 69% |
+
+真实大纲结论章三段目标均为 270（E 档指令 230）：C 档 259/265/255（−4%/−2%/−6%，全命中）；E 档 181/253/191（−33%/−6%/−29%，两段脱靶）。**结论章本来就不超写，打折只是把它压到脱靶。**
+
+同时证伪了十七·4 的依据：「0 要点结论段 +27% 超写」在重跑中是 **+3%**——是噪声不是偏差。
+
+**执行要求**：`AssembleDocParagraphOpts.isConclusionChapter` **保留但不参与字数计算**，并且不要新增任何按章类型打折的逻辑。
+
+### 十八·2 新增判据：单次效应 > 2σ 才可改 prompt
+
+同指令重跑两次，逐段相减得噪声：
+
+| 大纲 | σ | 相对均值 |
+|---|---|---|
+| 样例 | 19.5 字 | 8.8% |
+| 真实 | 42.1 字 | 14.0% |
+
+> **判据：单次 A/B 观测到的差异必须 > 约 20%~28%（2σ）才可据此改 prompt；低于此值一律当噪声。**
+
+- 成立：B 档区间写法系统性超写（+45%~+161%，远超 2σ 且多段同向）
+- 成立：C 档无系统偏差（逐段 ±11%，在 σ 内）
+- **不成立已撤销**：0 要点段 +27%（1.3σ，单段单次）
+
+后续任何人提「某类段落偏长/偏短，加个系数」，先按这条判据卡：样本 ≥3 段、效应 >20% 才动。
+
+### 十八·3 十五·15.3.4 排期（P1，现可开工）
+
+#### 18.3.1 先修正第十五章的一个误判
+
+第十五章写「模板实测已有 styleId 1/2/3，4~6 需在 `styles.xml` 补」——**这条作废**。实测 `word/styles.xml`：
+
+| styleId | name | sz | outlineLvl | pPr/rPr |
+|---|---|---|---|---|
+| 1 | heading 1 | 30 | 0 | ✓ |
+| 2 | heading 2 | — | 1 | ✓ |
+| 3 | heading 3 | 24 | 2 | ✓ |
+| 4 | heading 4 | 24 | 3 | ✓ |
+| 5 | heading 5 | — | 4 | ✓ |
+| 6 | heading 6 | — | 5 | ✓ |
+| 7~9 | heading 7~9 | — | 6~8 | ✓ |
+
+**heading 1~9 全部已定义且含 outlineLvl，样式表不用改。** 第十五章预估的「补样式」工作量归零。
+
+#### 18.3.2 但要做的三件事（其中一条是新发现的 P0）
+
+**(a) `applyHeadingLevels()` —— 缺，这是 15.3.4 本体**
+`DocBlockInjector.ts` 现在只做 table/figure 注入与 SEQ 题注，不写 `w:pStyle`。需新增一步：遍历段落，按 `paragraph.level` 把 `w:pPr/w:pStyle` 写成 `w:val="{level}"`。
+
+现状已就位，可直接接：
+- `Paragraph.level: number = 3`（`ViewItem4Doc.ts:130`）
+- `Paragraph.container: boolean`（`ViewItem4Doc.ts:134`）
+- `applyDocHeadingNumbers(chapters)`（`docHeadingDepth.ts:92`）已负责编号
+
+**(b) TOC 域收录级别 —— 新发现，P0，第十五章没写到**
+`word/document.xml` 里 TOC 域是硬编码：
+
+```
+TOC \o "1-3" \h \z \u
+```
+
+**`\o "1-3"` 表示目录只收录 1~3 级。** 即使 (a) 把某段写成 heading 4，它也**不会出现在目录里**。要做 4 级以上，必须让这个域按 `maxLevel` 动态生成：`TOC \o "1-{maxLevel}"`。
+
+注意：`w:dirty="true"` 已生效（打开时 Word 会刷新），所以改域指令即可，不用重建书签。
+
+**(c) 3 级与 4 级视觉不分层 —— 小坑，建议一并处理**
+实测 styleId 3 与 4 的 `w:sz` **同为 24**，开到 4 级后会出现「3 级标题和 4 级标题一样大、只差缩进」。建议在 `styles.xml` 把 heading 4 的 `sz` 调到 22（或改用加粗/颜色区分），否则用户会说"分了层但看不出来"。
+
+#### 18.3.3 分期
+
+- **P1-a**：(a) `applyHeadingLevels` + (b) TOC 域动态化 —— 做完即真正支持 4~6 级
+- **P1-b**：(c) 字号区分；`DOC_DOMAIN_PACKS` 各包声明 `maxLevel`（原 P2，随 P1-a 一起更省事）
+
+### 十八·4 验收与负面清单
+
+**验收**
+- 构造一份 4 级大纲（章 → 节 → 段 → 子段）导出 docx，用 python-docx 读回：段落 `style.name` 应出现 `heading 4`；目录域应为 `\o "1-4"`
+- 构造一份 2 级大纲：不应出现 heading 3 及以上（压平规则仍生效）
+- `jest docHeadingDepth / docOutlineAlign / DocTemplate / docTemplateToc / docWordBudget` 全绿
+
+**负面清单**
+1. **禁止**加结论章字数系数（十八·1）
+2. **禁止**改 `styles.xml` 补 heading 4~6——已经有了，改了反而破坏（18.3.1）
+3. **禁止**只做 (a) 不做 (b)：4 级标题不进目录，等于分层对读者不可见
+4. **禁止**把 TOC 域写死成 `\o "1-9"`：应按 `maxLevel` 动态生成，否则短文档目录会出现空层
+5. **禁止**用单次 A/B 的低幅度差异（<20%）改 prompt（十八·2）

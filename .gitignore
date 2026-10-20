@@ -29,6 +29,8 @@ frontend/hezl/
 
 # WorkBuddy 本地备份与测试输出（体积大，勿入库）
 .workbuddy/backup/
+.workbuddy/tmp/
+.workbuddy/tmp2/
 .workbuddy/tools/*.txt
 frontend/public/output-test.pptx
 frontend/tmp/

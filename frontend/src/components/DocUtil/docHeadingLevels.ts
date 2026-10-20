@@ -112,3 +112,28 @@ export function applyHeadingLevels(
   }
   return {ok: true, mismatched: 0};
 }
+
+/**
+ * 二十六·A：去掉 heading 1–9 样式上的自动编号（numPr），
+ * 避免与 applyDocHeadingNumbers 写入 label 的手写编号叠加（如「11」「1.1.11.1」）。
+ * 不碰 TOC Heading / 中文公文样式（a/a0…）及其它非 heading 样式。
+ */
+export function stripHeadingAutoNumbering(zip: PizZip): number {
+  const f = zip.file("word/styles.xml");
+  if (!f) return 0;
+  let xml = f.asText();
+  let n = 0;
+  xml = xml.replace(/<w:style\b[^>]*>[\s\S]*?<\/w:style>/g, (block) => {
+    const name = (block.match(/<w:name\b[^>]*\bw:val="([^"]+)"/) || [])[1] || "";
+    if (!/^heading [1-9]$/.test(name)) return block;
+    // 含自闭合 <w:numPr/>（Word 另存后可能出现）
+    const next = block.replace(
+      /<w:numPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:numPr>)/,
+      "",
+    );
+    if (next !== block) n += 1;
+    return next;
+  });
+  if (n) zip.file("word/styles.xml", xml);
+  return n;
+}

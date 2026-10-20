@@ -7,7 +7,10 @@ import {
   type RetrievalScope,
 } from '@/components/DocUtil/retrievalScope';
 import {listDocs} from '@/services/chatchat/kb';
-import {ALL_KB_NAME} from '@/components/DocUtil/kbSelectorModal';
+import {kbLabel} from '@/components/DocUtil/kbSelectorModal';
+import {outlineKbBindUi} from '@/components/ChatUtil/outlineKbBindUi';
+
+export {outlineKbBindUi} from '@/components/ChatUtil/outlineKbBindUi';
 
 const {Text, Paragraph} = Typography;
 
@@ -554,13 +557,16 @@ export function composePptOutlineUserMessage(
   const scope = sanitizeOutlineScope((vars?.scope || '').trim());
   const scopePart = scope ? `，范围「${scope}」` : '';
   const files = (retrieval?.boundFiles || []).filter(Boolean);
+  // 三十四·P1：无库上下文时 scope 可为 undefined，勿再默认成 kb_supplement
   const rScope =
-    retrieval?.scope || defaultRetrievalScope(files);
+    retrieval?.scope ??
+    (files.length ? defaultRetrievalScope(files) : undefined);
   let retrievePart = '';
   if (files.length) {
     const names = files.slice(0, 3).join('、') + (files.length > 3 ? '…' : '');
+    const scope = rScope || defaultRetrievalScope(files);
     retrievePart =
-      rScope === 'bound_only'
+      scope === 'bound_only'
         ? `，检索「仅用所选文档：${names}」`
         : `，检索「扩展知识库补充（主文档：${names}；跨文档数字须标注来源）」`;
   } else if (rScope === 'kb_supplement') {
@@ -761,8 +767,8 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
   );
   const [filesLoading, setFilesLoading] = useState(false);
 
-  const canBindFiles =
-    Boolean(kbName) && kbName !== ALL_KB_NAME && showVars;
+  // 三十四：区分「无库上下文（Ai）」与「选了全库（KB）」——前者不提示
+  const {hasKbContext, canBindFiles} = outlineKbBindUi(kbName, showVars);
 
   // 绑定关系 → 默认 scope（用户改过也可因清空绑定而回落）
   useEffect(() => {
@@ -883,8 +889,12 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
         docPack ? {domainPack: docPack} : undefined,
       );
       const files = canBindFiles ? boundSourceFiles : [];
-      const effectiveScope: RetrievalScope =
-        files.length === 0 ? 'kb_supplement' : retrievalScope;
+      const effectiveScope: RetrievalScope | undefined =
+        files.length === 0
+          ? hasKbContext
+            ? 'kb_supplement'
+            : undefined
+          : retrievalScope;
       onSend({
         userMessage: composeDocOutlineUserMessage(
           t,
@@ -916,8 +926,12 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
       const shortTitle =
         displayTitle.trim() || suggestPptDocTitle(t, vars);
       const files = canBindFiles ? boundSourceFiles : [];
-      const effectiveScope: RetrievalScope =
-        files.length === 0 ? 'kb_supplement' : retrievalScope;
+      const effectiveScope: RetrievalScope | undefined =
+        files.length === 0
+          ? hasKbContext
+            ? 'kb_supplement'
+            : undefined
+          : retrievalScope;
       onSend({
         userMessage: composePptOutlineUserMessage(
           t,
@@ -953,12 +967,15 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
         scope,
         domainPack,
       };
+      const files = canBindFiles ? boundSourceFiles : [];
       const retrieval = {
         scope:
-          boundSourceFiles.length === 0
-            ? ('kb_supplement' as RetrievalScope)
+          files.length === 0
+            ? hasKbContext
+              ? ('kb_supplement' as RetrievalScope)
+              : undefined
             : retrievalScope,
-        boundFiles: canBindFiles ? boundSourceFiles : [],
+        boundFiles: files,
       };
       if (mode === 'doc') {
         return composeDocOutlineUserMessage(
@@ -983,6 +1000,7 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
       boundSourceFiles,
       retrievalScope,
       canBindFiles,
+      hasKbContext,
     ],
   );
 
@@ -1099,14 +1117,14 @@ const OutlinePromptComposer: React.FC<OutlinePromptComposerProps> = ({
                     />
                   </Form.Item>
                 </>
-              ) : (
+              ) : hasKbContext ? (
                 <Alert
                   type="info"
                   showIcon
                   style={{marginBottom: 8}}
-                  message="当前为全库或未选具体知识库：检索默认「知识库补充」。选定具体库后可绑定源文档。"
+                  message={`当前选中「${kbLabel(kbName)}」：检索默认「知识库补充」。如需绑定源文档，请先在知识库页选定具体库。`}
                 />
-              )}
+              ) : null}
               {mode === 'ppt' ? (
               <Collapse
                 ghost

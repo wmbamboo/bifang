@@ -150,6 +150,11 @@ export type KbDocConstraintOpts = {
   hasRetrieval?: boolean;
   /** 二十一·9：无图资产时禁止 figure 围栏 */
   allowFigure?: boolean;
+  /**
+   * 三十：是否允许句末 [文档N]。缺省 true（与旧行为一致）。
+   * hasRetrieval && !allowCitations → 有检索但不标出处。
+   */
+  allowCitations?: boolean;
 };
 
 /**
@@ -167,9 +172,13 @@ export function buildKbDocWritingConstraintPrompt(
   );
   const hasRetrieval = opts?.hasRetrieval !== false;
   const allowFigure = opts?.allowFigure !== false;
-  const citeRule = hasRetrieval
-    ? "4. 可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）；禁止整段以「根据知识库」「材料显示」等套话开头。\n"
-    : "4. 本页无知识库检索，禁止输出任何 [文档N]/[文档1] 类引注标记，禁止编造出处；禁止整段以「根据知识库」「材料显示」等套话开头。\n";
+  const allowCitations = opts?.allowCitations !== false;
+  const citeRule =
+    hasRetrieval && allowCitations
+      ? "4. 可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）；禁止整段以「根据知识库」「材料显示」等套话开头。\n"
+      : hasRetrieval && !allowCitations
+        ? "4. 禁止输出任何 [文档N]/[文档1] 类引注标记；数据照常写，但不标出处；禁止整段以「根据知识库」「材料显示」等套话开头。\n"
+        : "4. 本页无知识库检索，禁止输出任何 [文档N]/[文档1] 类引注标记，禁止编造出处；禁止整段以「根据知识库」「材料显示」等套话开头。\n";
   const figureRule = allowFigure
     ? ""
     : "7. 本页无可用插图资产，禁止输出 ```figure 围栏；需要图示时用文字描述，禁止编造 kb: 路径。\n";
@@ -208,6 +217,54 @@ export function stripHallucinatedDocCitations(text: string): {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return {text: cleaned, stripped};
+}
+
+type ChapterCiteLike = {
+  paragraphs?: Array<{content?: string}>;
+};
+
+/**
+ * 三十·④：深拷贝后剥离各段 [文档N]，不改入参。
+ * 供导出「隐去来源标注」兜底。
+ * 注意：不可 JSON 序列化——会丢掉 Chapter/Paragraph 原型方法（如 isContainer），导致导出崩溃。
+ */
+export function stripCitationsDeep<T extends ChapterCiteLike>(
+  chapters: T[],
+): {chapters: T[]; stripped: number} {
+  let stripped = 0;
+  const cloned = (chapters || []).map((ch) => {
+    const nc = Object.assign(
+      Object.create(Object.getPrototypeOf(ch) || Object.prototype),
+      ch,
+    ) as T & {paragraphs?: any[]; points?: any[]};
+    nc.paragraphs = (ch.paragraphs || []).map((p) => {
+      const np = Object.assign(
+        Object.create(Object.getPrototypeOf(p) || Object.prototype),
+        p,
+      );
+      const r = stripHallucinatedDocCitations(p.content || "");
+      np.content = r.text;
+      stripped += r.stripped;
+      if (Array.isArray((p as {blocks?: unknown[]}).blocks)) {
+        np.blocks = (p as {blocks: any[]}).blocks.map((b) => {
+          if (!b || typeof b !== "object") return b;
+          const copy = {...b};
+          if (Array.isArray(b.rows)) {
+            copy.rows = b.rows.map((row: unknown[]) =>
+              Array.isArray(row) ? [...row] : row,
+            );
+          }
+          return copy;
+        });
+      }
+      return np;
+    });
+    if (Array.isArray(nc.points)) {
+      nc.points = nc.points.map((pt) => ({...pt}));
+    }
+    return nc as T;
+  });
+  return {chapters: cloned, stripped};
 }
 
 /** 默认预算版本（兼容旧 import；十七：单值 150；默认有检索） */

@@ -113,6 +113,15 @@ export function formatKbAssetRef(fileName: string, assetId: string): string {
   return `kb:${fileName}/${assetId}`;
 }
 
+/** 三十五：本地上传 ref（key 不含 upload: 前缀） */
+export function formatUploadAssetRef(key: string): string {
+  return `upload:${String(key || "").trim()}`;
+}
+
+export function isUploadAssetRef(ref: string): boolean {
+  return normalizeKbAssetRef(ref).startsWith("upload:");
+}
+
 /**
  * 二十四·C：ref 归一化（解析侧与白名单匹配侧共用）。
  * - 去首尾空白与包裹引号/反引号
@@ -122,7 +131,111 @@ export function normalizeKbAssetRef(raw: string): string {
   let r = String(raw || "").trim();
   r = r.replace(/^[`"']+/, "").replace(/[`"']+$/, "").trim();
   r = r.replace(/^kb:\s*/i, "kb:");
+  r = r.replace(/^upload:\s*/i, "upload:");
   return r;
+}
+
+/**
+ * 三十三：解析 kb:<fileName>/<assetId>（assetId 可含 elements/、whole/）。
+ */
+export function parseKbAssetRef(
+  raw: string,
+): {fileName: string; assetId: string} | null {
+  const ref = normalizeKbAssetRef(raw);
+  if (!ref.startsWith("kb:")) return null;
+  const path = ref.slice(3);
+  const slash = path.indexOf("/");
+  if (slash < 0) return null;
+  const fileName = path.slice(0, slash).trim();
+  const assetId = path.slice(slash + 1).trim();
+  if (!fileName || !assetId) return null;
+  return {fileName, assetId};
+}
+
+/** 整页图（将降采样） */
+export function isWholePageAssetId(assetId: string): boolean {
+  const id = String(assetId || "");
+  if (id.startsWith("whole/")) return true;
+  return !/_p\d+_(img|chart)\d+/i.test(id);
+}
+
+/** 列表页 / 换图宫格：拼无鉴权 asset_file URL（勿整字节 fetch） */
+export function kbAssetFileUrl(
+  kbName: string,
+  fileName: string,
+  assetId: string,
+): string {
+  const base = (process.env.bf_baseUrl || "").replace(/\/$/, "");
+  const q = new URLSearchParams({
+    knowledge_base_name: kbName,
+    file_name: fileName,
+    asset_id: assetId,
+  });
+  return `${base}/knowledge_base/asset_file?${q.toString()}`;
+}
+
+/** 三十三·5：手选后同步白名单（纯函数，可测） */
+export function applyManualFigureRef(
+  p: {
+    blocks: Array<{kind: string; assetRef?: string; caption?: string}>;
+    allowedFigureRefs?: string[];
+  },
+  blockIndex: number,
+  nextRef: string,
+): {
+  blocks: Array<{kind: string; assetRef?: string; caption?: string}>;
+  allowedFigureRefs: string[];
+} {
+  const blocks = p.blocks.map((b, i) =>
+    i === blockIndex && b.kind === "figure" ? {...b, assetRef: nextRef} : b,
+  );
+  const allowed = [...(p.allowedFigureRefs || [])];
+  const norm = normalizeKbAssetRef(nextRef);
+  if (norm && !allowed.some((r) => normalizeKbAssetRef(r) === norm)) {
+    allowed.push(nextRef);
+  }
+  return {blocks, allowedFigureRefs: allowed};
+}
+
+/** 移除 figure 块；保留 allowedFigureRefs */
+export function removeManualFigure(
+  p: {
+    blocks: Array<{kind: string; assetRef?: string; caption?: string}>;
+    allowedFigureRefs?: string[];
+  },
+  blockIndex: number,
+): {
+  blocks: Array<{kind: string; assetRef?: string; caption?: string}>;
+  allowedFigureRefs: string[];
+} {
+  return {
+    blocks: p.blocks.filter((_, i) => i !== blockIndex),
+    allowedFigureRefs: [...(p.allowedFigureRefs || [])],
+  };
+}
+
+/**
+ * 三十三·6：与 DocBlockInjector 同源归一口径，预判导出是否 blocked。
+ */
+export function previewFigureStatus(
+  p: {
+    blocks?: Array<{kind: string; assetRef?: string}>;
+    allowedFigureRefs?: string[];
+  },
+): Array<{index: number; ok: boolean; reason?: string}> {
+  const allowed = new Set(
+    (p.allowedFigureRefs || []).map(normalizeKbAssetRef).filter(Boolean),
+  );
+  return (p.blocks || []).flatMap((b, i) => {
+    if (b.kind !== "figure") return [];
+    if (allowed.size === 0) {
+      return [{index: i, ok: false, reason: "本段无可用插图资产"}];
+    }
+    if (!allowed.has(normalizeKbAssetRef(b.assetRef || ""))) {
+      return [{index: i, ok: false, reason: "ref 不在本段候选内"}];
+    }
+    return [{index: i, ok: true}];
+  });
 }
 
 /**

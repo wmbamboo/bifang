@@ -3397,3 +3397,1218 @@ if (!/```/.test(raw0) || !mayHaveDocBlock) {
 - `style_scan2.py`：首句直入率（二十·3 是否生效）；
 - `tbl_check2.py`：内容表 rows 列数与源一致（防 A 复发）；
 - 出图数：看 Console `[DocBlock] withBlocks`。**若恒 0，先查 `allocateMaterialPool` 是否真返回 `asset_ids`，不要再改渲染侧**（23.3 的根因已在渲染侧修完，剩下的在材料池供给）。
+
+## 二十五、10-21 新产物实测（Ai-v2026921.docx）：图缺失根因 + 题注 SEQ 全是 1
+
+样本：`桌面/抖音商务衬衫polo选品分析-Ai-v2026921.docx`（132 段 / drawings 4 / media 4 / w:tbl 4）
+判卷脚本：`ab/audit_1021.py`、`ab/audit_1021b.py`、`ab/cap_check.py`（输出同名 `_out*.txt`）
+
+### 25.0 结论表
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| **图缺失（用户报的 1 处）** | **不是白名单拒绝、不是取不到字节，是单图体积闸 `MAX_IMG_BYTES=1.5MiB`** | 段 77 占位文本 `（>1572864B）`，且**无**「不在可用清单」标记 ⇒ ref 合法 |
+| 层级对角线 | ✅ 已消除 | 1.1–1.3 / 2.1–2.3 / 3.1–3.4 / 4.1–4.3 连续 |
+| 内容表 | ✅ 2/2 成功、5 列齐整 | 表2（4 行×5 列）、表3（6 行×5 列） |
+| 图 | 4/5 成功（此前 0） | media 4 个：618/102/39/37 KB |
+| 围栏泄漏 | ✅ 0 | ``` / figureref / DOCBLOCK / 裸[n] 全 0 |
+| 首句视角介词 | ✅ 0/14（20.3 生效） | 无「从/在/落到/基于」开头 |
+| 结论章账本 | ✅ 生效 | 4.1–4.3 引用前文数字（172.6万/42.76%/70.07%/72.18%）并标「（推演）」 |
+| **题注编号** | ❌ **5 张图全是「图 1」、2 张表全是「表 1」** | SEQ 域缓存值均为 1，且 `w:dirty` 缺失 |
+
+### 25.1 图缺失：实证根因（P0 待修）
+
+- 位置：段 77，属于 `2.2 polo衫机会价格带`；题注在段 78「图 1 polo衫与男士衬衫价格带分布及同比表现（第4页）」
+- 占位原文：
+  `［图片缺失：kb:抖音单品爆款分析-商务男士衬衫polo衫.pdf/抖音单品爆款分析-商务男士衬衫polo衫_p4_0.png（>1572864B）］`
+- **判定链**：
+  1. 无「不在可用清单」⇒ 未走 `figure-blocked`，**ref 在白名单内、模型没有改写它**（23.13 生效正确）；
+  2. 不是 `resolveAssetBytes` 返回 null（那会是无后缀的 `figure-missing`）；
+  3. 文案里的 `（>${MAX_IMG_BYTES}B）` 唯一指向 `DocBlockInjector.ts:440` 的**单图体积闸**。
+- **为什么这张超闸**：`…_p4_0.png` 是**页级整页图**（`kb/assets/<doc>/<doc>_p<页>_<i>.png`，未裁切），PNG 直出 >1.5 MiB；而成功注入的 4 张分别是 618 / 102 / 39 / 37 KB（618 KB 那张同样是偏大的整页图，贴着闸）。
+
+**修法（按优先级，勿改渲染侧其它逻辑）**
+
+1. **P0 降采样后再注入，不要丢图** —— `DocBlockInjector.ts:438-447`：
+   `bytes.byteLength > MAX_IMG_BYTES` 时先调新增的 `resizeImageBytes(bytes, mime)`（`createImageBitmap` → `OffscreenCanvas` → `convertToBlob({type:"image/jpeg", quality:0.85})`，宽上限取版心 2×：版心 5,400,675 EMU ≈ 5.9in，按 96dpi ≈ 567px，取 1200px 上限足够清晰），压缩后仍超限或环境不支持（无 OffscreenCanvas）才降级 `figure-missing`。
+   ⇒ 1.5 MB 的整页图压到 ~200 KB，既不撑爆 docx 也不丢图。
+2. **P2 供给侧**：材料池清单若含页级整页图（`_p<页>_<i>.png`）且同页有 `elements/` 裁切图，优先裁切图；后端若能返回 size，清单阶段直接剔除超大图。
+3. 阈值 `MAX_IMG_BYTES` / `MAX_TOTAL_IMG_BYTES`（`DocBlockInjector.ts:20-21`）建议做成可配，别写死在渲染层。
+
+### 25.2 题注全是「图 1」/「表 1」（P0，用户可见）
+
+- 题注是**真 SEQ 域**：`<w:instrText> SEQ 图 \* ARABIC </w:instrText>`，7 处（图 5、表 2）
+- 但缓存值 `<w:t>1</w:t>` **全是 1**，且 `<w:fldChar>` **没有 `w:dirty="true"`** ⇒ Word 打开后不会自动刷新，用户看到的就是重复的「图 1」。
+
+**修法（二选一，建议都做）**
+1. 注入时按已有计数写真序号：`injectDocBlocks` 里已有 `imgN`，表也有对应计数，把缓存值 `<w:t>1</w:t>` 换成 `图 N` / `表 N` 的真实序号；
+2. 同时给 `<w:fldChar w:fldCharType="begin">` 加 `w:dirty="true"`（与 TOC 域一致），保证 Word 端刷新。
+
+### 25.3 占位文案把内部 ref 写进正文（P1）
+
+`DocBlockInjector.ts:181` `［图片缺失：${ref || caption || "unknown"}］` + `:444` 的 `ref: "${ref}（>${MAX_IMG_BYTES}B）"`
+⇒ 正文出现 `kb:…pdf/…_p4_0.png（>1572864B）` 这种内部串（本次实测已命中）。
+**修法**：占位文案只留 `caption`（或「图片缺失」+ 简短人类可读原因），ref 与阈值只进 `console.warn` / `[DocBlock]` 诊断。
+
+### 25.4 仓库卫生
+
+`.workbuddy/tmp/`（助手审计临时文件 `d_vi.txt / d_pc.txt / d_kb.txt / d_ai.txt / ch24.md / append24.py / cleanup.py`）被 dcaaf95 一并提交入库。
+请 `git rm -r --cached .workbuddy/tmp` 并在 `.gitignore` 加一行 `.workbuddy/tmp/`（助手侧 UNC 下无法删除，需你操作）。
+
+### 25.5 验收口径（下一轮）
+
+修完 25.1 / 25.2 / 25.3 后，用户 UI 重生成导出，助手跑：
+- `audit_1021.py`：drawings 应 = 5（原缺失那张变成图）、缺占位 0、正文无 `kb:` 串；
+- `cap_check.py`：题注序号应为 图1–图5 / 表1–表2 递增；
+- `audit_1021b.py`：结论章仍引用前文数字、表列数一致。
+
+## 二十六、章节编号重复：模板自动编号 × 手写编号叠加（P0，用户可见）
+
+样本：`Ai-v2026921.docx` 导航窗格显示 `11 大盘机会与品类位次` / `1.1.11.1 男装大盘量额双增` / `3.1.13.1 polo衫面料结构`。
+
+### 26.0 拆解（数字对得上，排除"写了两遍手写编号"）
+
+| 显示 | 自动编号 | 手写编号（`applyDocHeadingNumbers` 写进 label） |
+|---|---|---|
+| `11 大盘…` | `1`（heading1 / ilvl0，lvlText `%1`） | `1 大盘…` |
+| `1.1.11.1 男装…` | `1.1.1`（heading3 / ilvl2，lvlText `%1.%2.%3`） | `1.1 男装…` |
+| `1.1.21.2 polo…` | `1.1.2` | `1.2 polo…` |
+| `3.1.13.1 polo…` | `3.1.1` | `3.1 polo…` |
+
+⇒ **两份编号都在**：Word 自动编号（来自样式）+ 手写编号（来自 `label` 文本）。
+
+### 26.1 根因证据
+
+1. 模板 `frontend/public/docTemplate-simple.docx` → `word/styles.xml`：
+   ```
+   styleId=1 heading 1  numPr=<w:numId w:val="1"/>
+   styleId=2 heading 2  numPr=<w:ilvl 1/><w:numId 1/>
+   styleId=3 heading 3  numPr=<w:ilvl 2/><w:numId 1/>
+   … heading 4–9 全部挂 numId=1
+   ```
+2. `word/numbering.xml`：`num 1 → abstractNum 0`，其 lvlText = `%1` / `%1.%2` / `%1.%2.%3` …
+3. 产物 `document.xml` 的标题段**没有显式 numPr** ⇒ 继承样式 ⇒ 自动编号必然显示。
+4. `applyDocHeadingNumbers`（`docHeadingDepth.ts:92-105`）把 `${cn} ${baseCh}` / `${cn}.${pn} ${base}` 写进 `label`，模板 `{label}` 渲染成正文 ⇒ 手写编号也在。
+
+**为什么段是三层 `1.1.1`**：段用 `heading 3`（ilvl=2，`%1.%2.%3`），而文档里没有 `heading 2` 段落，中间层计数器恒为 1 ⇒ `章.1.段`。
+
+### 26.2 修法（推荐 A，勿选 B）
+
+**A. 导出时删掉 heading 1–9 样式里的 `<w:numPr>`，保留手写编号体系。**
+
+```ts
+// docHeadingLevels.ts 新增
+export function stripHeadingAutoNumbering(zip: PizZip): number {
+  const f = zip.file("word/styles.xml");
+  if (!f) return 0;
+  let xml = f.asText();
+  let n = 0;
+  xml = xml.replace(
+    /<w:style [^>]*w:styleId="([^"]+)"[^>]*>[\s\S]*?<\/w:style>/g,
+    (block, _sid) => {
+      const name = (block.match(/<w:name w:val="([^"]+)"/) || [])[1] || "";
+      if (!/^heading [1-9]$/.test(name)) return block;
+      const next = block.replace(/<w:numPr>[\s\S]*?<\/w:numPr>/, "");
+      if (next !== block) n += 1;
+      return next;
+    },
+  );
+  if (n) zip.file("word/styles.xml", xml);
+  return n;
+}
+```
+
+调用点（与 `applyHeadingLevels` 同批，generate 之前）：
+- `KbOutlineGenDoc.tsx` saveDoc ≈ L259-265
+- `AiOutlineGenDoc.tsx` saveDoc 对应位置
+
+**不要动**：`styleId=a/a0/a1…`（中文公文样式，未使用）、`numId=0` 的段落（TOC Heading / 模板 `{#chapters}` 段）。
+
+**B. 改成纯自动编号（不推荐）**：需把段落到 `heading 2`（ilvl=1）以得到 `%1.%2`，同时删掉 `applyDocHeadingNumbers`，并重排 `paragraph.level` 语义（3→2）与 `applyHeadingLevels` 的映射，还会影响 TOC/标题体检/字数公式的 level 判断。改动面远大于 A。
+
+### 26.3 审计盲点（必改）
+
+`ab/audit_1021.py` 只读 `<w:t>`，**读不到 Word 自动编号**，所以前两轮体检都漏了这条。
+判卷脚本须新增一项：
+- `styles.xml` 里 `name^="heading [1-9]"` 且含 `<w:numPr>` 的样式数（应为 0）；
+- 若模板改回自动编号路线，则改为断言标题段显示编号 == 文本编号（不叠加）。
+
+### 26.4 验证副本
+
+助手已用「仅删 heading numPr、其余字节不动」的方式产出：
+`桌面/抖音商务衬衫polo选品分析-Ai-v2026921-编号修复验证.docx`
+（`heading styles still with numPr: []`、正文显式 numPr 0）
+打开导航窗格应为：`1 大盘机会与品类位次` / `1.1 男装大盘量额双增` … `4.3 暂缓与观察`。
+
+注意：该副本**只修编号**，题注「图 1/表 1」重复与图缺失（二十五章）仍在，别拿它当最终验收样本。
+
+## 二十七、二十六复核（已验通过）+ 二十五开工授权（含精确落地坐标）
+
+### 27.0 二十六复核结论：**通过，可以收工**
+
+我逐项核过代码与实跑，不是只看你的回执：
+
+| 项 | 结论 | 依据 |
+|---|---|---|
+| `stripHeadingAutoNumbering` 实现 | ✅ 正确 | `docHeadingLevels.ts:121-137`：`^heading [1-9]$` 精确匹配 `w:name`，只删本 style 块内首个 `numPr`，返回受影响条数；不动 `TOC Heading`(numId=0) 与公文样式 `a/a0–a5` |
+| 双页调用点 | ✅ 均在 `applyHeadingLevels` 之后 | `AiOutlineGenDoc.tsx:228`、`KbOutlineGenDoc.tsx:275`；两页各 1 处 `saveAs`（`:236` / `:283`），**不存在漏调的导出路径** |
+| 是否漏段落级 numPr | ✅ 不用处理 | `num_out.txt` 实测：产物 11 个标题段 `numPr=-`（pPr 里无直接 numPr），自动编号**只来自样式**；模板里 `[40]/[50]`（`{#chapters}` / `{/chapters}` 边界段）带的是 `numId=0`＝无编号，无害 |
+| jest | ✅ 6/6 全绿 | 我独立复跑 `docHeadingLevels`（169s）：含新加的「二十六·A」，strip 前后 9→0 |
+| audit_param.py 增 numPr 审计 | ✅ 已收 | 判卷口径补齐（上一轮我漏掉的根因类型） |
+
+**两条加固（P2，可顺手，勿单独开章）**
+1. `stripHeadingAutoNumbering` 的正则 `<w:numPr\b[^>]*>[\s\S]*?<\/w:numPr>` **匹配不到自闭合** `<w:numPr/>`。改成
+   `<w:numPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:numPr>)`，防模板被 Word 另存后形态变化。
+2. 测试里 `expect(headingWithNum.length).toBe(9)` 硬编码 9，模板若被另存/改版会红。建议改为
+   `toBeGreaterThan(0)` + 单独断言 `name` 集合包含 `heading 1`/`heading 3`（语义化，不脆）。
+
+### 27.1 二十五：**开工，按 25.1 → 25.2 → 25.3 顺序做**
+
+下面是我在当前代码上核过的**精确坐标**，照此实现即可一次做对（不再需要你猜）：
+
+#### 25.1 图体积降采样（P0，本轮最优先）
+
+- 闸在 `DocBlockInjector.ts:440`（`MAX_IMG_BYTES = 1.5*1024*1024`，常量在 `:20`），另有总闸 `:448`。
+- 改法：**超闸先压，压不动才丢**。把 `:439-447` 的 `if (bytes.byteLength > MAX_IMG_BYTES) { push figure-missing; continue; }` 换成：
+
+```ts
+if (bytes.byteLength > MAX_IMG_BYTES) {
+  const rs = opts?.resizeImage
+    ? await opts.resizeImage(bytes, mime, 1200, 0.85)
+    : null;
+  if (!rs) {
+    items.push({kind: "figure-missing", caption: b.caption || "", ref: ref || "(空)"}); // 文案见 25.3
+    continue;
+  }
+  bytes = rs.bytes; mime = rs.mime; pxW = rs.w; pxH = rs.h;   // 尺寸直接取，别再 readImageSize
+}
+if (bytes.byteLength > MAX_IMG_BYTES) { /* 压完仍超 → 才降级 missing */ }
+```
+
+- 新增（同文件，非导出亦可）：
+
+```ts
+export type ResizeImageFn = (
+  bytes: Uint8Array, mime: string, maxW: number, q: number,
+) => Promise<{bytes: Uint8Array; mime: string; w: number; h: number} | null>;
+
+export const defaultResizeImage: ResizeImageFn = async (bytes, mime, maxW = 1200, q = 0.85) => {
+  if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return null;
+  try {
+    const bmp = await createImageBitmap(new Blob([bytes], {type: mime || "image/png"}));
+    const scale = Math.min(1, maxW / Math.max(1, bmp.width));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const cv = new OffscreenCanvas(w, h);
+    const ctx = cv.getContext("2d");
+    if (!ctx) { bmp.close?.(); return null; }
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const out = await cv.convertToBlob({type: "image/jpeg", quality: q});
+    const buf = new Uint8Array(await out.arrayBuffer());
+    bmp.close?.();
+    return {bytes: buf, mime: "image/jpeg", w, h};
+  } catch { return null; }
+};
+```
+
+- **必须做成可注入 hook**（`injectDocBlocks(zip, seq, opts?: {resizeImage?: ResizeImageFn, ...}`）：
+  jsdom 无 `createImageBitmap`/`OffscreenCanvas`，不注入就永远走 `null` 分支，单测**覆盖不到成功路径**。
+  测试传 fake 返回 `{bytes: <小jpeg>, mime:"image/jpeg", w:900, h:600}` 断言落地为 `kind:"figure"`。
+- 已确认配套无坑：`mimeToExt`（`:246`）支持 jpeg；`ensureImageContentTypes`（`:218`）已注册 jpeg/jpg；`readImageSize`（`imageBufferMeta.ts:9`）支持 JPEG SOF0/SOF2 —— 但 resize 分支请直接用返回的 w/h，少一次解析。
+- 版心不必操心：显示宽由 `computeInlineEmu`（`:96`）按版心 95% 等比缩放，`maxW=1200` 只是分辨率上限。
+
+#### 25.2 题注 SEQ 全是 1（P0，用户直接可见）
+
+`captionParagraph`（`:75-87`）缓存值写死 `<w:t>1</w:t>`，且 `begin` 的 fldChar 无 `w:dirty`。
+**两处一起改**：
+
+```ts
+function captionParagraph(seqName: "表"|"图", caption: string, seqValue: number): string {
+  ... `<w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r>` +
+      `<w:r><w:instrText xml:space="preserve"> SEQ ${seqName} \\* ARABIC </w:instrText></w:r>` +
+      `<w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
+      `<w:r><w:t>${seqValue}</w:t></w:r>` ...
+}
+```
+
+调用点三处，各自传序号：
+- `:149` `buildTableXml(caption, rows)` → 加参 `seqValue`，注入循环里 `++tblN`；
+- `:177` `buildFigureXml(item, rId, docPrId)` → 加参，注入循环里 `++capFigN`；
+- `:185` `buildMissingFigureXml(caption, ref)` → **缺失/被拒图也会出题注**，所以同样 `++capFigN`（与 Word 刷新后 SEQ 按文档顺序重排的语义一致，两边不会打架）；但 `caption` 为空时它不输出题注 ⇒ 此时**不要** ++（先判 `item.caption ? ++capFigN : 0`）。
+
+注意 `imgN`（`:284`，只数真实 media）与 `capFigN`（凡出题注就 +1）**是两个计数器**，缺失图存在时不相等，别复用。
+
+#### 25.3 占位/报错文案不要把内部 ref 写进正文（P1）
+
+- `buildMissingFigureXml`（`:180-187`）：正文只留人类可读文案。`missing` → `［图片缺失］`；`blocked`（24·D）→ `［图片不可用］`；caption 走题注照常保留。`ref` 只进 `console.warn("[DocBlock] ...")`。
+- `:444` 的 `ref: \`${ref}（>${MAX_IMG_BYTES}B）\`` 同步去掉阈值后缀（它最终会经 `countUnresolvedFigures` 冒到 Kb 页红 error，用户会看到 `kb:…png（>1572864B）`）。
+
+#### 25.4 顺手（P2，一行）
+
+`KbOutlineGenDoc.tsx:283` `saveAs(blob, title+"-Ai-v"+...)` —— **KB 页导出却标 `-Ai-v`**（所以你手上那份 KB 产物叫 `…-Ai-v2026921.docx`）。改为 `title+"-Kb-v"+...`。Ai 页 `:236` 保持不变。
+
+#### 25.5 仓库卫生（重申 25.4，仍未做）
+
+`.workbuddy/tmp/`（含我上轮 `ch24/ch25/ch26.md`、`append*.py`、`d_*.txt`）与 `.workbuddy/tmp2/` 已被提交/待提交。
+请：`git rm -r --cached .workbuddy/tmp .workbuddy/tmp2` + `.gitignore` 加两行；`frontend/tmp/`（jest 日志）同理。助手侧 UNC 下删不掉。
+
+### 27.6 验收（做完 25.1–25.3 后）
+
+用户 UI 重生成导出新 docx，我跑：
+- `audit_1021.py`：`drawings` 应 **5**（原来超闸那张变成图）、缺失占位 **0**、正文无 `kb:` / `（>1572864B）` 串；
+- `cap_check.py`：题注应为 **图1–图5 / 表1–表2 递增**，且 fldChar 带 `w:dirty`；
+- `num_check.py`：导航窗格 `1 / 1.1 …`（二十六回归）；
+- `audit_1021b.py`：结论章仍引用前文数字、表列数一致（防回归）。
+
+jest：`docFigureSupply` / `docFenceDegrade` / `docHeadingLevels`（含新加的 resize hook 用例）全绿。
+
+## 二十八、KB 页新产物（Kb-v2026921.docx）判卷：二十五三项全部生效，剩 1 处 blocked
+
+判卷脚本：`ab/judge.py`（新，一份跑完 9 项；用法 `python judge.py <docx> [out]`），输出 `ab/judge_out.txt`。
+样本：`桌面/抖音商务衬衫polo选品分析-Kb-v2026921.docx`（**KB 页**，与上一轮 Ai 页产物不同源，勿直接对比）。
+
+### 28.0 判卷总表
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| **25.1 降采样** | ✅ **生效** | media 里出现 `img3.jpeg 111.3KB`、`img4.jpeg 106.4KB`（jpeg = 压缩产物），此前这两张必被 1.5MiB 闸丢弃 |
+| **25.2 题注序号** | ✅ **生效** | 图 1–7 / 表 1–2 严格递增，缓存值 = 真实序号，7 处 fldChar 全部带 `w:dirty="true"` |
+| **25.3 占位文案** | ✅ **生效** | 正文 `kb:` = 0、`（>` = 0；占位只剩「［图片不可用］」 |
+| **二十六 编号** | ✅ 保持 | styles.xml heading numPr = 无；标题 `1 / 1.1 … 4.3` 干净，无 `^\d+\.\d+\.\d` 叠加 |
+| 图 | 6/7（此前 4/5） | drawings 6，成功图在 1.1/1.2/1.3/2.1/3.1/3.2 |
+| 内容表 | ✅ 2/2，5 列齐整 | 表1（5行×5列）、表2（6行×5列）；另 2 个 `w:tbl` 是模板封面 |
+| 正文字数 | ✅ 中位 303（n=13，204–366） | 契约 200–400，命中率 13/13 |
+| 20.3 首句介词 | ✅ 0/13 | 无「从/在/基于…」开头 |
+| 十九·5 账本 | ✅ 生效 | 4.1/4.3 正文引用前文数字（72.18%、70.07%、¥100-200）并带「（推演）」 |
+| 泄漏扫描 | ✅ 全 0 | ``` / figureref / tablecaption / DOCBLOCK / ⟦ 在 raw XML 中均为 0 |
+| **图 7（4.2 段）** | ❌ **［图片不可用］= blocked** | 题注「图 7 商务休闲风渗透的男装品类分布」仍生成，但图没进来 |
+
+### 28.1 图 7 blocked：定位路径（本轮唯一 FAIL，请按顺序自查）
+
+现象链：段 53（4.2 属性配置取舍）→ 段 54 正文 270 字 → 段 55「［图片不可用］」→ 段 56 题注「图 7 …」。
+按 24·D 的语义，占位文案为「图片不可用」⇒ **走的是 `figure-blocked`（ref 不在段级白名单），不是取字节失败、也不是体积闸**。
+
+我已排除的两条：
+1. 不是体积闸 —— 25.1 生效后超闸图会变成 jpeg 成功注入（`img3/img4` 就是证据）；
+2. 不是 ref 归一问题 —— 24·C 已用 `normalizeKbAssetRef` 两侧共用。
+
+**剩下两条可能，请按下述顺序自查（不要跳）**：
+
+1. **段级白名单是否为空**？结论章（4.x）由十九·5 两相生成，若材料池没给 4.x 分配 `key_assets`，`allowedFigureRefs` 就是 `[]`，那么模型写的任何 ref 都会 blocked。
+   ⇒ 在 `DocBlockInjector` 的 blocked 分支里 **console 打印 `ref` 与 `allowed.length`**（现在只留了净化文案，无法自查）。若 `allowed.length === 0`，根因在**材料池分配器（4B）**，不在渲染侧。
+2. **若 `allowed.length > 0`**：说明是模型改写了 ref（23.13 的老问题在此段复发），或 `allowFigure` 判定用的清单与 `collectParagraphAllowedFigureRefLists` 的段级清单**不是同一份**（21.9 与 23.13 的判定源请对齐核一遍）。
+
+治理建议（顺序）：
+- P0：blocked 时 console 打 `ref` + `allowed.length` + `allowed.slice(0,3)`；
+- P1：`allowed.length === 0` 的段落，生成阶段就该 `allowFigure=false`（21.9 已有机制，确认它用的是**段级**清单而非全库/全局前 12）—— **从源头不让模型写 figure，比事后拦截更好**；
+- P2：blocked 的段不应留下题注（段 56「图 7 …」空挂一个题注更刺眼），建议 blocked 时不生成 captionParagraph。
+
+### 28.2 新实证：KB 资产体积分布（关系到 25.1 的 P2 建议，现在有硬数据）
+
+`backend/data/knowledge_base/服装/assets/抖音单品爆款分析-商务男士衬衫polo衫/`：
+- **整页图 18 张**：1.05 MB ~ 10.5 MB（p1_0=3.35MB、p2_0=1.88MB、p4_0=1.95MB、p16_0=10.5MB…）⇒ **17/18 张都过不了 1.5MiB 闸**，必须靠降采样；
+- **裁切图 `elements/` 82 张**：100 KB ~ 323 KB ⇒ 完全不需要压缩，且数量是整页图的 4.5 倍。
+
+⇒ 25.1 的 P2 建议升级为 **P1**：
+1. 材料池/清单**优先给 `elements/` 裁切图**，整页图只在同页无裁切图时兜底（清单排序时把 `_p<页>_<i>.png` 排到 `elements/` 之后）；
+2. 清单阶段若后端能返回 size，**直接剔除 >2MB 的整页图**（现在前端要先下载 10MB PNG 再压，白白浪费带宽与时间）；
+3. 成功注入的 `img1.png 618.7KB` 说明清单里也在给偏大的整页图 —— 与第 1 条一起修。
+
+### 28.3 P2 小瑕疵（可顺手）
+
+- **表 2 题注带模型批注**：「表 2 男士衬衫各价格带销量与销售额表现对照（表已截断）」——「（表已截断）」是模型写进 caption 的自述，进了题注很难看。
+  ⇒ caption 落库前清洗：去掉 `（表已截断）`/`（图略）` 之类括号自述（建议做成 `cleanDocCaption()`，与 25.3 的文案净化同源）。
+- 目录区出现 `toc 1` 与 `目录 1` 两个样式段（模板自带，w=0 靠 TOC 域刷新），暂不影响，记录即可。
+
+### 28.4 判卷口径修正（我这边，已修）
+
+`judge.py` 第一版把**表格单元格的 `<w:p>` 也算成正文段**，导致字数中位被拉到 3 字、首句检查样本为 0（误判）。
+已修：统计正文前先 `re.sub(r"<w:tbl>.*?</w:tbl>", "", x)`，且正文段判定改为「非 heading 样式 + 非题注」，`drawings` 仍用原文计数。
+**以后所有 OOXML 判卷脚本都必须先剔除 `<w:tbl>` 再统计段落。**
+
+### 28.5 下一轮验收
+
+修完 28.1 后重生成导出：
+- `judge.py`：drawings = 7（或 6 且**无** blocked 题注空挂）、缺失占位 0、图序号连续、表列数齐整；
+- 若图 7 变成「不出现 figure 块但也不留题注」，同样算 PASS（源头禁图成功）。
+
+## 二十九、`[文档N]` 为什么还在：不是残留，是「标了编号却没给对照表」
+
+体检脚本：`ab/cite_check.py`（输出 `ab/cite_out.txt`）。
+
+### 29.1 实测：24 处 / 9 段 / 编号 1、2、3
+
+```
+总出现 24，落在 9 个正文段；编号分布 文档1×14、文档2×6、文档3×4
+位置：全部在句末、句号之前（…环比+10.2%[文档1]。）✅ 规范
+落在标题或题注里：0 ✅
+堆叠 [文档1][文档2]：1 处（段 49）—— 符合提示词第 4 条「可在句末用 [文档1][文档2] 标注」的契约，不算 bug
+```
+
+### 29.2 结论：**这是设计内的来源标注，不该当残留删掉**
+
+- 后端 `kb_service.py:926-928`：检索片段就是按 `[文档{i}] 来源：{source} 第X页` 喂给模型的，**编号有真实出处**，不是模型编的；
+- 提示词 `parseChatCompletion.ts:171`（`hasRetrieval=true` 分支）第 4 条主动要求「可在句末用 [文档1][文档2] 标注引用（禁止裸写 [1][2]）」；
+- 剥离闸 `stripHallucinatedDocCitations` **只在 `AiOutlineGenDoc.tsx:342` 调用**（Ai 页无检索 → 禁止并剥离），**Kb 页有意不调用**。
+
+### 29.3 但它现在是半成品，有两个真缺陷
+
+**① 前端把来源清单数据丢了（P0）**
+后端 `ref_docs` 每条都带了 `{id, title, source, kb_name, chunk_id, page, link}`（`kb_service.py:929-943`），**就是现成的「资料来源」清单**。
+但前端 `grep -rn "ref_docs\|refDocs" src/` **零命中** —— 数据回来了，没保存也没用。
+⇒ 读者看到 `[文档1]` 根本不知道是哪份文件，**标注的信息量等于 0，只剩噪音**。
+
+**② 编号作用域是「单次检索」，不是全文（P1，致命）**
+段正文是**每段一次独立 HTTP 全并行**（`KbOutlineGenDoc.tsx:450` 起），每段的检索各自从 `[文档1]` 重新编号。
+⇒ 段 15 的 `[文档1]` 与段 28 的 `[文档3]` **可能指向同一份文件，也可能不是**，跨段编号不可比。
+这意味着：**在编号全局化之前，做不出「文档1 = 某文件」的精确映射表**（做了就是错表）。
+
+### 29.4 修法（按优先级）
+
+**P0 —— 文末追加「资料来源」，只列文件、不带编号映射**
+- 数据来源：`ref_docs`（生成阶段按段保存，去重后聚合页码），无需新接口；
+- 文案形态（不带编号，规避 ② 的错配风险）：
+  ```
+  资料来源
+  · 抖音单品爆款分析-商务男士衬衫polo衫.pdf（第 4、7、11 页）
+  · ×××行业周报.pdf（第 2 页）
+  ```
+- **⚠️ 别把它加成第 5 章**：新增章会污染 `buildHeadingLevelPlan` / `applyHeadingLevels` 的段序（编号会变成「5 资料来源」、TOC 也跟着变）。
+  正确做法：**在 `applyHeadingLevels` 与 `stripHeadingAutoNumbering` 之后**再 append 一段段落，样式用 `Normal`/列表样式（或 `heading 1` 但**不进 chapters 数组**，手写文本即可）。
+
+**P1 —— 编号全局化（做完它才能开精确映射/脚注）**
+- 生成前先建「本次生成的全局文档表」：把所有候选 source 去重排序 → 固定编号，写进每段的约束提示词（替换现在「[文档1][文档2]」的开放写法），模型只能用表内编号；
+- 之后 `[文档N]` 跨段一致，文末可出「文档1 = 文件名」精确表，甚至可升级为脚注。
+
+**P2 —— 导出开关**
+「保留来源标注 / 纯正文」二选一；选纯正文时复用 `stripHallucinatedDocCitations`（它现在是 Ai 页专用，抽成公共函数即可，KB 页也能用）。
+
+### 29.5 我的判卷口径更新
+
+`[文档N]` **不计入泄漏扫描白名单之外的问题**（此前 judge.py 把它列在扫描项里，但不判 FAIL）。
+判卷新增两条：
+1. 文末是否存在「资料来源」小节（P0 落地后）；
+2. 引用是否落在标题/题注（应为 0）、是否句中乱插（应只在句末）。
+
+### 29.6 验收
+
+P0 落地后重生成导出：正文 `[文档N]` 仍在（设计内）✅、文末出现去重的文件名+页码清单、章节编号仍是 1–4（没有多出「5 资料来源」）、TOC 不变。
+
+## 三十、来源标注开关：保留 / 隐去（用户拍板，P1 落地）
+
+### 30.0 需求
+
+用户拍板：`[文档N]` 要有开关，能隐去也能保留；**研究性文档倾向保留**。
+⇒ 做**文档级开关**，并把二十九章的「资料来源清单」挂在开关下面联动。
+
+### 30.1 现状（确认过，别改错地方）
+
+- `stripHallucinatedDocCitations`（`parseChatCompletion.ts:195-211`）：纯函数，删 `[文档N]` + 收敛空格/标点，**Ai 页专用**（`AiOutlineGenDoc.tsx:342`）。
+- KB 页提示词 `parseChatCompletion.ts:171`：`hasRetrieval=true` 分支第 4 条要求「可在句末用 [文档1][文档2] 标注」；`false` 分支禁止。
+- KB 页操作区（`KbOutlineGenDoc.tsx:813-824`）：「选择大纲 / 内容生成 / 文档下载」三个 dashed 按钮，目前**没有 Checkbox/Switch**。
+- 体裁轴（十八章的 report/selection/review/generic/research）**代码里尚未落地**（`grep Genre` 零命中）⇒ 本轮**不要**做"按体裁给默认值"，先做全局开关，体裁默认值留 P2。
+
+### 30.2 落地设计（照此实现）
+
+**① 状态与持久化**
+
+```ts
+const KEEP_CITE_KEY = "bifang.doc.keepCitations";
+const [keepCitations, setKeepCitations] = useState<boolean>(() => {
+  const v = localStorage.getItem(KEEP_CITE_KEY);
+  return v === null ? true : v === "1";   // 默认保留（研究性文档需要）
+});
+const onKeepCitationsChange = (v: boolean) => {
+  setKeepCitations(v);
+  localStorage.setItem(KEEP_CITE_KEY, v ? "1" : "0");
+};
+```
+
+**② UI**（`KbOutlineGenDoc.tsx`，放在「文档下载」按钮**上方**，与按钮同宽）
+
+```tsx
+<div style={{marginBottom: 8}}>
+  <Checkbox checked={keepCitations}
+            onChange={(e) => onKeepCitationsChange(e.target.checked)}>
+    保留来源标注 [文档N]
+  </Checkbox>
+  <div style={{fontSize: 12, opacity: 0.65, marginTop: 2}}>
+    {keepCitations ? "正文保留 [文档N]，导出时自动附「资料来源」" : "正文隐去 [文档N]，导出时不附来源清单"}
+  </div>
+</div>
+```
+`Checkbox` 从 `antd` 引入（页面已在用 Button/Tag/Flex/Spin 等 antd 组件）。**Ai 页不加这个开关**（无检索，恒隐去）。
+
+**③ 提示词端（影响新生成的内容）**
+`buildKbDocWritingConstraintPrompt(budget, {hasRetrieval, allowCitations})` —— 增加 `allowCitations?: boolean`：
+- `hasRetrieval && allowCitations` → 现在的第 4 条（可标注）；
+- `hasRetrieval && !allowCitations` → 换成「禁止输出任何 [文档N] 类引注标记，数据照常给，但不标出处」（与 Ai 页那条同源措辞）。
+调用点 `KbOutlineGenDoc.tsx:442` 传入 `keepCitations`。**默认行为保持不变**（`allowCitations` 缺省 = true）。
+
+**④ 导出端（兜底，对已生成内容立即生效，不必重生成）**
+在 `saveDoc()` 里、渲染之前：
+```ts
+const srcChapters = keepCitations ? chapters : stripCitationsDeep(chapters);
+```
+⚠️ **必须深拷贝后再剥**——直接改 `chapters` 里的 content 会把标注永久删掉，开关切回「保留」也找不回来。
+新增纯函数（建议放 `parseChatCompletion.ts`，与剥离函数同文件）：
+```ts
+export function stripCitationsDeep<T>(chapters: T[]): T[]  // 结构克隆 + 对每个段落 content 跑 stripHallucinatedDocCitations，返回 stripped 总数
+```
+导出后 `console.info("[DocCite] 隐去来源标注 N 处")`。
+
+**⑤ 与「资料来源」清单联动（二十九章 P0）**
+- `keepCitations === true` ⇒ 文末追加「资料来源」（去重文件名 + 页码）；
+- `keepCitations === false` ⇒ 不追加（正文都隐去了，列清单反而突兀；等 P2 再加"仍附数据来源"选项）。
+
+**⑥ 追加位置的老坑再强调一次**（二十九·P0 已写，别忘）
+「资料来源」必须在 `applyHeadingLevels` + `stripHeadingAutoNumbering` **之后** append，且**不进 `chapters` 数组**，否则会被算成第 5 章（`5 资料来源`），把二十六刚修好的编号和 TOC 又弄坏。
+
+### 30.3 顺序建议
+
+`③ + ④`（开关本体，1 小时内可完）→ `②` UI → `⑤` 资料来源清单（二十九 P0）。
+`stripCitationsDeep` 与 `allowCitations` 各补 1 条 jest（放进 `tests/docFenceDegrade.test.ts` 或新建 `tests/docCitation.test.ts`）。
+
+### 30.4 验收（我来跑）
+
+1. 开关 = 保留：正文 `[文档N]` 在、文末有「资料来源」、章节编号仍是 1–4；
+2. 开关 = 隐去：正文 `judge.py` 的 `[文档` 计数 = 0、无连续空格/「 ，」这类剥离残留、文末无清单、字数与保留版基本一致（差 = 标注字符数）；
+3. 开关来回切：**保留版导出后切到隐去再切回保留，标注仍在**（验证 ④ 没改坏 state）；
+4. 不重生成、只切开关再导出，隐去应立即生效（验证 ④ 的兜底路径）。
+
+## 三十一、当前执行序（用户已确认，按此开工，勿跳步）
+
+只做下面 3 个任务，做完就停，等用户重生成导出后由助手判卷。不要顺手改别处。
+
+### 任务 1 —— 28.1：定位 4.2 段图 7 的 blocked（先定位，别急着改业务）
+
+1. `DocBlockInjector.ts` 的 blocked 分支增加诊断输出：
+   `console.warn("[DocBlock] figure-blocked", {ref, allowed: allowed.length, sample: allowed.slice(0,3)})`；
+2. 同一分支加 jest 断言（放进 `tests/docFigureSupply.test.ts`）：blocked 时 `kind === "figure-blocked"` 且 caption 保留；
+3. **先只做诊断**，把结论写进 `.workbuddy-handoff.md`：
+   - `allowed.length === 0` ⇒ 根因在**材料池分配器（4B）**，结论章（4.x）没分到 `key_assets`。此时再做：确认 `allowFigure` 用的是**段级**清单（21.9 与 23.13 判定源对齐）；段级清单为空时生成阶段就该 `allowFigure=false`（源头禁图）。
+   - `allowed.length > 0` ⇒ 是模型改写 ref（23.13 复发）或两份清单不一致，按 28.1 第 2 条处理。
+4. 顺带（P2，同文件）：blocked 段**不要生成题注**（现在段 56 空挂一个「图 7 …」更难看）。
+
+### 任务 2 —— 三十章：来源标注开关（提示词端 + 导出端 + UI）
+
+1. `parseChatCompletion.ts`：`buildKbDocWritingConstraintPrompt(budget, {hasRetrieval, allowCitations})` 增 `allowCitations`（缺省 true，行为不变）；
+2. 同文件新增 `stripCitationsDeep(chapters)`：**深拷贝** + 对每个段落 content 跑 `stripHallucinatedDocCitations`，返回剥离总数；
+3. `KbOutlineGenDoc.tsx`：`useState` + localStorage `bifang.doc.keepCitations`（默认 true）；「文档下载」按钮上方加 antd `Checkbox`；`saveDoc()` 内 `keepCitations ? chapters : stripCitationsDeep(chapters)`；
+4. jest：`allowCitations=false` 的提示词含「禁止输出任何 [文档N]」；`stripCitationsDeep` 不改入参（深拷贝验证）+ 剥离计数正确。
+
+### 任务 3 —— 二十九·P0：资料来源清单（挂在开关下）
+
+1. 生成阶段保存后端返回的 `ref_docs`（目前前端零消费，`kb_service.py:929-943` 已返回 `{id,title,source,page,link}`）；
+2. 导出时若 `keepCitations === true`：在 `applyHeadingLevels` + `stripHeadingAutoNumbering` **之后** append 一段「资料来源」（去重文件名 + 聚合页码），**不进 `chapters` 数组**；
+3. 必须验证：章节编号仍是 1–4，没有多出「5 资料来源」，TOC 不变。
+
+### 仓库卫生（顺手，1 行）
+
+`git rm -r --cached .workbuddy/tmp .workbuddy/tmp2 frontend/tmp` + `.gitignore` 加这三行。助手侧 UNC 下删不掉。
+
+### 交付与验收
+
+- 每个任务各跑相关 jest 全绿后在 handoff 写明；
+- 三个任务完成后用户 UI 重生成导出新 docx，助手跑：
+  `ab/judge.py`（drawings/题注/编号/字数/泄漏）、`ab/cite_check.py`（引用计数与位置）、以及开关两种取值各导出一份对比。
+
+## 三十二、开关版两份产物判卷：三件事（日期月份、图文不符、图仍 blocked）
+
+样本：`桌面/…-Kb-v2026921-开.docx`（开关=保留）、`…-Kb-v2026921-关.docx`（开关=隐去）。
+判卷：`ab/judge.py`、`ab/cite_check.py`、`ab/space_check.py`、`ab/extract_media.py`。
+
+### 32.0 开关本身：**PASS**
+
+| 项 | 开（保留） | 关（隐去） |
+|---|---|---|
+| 正文 `[文档N]` | 21 处 ✅ | **0 处** ✅ |
+| 文末「资料来源」 | 7 行（去重文件名 + 聚合页码）✅ | **无** ✅（联动正确） |
+| 剥离残留（空格+标点/空括号/行首空格） | — | **全 0** ✅ |
+| 章节编号 / TOC | 1–4，无叠加 ✅ | 1–4 ✅ |
+| 题注 | 图1–4 / 表1–4 递增 + dirty ✅ | 图1–6 / 表1–2 ✅ |
+| 泄漏（``` / figureref / DOCBLOCK / kb:） | 全 0 ✅ | 全 0 ✅ |
+
+⚠️ **验收姿势要改**：这两份是**两次独立生成**（开版 4 图/4 表，关版 6 图/2 表，正文字数 5857 vs 5850），内容不同 ⇒ 不能直接对比字数与图表数。
+正确做法：**生成一次 → 只切开关导出两次**，才能证明"隐去只删标注、不动正文"。
+
+### 32.1 日期版本号月份小 1（P0，纯 bug，4 处）
+
+`getMonth()` 返回 0–11，均未 +1：
+- `KbOutlineGenDoc.tsx:237`（KB→Word，用户手上 `2026921` = 2026-9-21，实际 10-21）
+- `AiOutlineGenDoc.tsx:180`（Ai→Word）
+- `AiOutlineGenPpt.tsx:255`（Ai→PPT）
+- `KbOutlineGenPpt.tsx:304`（KB→PPT，**且 `:305` 文件名写成 `-Ai-v`，应为 `-Kb-v`**）
+
+统一修法（4 处都换，别各写一套）：
+
+```ts
+const p2 = (n: number) => String(n).padStart(2, "0");
+const curSimpleDateStr =
+  `${curDate.getFullYear()}${p2(curDate.getMonth() + 1)}${p2(curDate.getDate())}`;
+```
+顺带的好处：现在 `10 月 5 日` 会生成 `2026105`（与 `2026-1-05` 混淆），补零后恒为 8 位 `20261005`。
+
+### 32.2 「衣服取了裤子和鞋」——不是幻觉，是图清单里没有语义（P0）
+
+**实证**：我把 `…关.docx` 的 media 解包看过，`img6.png`（694×1580，竖长条）**就是一条牛仔裤 + 黑色皮鞋**，却被放在 `3.4 热销店铺与销量`，题注写成「抖音电商热销爆款店铺示例」。
+
+根因两层：
+
+**① 图清单给模型的是纯 ref、没有 caption（直接原因）**
+`DocKeyAssetRow`（`docFigureAssets.ts:12-18`）只有 `source / file_name / asset_ids / page / chunk`，**没有 caption**。
+`buildFigureAssetAppendix`（`:168-172`）虽然支持 `建议图注：${e.caption}`，但从 `keyAssets` 构造时拿不到 caption ⇒ 模型看到的是：
+```
+- kb:24SS抖音风格趋势白皮书-男装.pdf/…_p9_img2.png
+```
+它只能凭**文件名猜内容**，于是"店铺示例"猜到了牛仔裤图。**这不是模型乱编 ref（blocked 才是），是白名单内盲选。**
+
+**② 跨文档污染（放大原因）**
+这次的「资料来源」暴露了检索范围：**7 份文档**，含
+`2024抖音服饰行业趋势报告` / `2025春夏运动男装数据洞察` / `24SS抖音风格趋势白皮书-男装` / **`抖音单品爆款分析-连衣裙`** / `抖音单品爆款分析-男装T恤` / `…商务男士衬衫polo衫` / `男装消费趋势洞察-艺恩`。
+衬衫章节分到了运动男装/趋势报告的 chunk，其 `asset_ids` 里就是牛仔裤图。
+
+**修法（按优先级）**
+
+1. **P0｜`key_assets` 行补 `captions: string[]`（与 `asset_ids` 同序）**，后端从图注/页文本/OCR 里取；前端拼进 `建议图注：`。
+   没有这一步，任何"让模型自己选图"的方案都是盲选。这是本次最根本的一处。
+2. **P0｜图-段主题相关性闸（前端兜底）**：候选图的 `source` 文档名与段标题/正文的品类词冲突（如段讲"衬衫/polo"，source 含"连衣裙/运动/裤/鞋"）→ 不作为候选；白名单为空时 `allowFigure=false`（源头禁图）。
+3. **P1｜检索 scope 收紧**：有绑定源文档时**默认单文档**（产品已定）；全库检索时材料池按文档级相关性先过滤，别把 7 份不同品类一起塞进一章。
+4. **P2｜图形态规则**：`h/w > 1.6` 的竖长条视为单品图，只在段标题含「款式/示例/单品/穿搭」时允许；「店铺/大盘/价格带」类段禁止单品图。
+
+### 32.3 图 7 仍「［图片不可用］」（4.2 段，两版都在）
+
+`28.1` 的题注去除已生效（blocked 段不再空挂题注 ✅），但 blocked 本身还在。
+Cursor 已加诊断 `console.warn("[DocBlock] figure-blocked", {ref, allowed, sample})`，**需要用户下次生成时看一眼 Console 的 `allowed` 值**，一句话定案：
+- `allowed: 0` ⇒ 段级白名单为空 ⇒ **材料池 4B 没给 4.2 分配 key_assets**（此时 21.9 本应 `allowFigure=false`，请一并核为何模型仍写了 figure——说明 `allowFigure` 与 `allowedFigureRefs` 的取值时点不一致）；
+- `allowed: >0` ⇒ 模型改写 ref（幻觉），按 23.13 处理。
+
+### 32.4 P2：题注仍混模型自述
+
+开版 `表 2 / 表 3` 题注带「（表已截断）」。`cleanDocCaption()` 尚未做，建议与 25.3 文案净化同源处理。
+
+## 三十三、生成内容列表页：插图可视化 + 手动换图（2026-10-21）
+
+### 33.0 诉求与结论
+
+用户问：生成内容列表页能不能把「图引用」的图直观显示出来，要不要让用户选。
+
+**结论：能，且必须做。** 三档：P0 显示（本轮必做）、P1 段内换图（本轮必做）、P2 跨候选扩选（下一轮）。
+
+为什么现在必须做（成本账）：
+- 现状 `OutlineResultDoc.tsx:96` 只渲染 `paragraph.content`（pre-wrap）+ 一个「含图N」Tag，
+  **图在导出前完全不可见**。上一轮三十二章「3.4 热销店铺配了牛仔裤+皮鞋」只能在导出的 docx 里发现，
+  返工成本 = **一次完整生成（13 段 × HTTP）+ 一次导出**；做成列表页可视化后，返工 = 一次点击。
+- 三十二章的 blocked（4.2 图不可用）同理：现在是导出后才知道，做成列表页卡片后**当场可补图**，
+  不必重生成——这比继续查 28.1 的 allowed.length 更快见效。
+
+### 33.1 可行性：数据与接口全部就绪（已核过，不需要后端改造）
+
+| 需要的东西 | 现状 | 位置 |
+|---|---|---|
+| 本段用了哪张图 | `paragraph.blocks: DocBlock[]`，figure 块含 `assetRef` + `caption` | `ViewItem4Doc.ts:117-119`、`ViewItem4Doc.ts:131` |
+| 本段候选图清单 | `paragraph.allowedFigureRefs: string[]`（生成时写入，6 条上限） | `ViewItem4Doc.ts:158-162`、`KbOutlineGenDoc.tsx:473-479` |
+| 图片可直接 `<img>` 显示 | 后端 `list_assets` 返回 `url: /knowledge_base/asset_file?kb&file_name&asset_id`；该路由**无鉴权依赖**，直接 `FileResponse` | `kb_service.py:594`、`routers/knowledge_base.py:243-258` |
+| asset_id 解析 | `resolve_asset_path` 支持 `elements/xxx_p4_img1.png`、`whole/page_4.png`、`xxx_p4_0.png`（normalize_asset_id 多候选），且拒绝路径穿越 | `kb_service.py:678-699` |
+| 可复用的选图交互 | PPT 侧已有 `ImageGridAssetPicker`（宫格 + 手选 + 回写） | `ImageGridAssetPicker.tsx`，`OutlineTreeEditor.tsx:877` |
+
+⚠️ 所以**不要先调 `listAssets` 再拿 url**——`ref` 里 fileName/assetId 都有，直接拼 url 即可，零额外请求。
+`listAssets` 只在 P2 扩选（要拉候选以外的图）时才用。
+
+### 33.2 P0：段内插图卡片（显示）
+
+在 `OutlineResultDoc.tsx:96` 的 `{paragraph.content}` 下面追加 `<FigureStrip>`：
+
+```tsx
+// 新增 src/components/DocUtil/DocFigureStrip.tsx（纯展示 + 可选换图入口）
+type Props = {
+  paragraph: Paragraph;
+  kbName?: string;
+  editable?: boolean;
+  onPick?: (blockIndex: number, nextRef: string, nextCaption?: string) => void;
+};
+```
+
+每段渲染规则（`paragraph.blocks` 全量遍历，保持与 `prepareChaptersBlocks` 同序）：
+
+1. `kind === "figure"` 且能 `parseKbAssetRef` → 卡片：缩略图（max-height 160px）+ caption +
+   来源小字（`fileName` + `p{page}`）+ **风险标记**。
+2. 同一个 figure 块若渲染期判为 missing/blocked，卡片盖红色角标「导出将缺失」，并给「选一张」按钮（见 33.6）。
+3. `blocks` 为空但 `countParagraphMedia` 说有图（即围栏还在 content 里、未 absorb）→ 显示
+   「图未解析」灰卡，提示重生成该段。这种情况理论上不该出现，出现即 Bug，值得告警。
+
+**风险标记（三十二章的教训，直接前置到 UI）**：
+- 整页图（assetId 以 `whole/` 开头，或不匹配 `_p(\d+)_(img|chart)\d+`）→ 标「整页图·将降采样」；
+- `h/w > 1.6` 的竖长条 → 标「竖版单品图」（裤鞋图就是这个形态，用户一眼能看出不对）；
+- 图片 `onError` → 标「加载失败」，不要静默空白。
+
+### 33.3 P1：段内换图（选择）
+
+交互：**默认只展示，不打断**。卡片右上角一个「换图」按钮 → `Modal` 里宫格展示本段
+`allowedFigureRefs` 的全部候选（缩略图 + caption + 来源），点选即写回。
+
+```
+卡片: [缩略图] 图题xxx
+      抖音单品爆款分析-…pdf · p4 · 整页图·将降采样   [换图] [移除]
+```
+
+写回逻辑（页面侧回调，以 `KbOutlineGenDoc.tsx` 为例）：
+```tsx
+const onFigureChange = (chKey: string, pKey: string, blockIndex: number, nextRef: string) => {
+  setChapters(prev => prev.map(ch => {
+    if (ch.key !== chKey) return ch;
+    return {...ch, paragraphs: (ch.paragraphs || []).map(p => {
+      if (p.key !== pKey) return p;
+      const blocks = [...p.blocks];
+      const b = blocks[blockIndex];
+      if (!b || b.kind !== "figure") return p;
+      blocks[blockIndex] = {...b, assetRef: nextRef};
+      // ★ 33.5：手选 ref 必须并进白名单，否则导出被判 figure-blocked
+      const allowed = Array.isArray(p.allowedFigureRefs) ? [...p.allowedFigureRefs] : [];
+      if (!allowed.includes(nextRef)) allowed.push(nextRef);
+      return {...p, blocks, allowedFigureRefs: allowed};
+    })};
+  }));
+};
+```
+
+「移除」= 从 `blocks` 里 splice 掉该 figure（不要把 `allowedFigureRefs` 清空，
+否则同段后续再换图会全 blocked）。
+
+### 33.4 P2：跨候选扩选（下一轮）
+
+`allowedFigureRefs` 上限是 6 条（`figureAssetsFromAssignedKeys(assigned, keyAssets, 6)`，
+`KbOutlineGenDoc.tsx:473`），模型只能在里面挑。用户若都不满意：
+Modal 里加「更多」→ `listAssets({knowledge_base_name: kbName, file_name: <本段候选的 fileName>, kinds: "image,chart"})`
+（默认 kinds 返回的正是 `elements/` 裁切图，100–323 KB，符合三十二章「优先裁切图」的结论）。
+选中的同样按 33.5 并入白名单。
+
+### 33.5 ★ 最容易踩的坑：手选 ref 必须同步进白名单
+
+渲染期校验在 `DocBlockInjector.ts:486-514`：段级白名单来自
+`collectParagraphAllowedFigureRefLists(chapters)`（`docFigureAssets.ts:118-136`），
+不匹配 → `kind: "figure-blocked"` → 导出变「［图片不可用］」。
+
+即：**用户手选成功、UI 显示正常、导出却是空图**。所以 33.3 那段 `allowed.push(nextRef)` 是硬要求，
+不是可选优化。建议在 `docFigureAssets.ts` 加纯函数便于单测：
+
+```ts
+/** 三十三·5：手选后同步白名单（纯函数，可测） */
+export function applyManualFigureRef(
+  p: {blocks: Array<{kind: string; assetRef?: string}>; allowedFigureRefs?: string[]},
+  blockIndex: number,
+  nextRef: string,
+): {blocks: Array<{kind: string; assetRef?: string}>; allowedFigureRefs: string[]} {
+  const blocks = p.blocks.map((b, i) =>
+    i === blockIndex && b.kind === "figure" ? {...b, assetRef: nextRef} : b);
+  const allowed = [...(p.allowedFigureRefs || [])];
+  if (!allowed.includes(nextRef)) allowed.push(nextRef);
+  return {blocks, allowedFigureRefs: allowed};
+}
+```
+
+### 33.6 blocked / missing 段：列表页直接补图（顺带收敛 28.1）
+
+生成结束、导出之前，`blocks` 里不会有 blocked 记录（那是**渲染期**才判的）。所以要在列表页预判，
+用同一套归一口径提前算一遍：
+
+```ts
+// 与 DocBlockInjector 同源：normalizeKbAssetRef + allowed 集合
+export function previewFigureStatus(p: Paragraph): Array<{index: number; ok: boolean; reason?: string}> {
+  const allowed = new Set((p.allowedFigureRefs || []).map(normalizeKbAssetRef));
+  return p.blocks.flatMap((b, i) => {
+    if (b.kind !== "figure") return [];
+    if (allowed.size === 0) return [{index: i, ok: false, reason: "本段无可用插图资产"}];
+    if (!allowed.has(normalizeKbAssetRef(b.assetRef))) return [{index: i, ok: false, reason: "ref 不在本段候选内"}];
+    return [{index: i, ok: true}];
+  });
+}
+```
+
+`ok: false` 的卡片直接显示红角标 + 「选一张」（走 33.3 同一 Modal，候选 = `allowedFigureRefs`）。
+用户补完再导出，即可绕过 4.2 的 blocked —— **这条落地后，28.1 的 Console 诊断就不阻塞验收了**。
+
+### 33.7 UI / 性能要点
+
+- `OutlineResultDoc` 是 antd `Collapse accordion`，**同时只展开一个段** ⇒ 天然懒加载，
+  不必额外做虚拟列表；但候选 Modal 打开时才发图请求即可。
+- 图片 url 走 `<img src>`（后端无鉴权），**不要**用 `fetchAssetBytes` 转 blob URL
+  （`kb.ts:198`），那是导出链用的，UI 侧用会多一次全字节下载（整页图 10 MB）。
+- `OutlineResultDoc` 需要新增 props：`kbName?: string`、`onFigureChange?: (...)`。
+  **Ai 页（`AiOutlineGenDoc.tsx:568`）不传 kbName/回调即可**（Ai 页 `allowFigure=false`，
+  `AiOutlineGenDoc.tsx:290/:301`，本就无图）；`KbOutlineGenDoc.tsx:919` 传 `kbName={kbName}` + 回调。
+- 缩略图加 `loading="lazy"`、`object-fit: contain`、灰度底，避免长图撑破面板。
+
+### 33.8 验收（我会这样判）
+
+1. 列表页展开任一段：能看到该段引用的图（不是只看到「含图1」）；
+2. 点「换图」选另一张 → 卡片图立即变化 → **导出 docx 里是新选的那张**（验证 33.5 白名单同步）；
+3. 选一张后切回原图，仍能正常导出（验证 allowed 追加不会误伤）；
+4. 4.2 段若显示红角标，补一张后导出，docx 里该段有图、「［图片不可用］」计数 = 0；
+5. jest：`applyManualFigureRef` / `previewFigureStatus` / `parseKbAssetRef`（含 `kb: a.pdf/1` 带空格、
+   `elements/xxx.png` 带斜杠、`whole/page_4.png`）至少 6 条；并入既有套件，勿新建文件。
+
+## 三十四、智能大纲构思（Ai 页）误报「全库/未选知识库」提示（2026-10-21）
+
+### 34.0 现象与定性
+
+用户在**智能大纲构思**（`AiGenDocOutline`）点「定框并构思」，弹窗里出现：
+
+> 当前为全库或未选具体知识库：检索默认「知识库补充」。选定具体库后可绑定源文档。
+
+定性：**不是报错，是 `Alert type="info"`**，但它在 Ai 页是**错误文案**——
+Ai 构思页根本没有知识库概念（无选库入口），却提示用户「选定具体库后可绑定源文档」，
+属于**无解提示**（按它说的去做也做不到）。两条问题：① 不该显示；② 文案里的「知识库补充」在 Ai 页是假事实。
+
+### 34.1 根因（已核实链路，非推测）
+
+链路：`src/pages/AiGenDocOutline.tsx:74` → `ChatWithSpeech4Doc`（**未传 `kb_name`**，
+其 props 注释 `ChatWithSpeech4Doc.tsx:25-29` 明确写「outlineTypeAiDOC 时不需要」）
+→ `ChatWithSpeech4Doc.tsx:250-255` `<OutlinePromptComposer kbName={kb_name} showVars mode="doc" />`
+⇒ `kbName === undefined`。
+
+```ts
+// OutlinePromptComposer.tsx:764-765
+const canBindFiles = Boolean(kbName) && kbName !== ALL_KB_NAME && showVars;
+// :1056 三元 → :1103-1108 else 分支无条件渲染 Alert
+```
+
+即：**「无库（Ai）」与「选了全库（KB）」被合并成同一个 else 分支**，前者不该提示、后者才需要提示。
+`canBindFiles` 本身的计算是对的，错的是 else 兜底没区分「有没有库上下文」。
+
+同源受影响：`ChatWithSpeech4Ppt.tsx:312`（`AiGenPptOutline` 同样不传 `kb_name`）⇒ **PPT 侧同 bug，改组件内部即可一并修好**。
+
+### 34.2 修法
+
+**P0**：`OutlinePromptComposer.tsx:764` 附近新增库上下文明细，并把 else 分支改成两段：
+
+```ts
+const hasKbContext = Boolean(kbName);                 // Ai 构思页无库概念
+const isAllKb = hasKbContext && kbName === ALL_KB_NAME;
+const canBindFiles = hasKbContext && !isAllKb && showVars;
+```
+
+```tsx
+// 原 :1103-1108 的 else 分支整块替换
+) : hasKbContext ? (
+  <Alert
+    type="info"
+    showIcon
+    style={{marginBottom: 8}}
+    message={`当前选中「${kbLabel(kbName)}」：检索默认「知识库补充」。如需绑定源文档，请先在知识库页选定具体库。`}
+  />
+) : null}
+```
+
+`kbLabel` 已存在（`kbSelectorModal.tsx:9-13`，`__all__` → 「全库」、空 → 「未选择」），
+在 `:10` 的 import 里补上即可（当前只引入了 `ALL_KB_NAME`）。
+
+三种场景的期望结果：
+
+| 场景 | kbName | 期望 |
+|---|---|---|
+| Ai 智能大纲构思 | `undefined` | **不显示任何 Alert**，也不显示源文档区块 |
+| KB 构思 · 选了「全库」 | `__all__` | 显示 Alert，文案含「全库」（有解：去选具体库） |
+| KB 构思 · 选了具体库 | 具体名 | 显示源文档 Select + 检索范围 Radio（现状不变） |
+
+**P1（顺手，同一文件）**：`send()` 里 `:886` / `:918`
+`const effectiveScope = files.length === 0 ? 'kb_supplement' : retrievalScope;`
+在 Ai 页（无库）也会把 `retrievalScope: 'kb_supplement'` 带进 payload。
+提示词侧目前**无污染**（`composeDocOutlineUserMessage:683` 只在 `files.length` 时写检索约束），
+但下游若读 `retrievalScope` 做 scope 决策会误判成「可从知识库补充」。
+建议：`const effectiveScope = files.length === 0 ? (hasKbContext ? 'kb_supplement' : undefined) : retrievalScope;`
+（payload 字段本身可选，见 `:707`。若下游强依赖非空，退而求其次：Ai 页传 `'bound_only'` 也不合适 → 用 `undefined` 最诚实，下游按缺省处理。）
+
+### 34.3 验收（我会在 UI 上这样判）
+
+1. Ai 智能大纲构思 → 「定框并构思」弹窗：无 Alert、无「源文档」区块；
+2. KB 构思页选「全库」→ 弹窗出现 Alert，文案含「全库」二字，且**不出现**源文档 Select；
+3. KB 构思页选具体库 → 行为与现在完全一致（源文档可多选、检索范围默认「仅用所选文档」）；
+4. 智能大纲构思（PPT）同样不出现该 Alert；
+5. jest：新增 3 条渲染断言（`kbName=undefined` / `=__all__` / `=具体库`），
+   并入既有 `OutlinePromptComposer` 相关套件，勿新建测试文件。
+
+### 34.4 备注
+
+本条与文档生成链（二十五～三十三章）无关，属**构思入口 UI**，可独立排期、不阻塞三十三章。
+
+## 三十五、插图候选支持「本地上传」（2026-10-21）
+
+### 35.0 诉求与结论
+
+用户问：图片候选（三十三章 33.3 换图宫格 / 33.4 扩选）能不能加上**本地上传文件**的选项。
+
+结论：**能，而且契约早就预留了，只是没接线**。推荐 **方案 A（浏览器 IndexedDB 暂存）**，零后端改造。
+
+前提：三十三章的换图弹窗（P1）；若想更早见效，可先做最小版——段落插图卡片下直接放一个「上传本地图片」按钮。
+
+### 35.1 现状：`upload:` 契约已存在，但缺 resolveUpload（已核实）
+
+```ts
+// DocBlockInjector.ts:594-607
+if (ref.startsWith("upload:")) {
+  const key = ref.slice("upload:".length).trim();
+  if (!opts.resolveUpload || !key) return null;   // ← 没有任何调用方传 resolveUpload
+  ...
+}
+```
+- 类型 `ResolveUploadBytes` 已定义：`DocBlockInjector.ts:33-35`；
+- 但 `grep resolveUpload src/` **零命中**（除定义处）⇒ 现在写 `upload:xxx` 必然判 `figure-missing`。
+- 调用点（要在这里补 opts）：`KbOutlineGenDoc.tsx:269` `resolveBlocksToPayloads(blockLists, {...})`；
+  Ai 页 `AiOutlineGenDoc.tsx:205` 同源（Ai 禁图，可不接，但建议接上保持一致）。
+
+顺序提醒（`DocBlockInjector.ts:505-523`）：**白名单判定在取字节之前** ⇒
+upload ref 同样受 `allowedFigureRefs` 约束，必须按三十三·5 push 进白名单，否则 blocked。
+
+### 35.2 存储方案选型
+
+| 方案 | 后端改造 | 刷新后仍在 | 跨设备 | 结论 |
+|---|---|---|---|---|
+| **A. IndexedDB 暂存（推荐）** | 无 | ✅ | ❌ | 导出在浏览器内完成（docxtemplater + PizZip + saveAs），够用 |
+| B. 后端临时上传端点 | 需新端点 + 过期清理 | ✅ | ✅ | 只有「换台电脑继续编辑」才需要，成本高三倍以上 |
+| C. localStorage / base64 | 无 | ✅ | ❌ | 5 MB 上限，一张图就爆，**不可行** |
+
+### 35.3 实现步骤
+
+**① 新文件 `frontend/src/components/DocUtil/docUploadAssets.ts`**（I/O 集中在此，纯函数仍放 `docFigureAssets.ts`）
+
+```ts
+type UploadAssetMeta = {key: string; name: string; mime: string; bytes: number; w: number; h: number; createdAt: number};
+
+export async function saveUploadAsset(file: File): Promise<UploadAssetMeta | null>;
+export async function readUploadAsset(key: string): Promise<{bytes: ArrayBuffer; mime: string} | null>;
+export async function listUploadAssets(): Promise<UploadAssetMeta[]>;
+export async function deleteUploadAsset(key: string): Promise<void>;
+export async function uploadAssetPreviewUrl(key: string): Promise<string | null>;  // blob URL，内部缓存
+export async function purgeUploadAssets(olderThanDays = 7): Promise<number>;
+```
+
+IndexedDB：库 `bifang-doc-uploads`，store `assets`，key = `u_<uuid>`（**不含 `upload:` 前缀**，
+前缀由 `formatUploadAssetRef` 加，与 `kb:` 的处理保持一致）。
+**降级**：`indexedDB` 不可用时回退内存 Map，并在 UI 提示「本次会话有效，刷新后需重新上传」。
+
+`saveUploadAsset` 内部顺序：校验 mime → 读 ArrayBuffer → **超限先用 `defaultResizeImage`
+（`DocBlockInjector.ts:69`，与 25.1 同一实现）压到宽 ≤1200 / q0.85** → 存 → 返回 meta。
+
+**② `docFigureAssets.ts` 增加**
+
+```ts
+export function formatUploadAssetRef(key: string): string { return `upload:${key}`; }
+export function isUploadAssetRef(ref: string): boolean { return normalizeKbAssetRef(ref).startsWith("upload:"); }
+```
+
+**③ 白名单**：`applyManualFigureRef`（三十三·5）对 upload ref **天然适用**（只做字符串 push），
+不要为 upload 单独开口子——否则绕过白名单会让「模型改写 ref」的防线失效。
+但**渲染侧**要认：`upload:` 前缀的 ref 在 `collectParagraphAllowedFigureRefLists` 里原样带出即可，无需改。
+
+**④ 导出 opts**（`KbOutlineGenDoc.tsx:269`）
+
+```ts
+const payloads = await resolveBlocksToPayloads(blockLists, {
+  kbName,
+  fetchKbAsset: async ({kbName: kn, file_name, asset_id}) => fetchAssetBytes({...}),
+  resolveUpload: async (key) => readUploadAsset(key),     // ← 新增
+  allowedFigureRefsByList: collectParagraphAllowedFigureRefLists(renderChapters),
+});
+```
+
+**⑤ UI**
+- 换图弹窗（33.3 宫格）末尾插一张「＋ 本地上传」虚线卡片 → antd `Upload`（`beforeUpload` 返回 `false`，
+  `showUploadList={false}`，`accept="image/png,image/jpeg,image/gif"`）；
+- 上传成功后该图插入宫格并**自动选中**，同时按 33.5 写回 `blocks` + `allowedFigureRefs`；
+- 段落插图卡片（33.2）显示时：`isUploadAssetRef` 为真 → 用 `uploadAssetPreviewUrl(key)` 作 `src`
+  （**不能拼 `/knowledge_base/asset_file`**），并在来源小字标「本地上传 · 原文件名」。
+
+### 35.4 硬约束（4 条，缺一即出废图）
+
+1. **mime 白名单**：只收 `image/png | image/jpeg | image/gif`。
+   ⚠️ **webp/avif/bmp 必须拒绝或前端转 PNG**——`mimeToExt`（`DocBlockInjector.ts:324-328`）只认
+   jpeg/gif/png，webp 会被写成 `.png` 扩展名但内容是 webp ⇒ **Word 里打不开**。
+2. **体积**：存前压到 ≤ `MAX_IMG_BYTES`（1.5 MB，`DocBlockInjector.ts:20-21`）；>10 MB 直接拒绝，
+   防 IndexedDB 爆仓。渲染侧 25.1 的降采样对 upload 分支**同样生效**（`:530-556`），无需再改。
+3. **白名单**：upload ref 必须进 `allowedFigureRefs`（同 33.5），否则 `figure-blocked`。
+4. **导出时读不到 → 明确降级**：`readUploadAsset` 返回 null 时，占位文案要区别于 KB 缺失，
+   写「本地上传图已失效，请重新上传」；**不要静默写成「图片不可用」**（用户会以为系统坏了）。
+
+### 35.5 验收（我会这样判）
+
+1. 换图弹窗上传一张本地 PNG → 宫格出现该图并自动选中 → 列表页卡片显示该图；
+2. **不重新生成直接导出** → docx 的 media 里多出该图（字节与上传文件可比对的尺寸/体积）；
+3. 刷新页面后，列表页卡片仍能显示（验证 IndexedDB 持久化）→ 再导出一次仍成功；
+4. 上传一张 >10 MB 的图 → 被压到 ≤1.5 MB 且仍能导出（验证 25.1 路径对 upload 生效）；
+5. 上传 .webp → 被拒绝并给出可读提示（或被转成 PNG），**不得**产出打不开的图；
+6. 手动删掉 IndexedDB 该条 → 导出时给出「本地上传图已失效」提示，而非静默缺失；
+7. jest：`formatUploadAssetRef` / `isUploadAssetRef` / `saveUploadAsset` 的 mime 拒绝与压缩分支
+   （jsdom 需 fake-indexeddb 或注入 storage 适配器），至少 5 条，并入既有套件。
+
+### 35.6 排期
+
+依赖三十三章（换图弹窗）。建议：**三十三章 P0+P1 落地后紧接着做本条**，
+UI 上把「本地上传」与「KB 候选」放进同一个宫格，用户心智才统一。
+
+## 三十六、执行序（本批次：34 → 33 → 35）（2026-10-21）
+
+用户已授权本批次三章，**按下列顺序依次落地**，每章完成后再进下一章（不要并行改，避免互相覆盖）。
+详细设计在各自章节里，**本章只给顺序、坐标与硬约束清单**，与正文冲突时以正文为准。
+
+### 36.1 顺序与理由
+
+| # | 章 | 内容 | 为什么这个顺序 |
+|---|---|---|---|
+| 1 | **三十四** | Ai 构思页误报「全库/未选知识库」提示 | 单点改动（~10 行），且是用户当前正在看到的错误提示，先消除；与后两章无耦合 |
+| 2 | **三十三** | 内容列表页插图可视化 + 段内换图 | 主力；三十五依赖它的换图弹窗 |
+| 3 | **三十五** | 候选支持「本地上传」 | 挂在三十三的宫格里，最后接 |
+
+未包含在本批次（勿顺手做，避免范围膨胀）：
+32.1 日期 `getMonth()` 未 +1（4 处）、32.2 key_assets captions + 主题闸、28.1 blocked 诊断、
+32.3 题注清洗（「（表已截断）」）。其中 32.1 是 5 分钟改动，可随时插入。
+
+### 36.2 三十四（先做）
+
+- 文件：`src/components/ChatUtil/OutlinePromptComposer.tsx`
+- `:764` 加 `const hasKbContext = Boolean(kbName);` / `const isAllKb = hasKbContext && kbName === ALL_KB_NAME;`
+  `canBindFiles = hasKbContext && !isAllKb && showVars;`
+- `:1103-1108` 的 else 整块换成 `hasKbContext ? <Alert message={\`当前选中「${kbLabel(kbName)}」…\`}/> : null`；
+  `:10` import 补 `kbLabel`（`kbSelectorModal.tsx:9-13`）。
+- 期望：Ai 构思页（`kbName=undefined`）**不显示**该 Alert、也不显示源文档区块；KB 页选全库 → 显示且文案含「全库」；KB 页选具体库 → 行为不变。
+- P1（顺手）：`:886` / `:918` 无库时 `retrievalScope` 传 `undefined`，别再写 `kb_supplement`。
+- 同源：改在组件内部即可覆盖 `ChatWithSpeech4Ppt.tsx:312`，**不要**另改一处。
+
+### 36.3 三十三（主力）
+
+- 新文件 `src/components/DocUtil/DocFigureStrip.tsx`（段内插图卡片 + 换图入口）。
+- `OutlineResultDoc.tsx:96`（`{paragraph.content}`）下挂载；组件新增 props：
+  `kbName?: string` + `onFigureChange?: (chKey, pKey, blockIndex, nextRef) => void`。
+  调用点：`KbOutlineGenDoc.tsx:919` 传两者；`AiOutlineGenDoc.tsx:568` **都不传**（Ai 页 `allowFigure=false`，本就无图）。
+- 图片 url：直接用 `ref` 拼 `/knowledge_base/asset_file?knowledge_base_name&file_name&asset_id`
+  （后端无鉴权，`routers/knowledge_base.py:243-258`），**不要**先调 `listAssets`、
+  **不要**用 `fetchAssetBytes`（会整字节下载 10 MB 整页图）。
+- 纯函数放 `docFigureAssets.ts`：`parseKbAssetRef`（`^kb:(.+?)\/(.+)$`，兼容 `elements/`、`whole/`）、
+  `applyManualFigureRef`、`previewFigureStatus`（与 `DocBlockInjector` 同源归一化）。
+- ★ **三十三·5 是硬要求**：手选 ref 必须 push 进 `paragraph.allowedFigureRefs`。
+  渲染期 `DocBlockInjector.ts:505` 的白名单判定**在取字节之前**，不进白名单 ⇒ `figure-blocked`
+  ⇒ 现象是「UI 显示正常、导出却是［图片不可用］」。
+- 卡片要标风险：整页图（将降采样）、`h/w>1.6` 竖版单品图（上一轮裤鞋图就是这个形态）、加载失败。
+
+### 36.4 三十五（最后）
+
+- 新文件 `src/components/DocUtil/docUploadAssets.ts`：IndexedDB 库 `bifang-doc-uploads`，
+  store `assets`，key = `u_<uuid>`（**不含 `upload:` 前缀**，前缀由 `formatUploadAssetRef` 加）。
+  六个函数：save / read / list / delete / previewUrl / purge(7 天)。
+  IndexedDB 不可用 → 降级内存 Map + 提示「刷新后需重新上传」。
+- 接线：`KbOutlineGenDoc.tsx:269` 的 `resolveBlocksToPayloads` opts 加
+  `resolveUpload: async (key) => readUploadAsset(key)`；Ai 页 `:205` 同（可选）。
+- UI：换图宫格末尾「＋ 本地上传」虚线卡片（antd `Upload`，`beforeUpload` 返回 false），
+  上传后插入宫格并自动选中，走与三十三·5 相同的写回路径。
+- **35.4 四条硬约束**：① 只收 png/jpeg/gif（**webp 会被 `mimeToExt` 写成 .png 但内容是 webp ⇒ Word 打不开**）；
+  ② 存前用 `defaultResizeImage` 压到 ≤1.5 MB、>10 MB 拒收；③ upload ref 同样要进白名单；
+  ④ 读不到时降级文案写「本地上传图已失效，请重新上传」，**不要**复用「图片不可用」。
+
+### 36.5 jest 要求（三章通用）
+
+- 断言**并入既有套件**（`docFigureSupply` / `docHeadingLevels` / `docFenceDegrade` / `OutlinePromptComposer` 相关），
+  **勿新建测试文件**（历史教训：`wb_review_probe.test.ts` 是评审临时探针，已删）。
+- 至少覆盖：三十四 3 条（`kbName=undefined` / `__all__` / 具体库）、
+  三十三 6 条（`parseKbAssetRef` 三种形态 + `applyManualFigureRef` + `previewFigureStatus` + 带空格 ref）、
+  三十五 5 条（mime 拒绝、压缩、key 格式、白名单写入、读不到降级）。
+- jsdom 缺 `createImageBitmap` / `OffscreenCanvas` / `indexedDB`：
+  用**可注入 hook**（`opts.resizeImage`、storage 适配器）或 fake-indexeddb，别让成功路径永远走 null 分支。
+- 跑法：`--config jest.config.js --ci --runInBand --testPathPattern='(X)'`，UNC 下必须 mock `@/services/chatchat/kb`。
+
+### 36.6 仓库卫生（顺手，UNC 下我删不掉）
+
+```
+git rm -r --cached .workbuddy/tmp .workbuddy/tmp2 frontend/tmp
+```
+并在 `.gitignore` 补 `.workbuddy/tmp/`、`frontend/tmp/`（这些是我的审计临时文件，被历史提交带进库了）。
+
+### 36.7 验收（由用户在 UI 完成，助手判卷）
+
+1. 三十四：Ai 智能大纲构思「定框并构思」弹窗无 Alert；KB 页选全库有 Alert 且含「全库」。
+2. 三十三：列表页能看到段内引用的图；换图后**不重新生成直接导出**，docx 里是新选的图
+   （这条同时验证三十三·5 白名单同步）。
+3. 三十五：上传本地 PNG → 刷新页面 → 再导出一次，docx 仍有该图；webp 被拒或转 PNG。
+4. 助手侧脚本：`ab/judge.py`（层级/字数/表/图/泄漏）、`ab/cap_check.py`（题注递增）、
+   `ab/cite_check.py`（引用分布）、`ab/num_check.py`（编号叠加回归）。
+
+### 36.8 回执
+
+按现行规则回执「已完成: 三十六」，并逐条列出三章各改了哪些文件、jest 结果、
+以及 36.6 仓库卫生是否执行。
+
+## 三十七、大纲列表标题溢出 + 智能文章生成页对齐知识库页（2026-10-21）
+
+> 基线：`68a2835` + 三十三/三十五章的工作区未提交改动（`DocFigureStrip.tsx`、`docUploadAssets.ts` 已存在）。
+> 行号可能随后续改动漂移，**以函数名为准**。
+
+### 37.1 「大纲预览」抽屉标题溢出（P0，用户已截图）
+
+**现象**：列表里第一条「如何帮助选品师筛选出抖音男装的爆品」折成两行，第二行「爆品」压到下一条
+（第 2 条「抖音商务男装爆品选品」）上，视觉上像两条粘在一起。
+
+**根因**（`OutlineSelectRadio.tsx`，三个叠在一起）：
+
+| # | 位置 | 问题 |
+|---|---|---|
+| 1 | `radioStyle`（约 :78-85） | 写死 `height: '1.6em'` + `display:'block'`。文本换行后**高度不增长**，第二行直接溢出到下一个 `Row` —— 这是"压行"的直接原因 |
+| 2 | `showName()`（约 :94-100） | 按**字符数** 20 截断 + `"..."`。中文字号 `1.3em`，20 字宽远超 `Col span=18`（抽屉 1400px × 38% × 18/24 ≈ 400px）⇒ 截了还是会换行 |
+| 3 | `Tooltip title`（约 :188） | 显示的是 `chapterHint`（前 4 个章名 + ID），**不是被截断的全名** ⇒ 用户被截了也看不到全名 |
+
+**修法**（交给 CSS，别再按字数截）：
+
+```tsx
+// 1) 去掉固定高度，改 flex 单行
+const radioStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: '1.1em',
+  lineHeight: '1.6',
+  whiteSpace: 'nowrap' as const,
+  minWidth: 0,
+  width: '100%',
+};
+```
+
+```tsx
+// 2) 标题单独占位、单行省略；Tag 不压缩
+<Radio key={item.outlineId} style={radioStyle} value={item.outlineId}>
+  <Tag color="blue" style={{flex: '0 0 auto'}}>{i + 1}</Tag>
+  <Tooltip
+    title={
+      <div>
+        <div style={{fontWeight: 500}}>{item.outlineName}</div>
+        <div style={{opacity: 0.8}}>{chapterHint(item.outlineContent)}</div>
+        <div style={{opacity: 0.8}}>ID: {item.outlineId}</div>
+      </div>
+    }
+  >
+    <span style={{flex: '1 1 auto', minWidth: 0, overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+      {item.outlineName}
+    </span>
+  </Tooltip>
+  <Tag style={{marginLeft: 4, flex: '0 0 auto'}}>{chapterCount(item.outlineContent)} 章</Tag>
+</Radio>
+```
+
+3) 删掉 `showName()`（或保留但仅用于 `document.title` 之类，不用于显示）。
+4) `Row` 里的 `Col span={18}` / `Col span={6}` 建议改 flex：左列 `flex:'1 1 auto'; minWidth:0`，
+   右列（改名/删除/下载三个图标）`flex:'0 0 auto'`，避免窄屏再次挤压标题。
+5) 顺手：`Row` 的 `borderBottom: '1px solid #000'` 太重，建议 `var(--color-border-tertiary)` 或 antd `Divider` 级灰。
+
+**验收**：40 字长标题只占一行、末尾省略号，hover 显示完整标题；20 条大纲连续排列不重叠；
+改名输入框仍可用；`N 章` Tag 不被压缩换行。
+
+### 37.2 「写作大纲」不展示整串模板（P1，两页共用组件，改一处两页生效）
+
+**先纠正一个前提**：`OutlinePromptDoc` 是 KB 页与 Ai 页**共用**的组件
+（`KbOutlineGenDoc.tsx:886`、`AiOutlineGenDoc.tsx:519` 都渲染它），所以"整串模板"两页都存在，
+**不存在"KB 已改、Ai 未改"的差异**。改 `OutlinePromptDoc.tsx:79-82` 一处，两页同时生效。
+
+现状（`OutlinePromptDoc.tsx` 的 `get_items`）：
+```tsx
+children: <p><Tag color={"volcano"}>提示词<br/></Tag>{paragraph.prompt}</p>
+```
+`paragraph.prompt` = `assembleDocParagraphPrompt()` 的整串（`ViewItem4Doc.ts:333+`），
+含【输出格式·文章段落】+【表…】+【图…】+【围栏格式】+ 代码块示例，每段重复一遍
+⇒ 一段 500~800 字，十几段全是同一份契约，用户无法看出"这一段真正不同的是哪几句"。
+
+**改成分层展示**（默认不摊开契约）：
+
+```tsx
+// 1) 摘要行：只读段落字段，别解析 prompt 字符串
+const b = wordBudgetFor(paragraph);
+const chips = [
+  `约 ${formatWordBudgetZh(b)} 字`,
+  `要点 ${paragraphPointLabels(paragraph).length}`,
+  paragraph.allowTable === false ? '禁表' : '可表',
+  paragraph.allowFigure === false ? '禁图' : '可图',
+  paragraph.promptManual ? '自定义提示词' : null,
+].filter(Boolean);
+
+// 2) children 结构
+<div>
+  <Space size={4} wrap style={{marginBottom: 6}}>
+    {chips.map((c) => <Tag key={c}>{c}</Tag>)}
+  </Space>
+  <Collapse
+    ghost
+    size="small"
+    items={[{
+      key: 'contract',
+      label: '写作契约与完整提示词（系统统一注入，通常无需修改）',
+      children: (
+        <div style={{whiteSpace: 'pre-wrap', fontSize: 12,
+                     color: 'var(--color-text-secondary)'}}>
+          {paragraph.prompt}
+        </div>
+      ),
+      // promptManual === true 时默认展开：这段的 prompt 是用户自己写的
+      ...(paragraph.promptManual ? {} : {}),
+    }]}
+    defaultActiveKey={paragraph.promptManual ? ['contract'] : []}
+  />
+</div>
+```
+
+硬约束：
+- **`paragraph.prompt` 仍是唯一真源**（编辑态 `EditablePromptCollapse4Doc` 保存、生成时
+  `baseBody = paragraph.prompt + kbC` 都用它）⇒ 本次只改**展示**，不碰数据与保存路径；
+- 摘要取字段（`wordBudgetFor` / `paragraphPointLabels` / `allowTable` / `allowFigure` / `promptManual`），
+  **不要**去正则切 `prompt` 字符串（会被手工改写的 prompt 打穿，见 `promptManual` 的存在意义）；
+- 分点标签沿用 `paragraphPointLabels()`，**禁止用 `paragraph.points.length`**
+  （`maxLevel≤3` 时 points 被折进 `pointGuide`，恒为 0）。
+
+### 37.3 智能文章生成页（Ai）对齐知识库页（P1）
+
+**能力差异清单**（逐项判断，不是机械照搬）：
+
+| 项 | KB 页 | Ai 页 | 判断 |
+|---|---|---|---|
+| 写作大纲空态引导 | `noOutline ? <Empty description={emptyHint}/>`（`KbOutlineGenDoc.tsx:884-888`） | 无判空，直接渲染空 Collapse（`AiOutlineGenDoc.tsx:513-519`） | **该对齐**：Ai 页未选大纲时显示「选择大纲后，提示词会显示在这里」，别给一个空白折叠面板 |
+| 提示词整串摊开 | 有 | 有 | **两页共用，见 37.2** |
+| 导出兜底剥引注 | `saveDoc` 里 `if (!keepCitations) stripCitationsDeep(...)`（`KbOutlineGenDoc.tsx:243-246`） | **无** | **该对齐**：Ai 页导出前**无条件**跑一次剥离（Ai 本就没有合法来源，且用户可能手工编辑正文带进 `[文档N]`） |
+| 引用开关 `keepCitations` | ✅ Checkbox + localStorage | ❌ | **不要照搬**：Ai 无检索、无 `ref_docs`，开关只能产出"指向不存在来源"的编号，是假开关。改为在导出区加一行灰字说明：「AI 模式无外部来源，正文不保留 [文档N]」 |
+| 文末「资料来源」 | ✅ `appendDocBibliography` | ❌ | 不适用（无 `bibliography`） |
+| 图卡片 / 换图 / 本地上传 | ✅ `DocFigureStrip`（KB :950-956 传 `kbName`+`onFigureChange`） | 未传 props（`AiOutlineGenDoc.tsx:570`） | **保持不接**：Ai 页 `allowFigure=false`（:290-292），无图可显示；若将来放开，再传 props |
+| 导出命名 | `-Kb-v` | `-Ai-v` | 已正确，勿动 |
+
+**具体改法（Ai 页两处）**
+
+① 空态（`AiOutlineGenDoc.tsx` 写作大纲 ProCard 内）：
+```tsx
+{chapters.length === 0 ? (
+  <Empty style={{marginTop: 48}}
+         description="选择大纲后，段落提示词会显示在这里。请先在【智能大纲构思】生成并保存大纲。" />
+) : (
+  <OutlinePromptDoc id="prompt-container" chapters={chapters} docTitle={title}
+                    activeKey={key} fn={cbFn} genFn={genFn} cbSaveResultFn={cbSavePromptResult}/>
+)}
+```
+
+② 导出兜底（`saveDoc`，在 `doc.render` 之前，注意**深拷贝**）：
+```ts
+import {stripCitationsDeep} from "@/components/DocUtil/parseChatCompletion";
+import {Empty} from "antd";   // 37.3① 也需要补这个 import
+...
+// 注意：返回值是 {chapters, stripped}，不是数组本身
+const {chapters: exportChapters, stripped: citeStripped} = stripCitationsDeep(chapters);
+if (citeStripped > 0) console.info("[DocCite] Ai 导出剥离引注", citeStripped);
+flagEmptyDocParagraphs(exportChapters);
+const blockLists = prepareChaptersBlocks(exportChapters);
+applyDocHeadingNumbers(exportChapters);
+doc.render({... chapters: exportChapters });
+```
+⚠️ 与三十章同一坑：**必须用返回值，不要就地改 `chapters`**，否则开关/二次导出会把正文标注永久删掉
+（Ai 页虽无开关，但重复导出会把用户手工加的标注也抹掉，仍要遵守深拷贝口径）。
+
+### 37.4 验收
+
+1. 大纲预览抽屉：40 字标题单行省略、hover 全文、条目不重叠（37.1）；
+2. 写作大纲：每段首屏只有「约 N 字 / 要点 k」等 chips + 折叠条，展开才见整串契约；
+   **编辑保存后重新展开，提示词内容与保存前一致**（验证只改展示、未动真源）（37.2）；
+3. Ai 页未选大纲：显示空态引导而非空白折叠面板；
+4. Ai 页：正文手工加一个 `[文档3]` → 导出 docx 里该标记消失，且**源数据 `chapters` 里仍在**
+   （再导一次仍会剥，验证深拷贝）（37.3）；
+5. KB 页回归：引用开关「保留/隐去」仍正常，图卡片与换图不受影响。

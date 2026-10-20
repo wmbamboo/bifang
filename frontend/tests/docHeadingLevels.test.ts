@@ -9,6 +9,7 @@ import {
   buildHeadingLevelPlan,
   inferDocMaxHeadingLevel,
   patchTocOutlineLevels,
+  stripHeadingAutoNumbering,
 } from "../src/components/DocUtil/docHeadingLevels";
 import {Chapter, Paragraph} from "../src/components/DocUtil/ViewItem4Doc";
 
@@ -94,5 +95,34 @@ describe("docHeadingLevels 22.4/22.5", () => {
     const s = zip.file("word/styles.xml")!.asText();
     const m = s.match(/w:styleId="4"[^>]*>[\s\S]*?<\/w:style>/);
     expect(m![0]).toMatch(/w:sz w:val="22"/);
+  });
+
+  test("二十六·A：stripHeadingAutoNumbering 去掉 heading 1–9 的 numPr", () => {
+    const zip = loadTemplateZip();
+    const before = zip.file("word/styles.xml")!.asText();
+    const headingWithNum = [
+      ...before.matchAll(/<w:style\b[^>]*>[\s\S]*?<\/w:style>/g),
+    ].filter((m) => {
+      const name = (m[0].match(/<w:name\b[^>]*\bw:val="([^"]+)"/) || [])[1];
+      return /^heading [1-9]$/.test(name || "") && /<w:numPr\b/.test(m[0]);
+    });
+    expect(headingWithNum.length).toBeGreaterThan(0);
+    const names = headingWithNum.map((m) => {
+      return (m[0].match(/<w:name\b[^>]*\bw:val="([^"]+)"/) || [])[1];
+    });
+    expect(names).toEqual(expect.arrayContaining(["heading 1", "heading 3"]));
+
+    const n = stripHeadingAutoNumbering(zip);
+    expect(n).toBe(headingWithNum.length);
+    const after = zip.file("word/styles.xml")!.asText();
+    const still = [
+      ...after.matchAll(/<w:style\b[^>]*>[\s\S]*?<\/w:style>/g),
+    ].filter((m) => {
+      const name = (m[0].match(/<w:name\b[^>]*\bw:val="([^"]+)"/) || [])[1];
+      return /^heading [1-9]$/.test(name || "") && /<w:numPr\b/.test(m[0]);
+    });
+    expect(still).toEqual([]);
+    // 非 heading 样式若本有 numPr 应保留（至少 styles 仍含其它内容）
+    expect(after.length).toBeGreaterThan(1000);
   });
 });

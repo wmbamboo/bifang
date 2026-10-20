@@ -94,5 +94,19 @@ for r in h:
         flag.append("含标点")
     out.append("  [%-9s] %-40s %s" % (r["style"][-9:], t[:40], " ".join(flag)))
 
+# 二十六·3：styles 里 heading 1–9 仍挂 numPr ⇒ 与手写 label 编号叠加（读 <w:t> 看不见）
+out.append("\n=== heading 自动编号（styles numPr）===")
+heading_numpr = []
+for m in re.finditer(r"<w:style\b[^>]*>[\s\S]*?</w:style>", STY):
+    block = m.group(0)
+    nm = re.search(r'<w:name\b[^>]*\bw:val="([^"]+)"', block)
+    name = nm.group(1) if nm else ""
+    if re.match(r"^heading [1-9]$", name) and "<w:numPr" in block:
+        heading_numpr.append(name)
+out.append(
+    "  heading styles with numPr: %s (期望导出产物为 0；模板源可有 9)"
+    % (heading_numpr if heading_numpr else "[]")
+)
+
 io.open(OUT, "w", encoding="utf-8").write("\n".join(out))
 print("\n".join(out[:80]))

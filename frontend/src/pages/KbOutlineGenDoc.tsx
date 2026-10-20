@@ -1,10 +1,16 @@
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import { useModel } from '@umijs/max';
 import { useTheme } from 'antd-style';
-import {Button, Empty, Spin, message, Flex, Progress, Tag} from 'antd';
+import {Button, Checkbox, Empty, Spin, message, Flex, Progress, Tag} from 'antd';
 import React, {useEffect, useState} from "react";
 import axios from "axios";
-import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, buildKbDocWritingConstraintPrompt, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
+import {
+  parseChatCompletionData,
+  WRITING_SYSTEM_PROMPT,
+  buildKbDocWritingConstraintPrompt,
+  KB_GEN_EMPTY_ERROR,
+  stripCitationsDeep,
+} from "@/components/DocUtil/parseChatCompletion";
 
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
@@ -20,6 +26,7 @@ import {
   buildHeadingLevelPlan,
   inferDocMaxHeadingLevel,
   patchTocOutlineLevels,
+  stripHeadingAutoNumbering,
 } from "@/components/DocUtil/docHeadingLevels";
 import {allocateMaterialPool, fetchAssetBytes} from "@/services/chatchat/kb";
 import {applyEntityGate, docsToEvidence} from "@/components/DocUtil/entityGate";
@@ -28,19 +35,28 @@ import {normalizeCitations} from "@/components/DocUtil/citationNormalize";
 import {applyOcrNoiseScrub} from "@/components/DocUtil/ocrNoiseScrub";
 import {scrubConclusionChapters} from "@/components/DocUtil/conclusionGate";
 import {
+  applyManualFigureRef,
   buildFigureAssetAppendix,
   collectParagraphAllowedFigureRefLists,
   countBlockedFigures,
   countUnresolvedFigures,
   figureAssetsFromAssignedKeys,
   formatKbAssetRef,
+  removeManualFigure,
   type DocKeyAssetRow,
 } from "@/components/DocUtil/docFigureAssets";
+import {readUploadAsset} from "@/components/DocUtil/docUploadAssets";
 import {
   buildFactLedger,
   formatFactLedgerAppendix,
 } from "@/components/DocUtil/docFactLedger";
 import {isConclusionChapter} from "@/components/DocUtil/conclusionGate";
+import {
+  accumulateRefDocs,
+  appendDocBibliography,
+  bibliographyFromBag,
+  type BibliographyEntry,
+} from "@/components/DocUtil/docBibliography";
 import PizZipUtils from "pizzip/utils";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
@@ -126,6 +142,25 @@ const KbOutlineGenDoc: React.FC = () => {
   const { initialState } = useModel('@@initialState');
   const [ParagraphTemplateDrawerOpen, setParagraphTemplateDrawerOpen] = useState(false);
   const [olRecs, setOlRecs] = useState<OutlineRec[]>(outlineRecs);
+  const KEEP_CITE_KEY = "bifang.doc.keepCitations";
+  const [keepCitations, setKeepCitations] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(KEEP_CITE_KEY);
+      return v === null ? true : v === "1";
+    } catch {
+      return true;
+    }
+  });
+  const onKeepCitationsChange = (v: boolean) => {
+    setKeepCitations(v);
+    try {
+      localStorage.setItem(KEEP_CITE_KEY, v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+  /** 二十九·P0：生成阶段聚合的资料来源（文件名→页码） */
+  const [bibliography, setBibliography] = useState<BibliographyEntry[]>([]);
 
   useEffect(() => {
     const recs = OutlineRec.listRecs(outlineTypeDOC, kbName);
@@ -203,9 +238,16 @@ const KbOutlineGenDoc: React.FC = () => {
             const curDate = new Date();
             const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
             const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
-            flagEmptyDocParagraphs(chapters);
-            const blockLists = prepareChaptersBlocks(chapters);
-            applyDocHeadingNumbers(chapters);
+            // 三十·④：隐去标注时深拷贝剥离，不改 state 里的 chapters
+            let renderChapters = chapters;
+            if (!keepCitations) {
+              const cite = stripCitationsDeep(chapters);
+              renderChapters = cite.chapters as Chapter[];
+              console.info("[DocCite] 隐去来源标注", cite.stripped, "处");
+            }
+            flagEmptyDocParagraphs(renderChapters);
+            const blockLists = prepareChaptersBlocks(renderChapters);
+            applyDocHeadingNumbers(renderChapters);
             const zip = new PizZip(content);
             const doc = new Docxtemplater(zip, {
               paragraphLoop: true,
@@ -223,7 +265,7 @@ const KbOutlineGenDoc: React.FC = () => {
               description: "The Acme Product",
               itemName1: "test1",
               itemName2: "test2",
-              chapters: chapters,
+              chapters: renderChapters,
             });
             const payloads = await resolveBlocksToPayloads(blockLists, {
               kbName,
@@ -233,9 +275,11 @@ const KbOutlineGenDoc: React.FC = () => {
                   file_name,
                   asset_id,
                 }),
-              // 二十三·13：段级 ref 白名单（脏 ref → figure-missing 保 caption）
+              // 三十五：本地上传 resolve
+              resolveUpload: async (key) => readUploadAsset(key),
+              // 二十三·13：段级 ref 白名单（须与 renderChapters 同源）
               allowedFigureRefsByList:
-                collectParagraphAllowedFigureRefLists(chapters),
+                collectParagraphAllowedFigureRefLists(renderChapters),
             });
             // 十·7 / 二十四·D：missing 与 blocked 分计分提示
             const unresolved = countUnresolvedFigures(payloads);
@@ -254,7 +298,7 @@ const KbOutlineGenDoc: React.FC = () => {
             }
             if (blocked > 0) {
               message.warning(
-                `有 ${blocked} 处 figure ref 不在可用清单（模型改写），已占位`,
+                `有 ${blocked} 处 figure ref 不在可用清单（模型改写或清单空），已占位`,
               );
             }
             const inj = injectDocBlocks(doc.getZip(), payloads);
@@ -263,20 +307,30 @@ const KbOutlineGenDoc: React.FC = () => {
               message.warning(inj.warning);
             }
             // 十八·P1-a：按 level 写样式 + TOC 收录级别随大纲深度
-            const maxLvl = inferDocMaxHeadingLevel(chapters);
+            const maxLvl = inferDocMaxHeadingLevel(renderChapters);
             patchTocOutlineLevels(doc.getZip(), maxLvl);
             const hl = applyHeadingLevels(
               doc.getZip(),
-              buildHeadingLevelPlan(chapters, maxLvl),
+              buildHeadingLevelPlan(renderChapters, maxLvl),
             );
             if (hl.warning) console.warn(hl.warning);
+            // 二十六·A：去 heading 自动编号，只留 label 手写编号
+            const stripped = stripHeadingAutoNumbering(doc.getZip());
+            if (stripped) console.info("[DocHeading] stripped numPr from", stripped, "heading styles");
+            // 二十九·P0 / 三十·⑤：保留标注时文末附资料来源（不进 chapters）
+            if (keepCitations && bibliography.length) {
+              const ok = appendDocBibliography(doc.getZip(), bibliography);
+              if (ok) {
+                console.info("[DocCite] 资料来源", bibliography.length, "条");
+              }
+            }
             const blob = doc.getZip().generate({
               type: "blob",
               mimeType:
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
               compression: "DEFLATE",
             });
-            saveAs(blob, title+"-Ai-v"+curSimpleDateStr+".docx");
+            saveAs(blob, title+"-Kb-v"+curSimpleDateStr+".docx");
           } catch (e) {
             console.error(e);
             message.error("生成 Word 失败");
@@ -289,6 +343,7 @@ const KbOutlineGenDoc: React.FC = () => {
 
   const genDoc = async (genKey:string="") => {
     setLoading(true);
+    if (!genKey) setBibliography([]);
     // 需要使用kbName
     const url=process.env.bf_baseUrl+'/knowledge_base/local_kb'+`/${kbName}/chat/completions`;
     // 指定header
@@ -437,6 +492,7 @@ const KbOutlineGenDoc: React.FC = () => {
         }
         const kbC = buildKbDocWritingConstraintPrompt(wordBudgetFor(paragraph), {
           allowFigure: allowFig,
+          allowCitations: keepCitations,
         });
         jobs.push({
           key: paragraph.key,
@@ -454,6 +510,7 @@ const KbOutlineGenDoc: React.FC = () => {
     console.log(`hezl setkey:${JSON.stringify(tArray)}`);
     setProgress(1);
     setProgressHidden(false);
+    const refBag = new Map<string, Set<number>>();
 
     const applyParsed = (key: string, value: any): number => {
       const parsed = parseChatCompletionData(value.data, {requireKbHits: true});
@@ -462,6 +519,7 @@ const KbOutlineGenDoc: React.FC = () => {
         return 0;
       }
       const docsRaw = (value.data as any)?.docs;
+      accumulateRefDocs(refBag, docsRaw);
       const evidence = docsToEvidence(docsRaw);
       let body = parsed.content;
       if (evidence) {
@@ -597,6 +655,25 @@ const KbOutlineGenDoc: React.FC = () => {
             "!!!!docGen result::::---------------------------" +
               JSON.stringify(chapters),
           );
+          let bib = bibliographyFromBag(refBag);
+          if (genKey.length > 0 && bibliography.length) {
+            // 单段重跑：合并进既有清单
+            const bag = new Map<string, Set<number>>();
+            for (const e of bibliography) {
+              bag.set(e.source, new Set(e.pages));
+            }
+            for (const e of bib) {
+              accumulateRefDocs(
+                bag,
+                e.pages.length
+                  ? e.pages.map((p) => ({source: e.source, page: p}))
+                  : [{source: e.source}],
+              );
+            }
+            bib = bibliographyFromBag(bag);
+          }
+          setBibliography(bib);
+          console.info("[DocCite] 聚合资料来源", bib.length, "条");
           setLoading(false);
           setProgressHidden(true);
           setChapters(chapters);
@@ -719,7 +796,33 @@ const KbOutlineGenDoc: React.FC = () => {
   const cbFn=(key:string) => {
     // console.log("hezl"+key);
     setKey(key);
-  }
+  };
+
+  /** 三十三·5 / 三十五：手选或上传后写回 blocks + 白名单 */
+  const onFigureChange = (
+    chKey: string,
+    pKey: string,
+    blockIndex: number,
+    nextRef: string | null,
+  ) => {
+    setChapters((prev) =>
+      prev.map((ch) => {
+        if (ch.key !== chKey) return ch;
+        return {
+          ...ch,
+          paragraphs: (ch.paragraphs || []).map((p) => {
+            if (p.key !== pKey) return p;
+            if (nextRef == null) {
+              const next = removeManualFigure(p, blockIndex);
+              return {...p, blocks: next.blocks as typeof p.blocks, allowedFigureRefs: next.allowedFigureRefs};
+            }
+            const next = applyManualFigureRef(p, blockIndex, nextRef);
+            return {...p, blocks: next.blocks as typeof p.blocks, allowedFigureRefs: next.allowedFigureRefs};
+          }),
+        };
+      }),
+    );
+  };
   /*****************************************************************************/
   //*** 以下用于独立生成和编辑prompt****/
   const genFn=(key:string)=>{
@@ -807,6 +910,14 @@ const KbOutlineGenDoc: React.FC = () => {
                 </Button>
               </Spin>
             </div>
+            <div style={{marginBottom: 8}}>
+              <Checkbox
+                checked={keepCitations}
+                onChange={(e) => onKeepCitationsChange(e.target.checked)}
+              >
+                保留来源标注
+              </Checkbox>
+            </div>
             <div style={{marginBottom: 16}}>
               <Spin spinning={loading}>
                 <Button block icon={<CompassTwoTone style={{fontSize:"large"}}/>} type="dashed"
@@ -836,7 +947,13 @@ const KbOutlineGenDoc: React.FC = () => {
           {noOutline ? (
             <Empty style={{marginTop: 48}} description="选择大纲后，生成的内容会显示在这里。" />
           ) : (
-            <OutlineResultDoc chapters={chapters} activeKey={key} fn={cbFn} />
+            <OutlineResultDoc
+              chapters={chapters}
+              activeKey={key}
+              fn={cbFn}
+              kbName={kbName}
+              onFigureChange={onFigureChange}
+            />
           )}
         </ProCard>
       </ProCard>

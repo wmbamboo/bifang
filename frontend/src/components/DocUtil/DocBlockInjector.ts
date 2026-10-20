@@ -17,8 +17,12 @@ import {normalizeKbAssetRef} from "@/components/DocUtil/docFigureAssets";
 const DOCBLOCK_MARK = "⟦DOCBLOCK⟧";
 const PAGE_W_EMU = 5400675;
 const PAGE_H_EMU = 8533130;
-const MAX_IMG_BYTES = 1.5 * 1024 * 1024;
-const MAX_TOTAL_IMG_BYTES = 30 * 1024 * 1024;
+/** 单图体积闸；超限先降采样，仍超才 missing */
+export const MAX_IMG_BYTES = 1.5 * 1024 * 1024;
+export const MAX_TOTAL_IMG_BYTES = 30 * 1024 * 1024;
+/** 降采样宽上限（约版心 2×@96dpi） */
+const RESIZE_MAX_W = 1200;
+const RESIZE_JPEG_Q = 0.85;
 
 export type FetchKbAssetBytes = (args: {
   kbName: string;
@@ -48,6 +52,56 @@ export type DocBlockResolveOpts = {
    * 某项为空数组/空 Set = 该段禁图。
    */
   allowedFigureRefsByList?: Array<Set<string> | string[] | undefined | null>;
+  /**
+   * 二十五·1：超体积降采样。缺省用 defaultResizeImage；
+   * 测试可注入 fake（jsdom 无 OffscreenCanvas）。
+   */
+  resizeImage?: ResizeImageFn;
+};
+
+export type ResizeImageFn = (
+  bytes: Uint8Array,
+  mime: string,
+  maxW: number,
+  quality: number,
+) => Promise<{bytes: Uint8Array; mime: string; w: number; h: number} | null>;
+
+/** 浏览器侧默认降采样：createImageBitmap → OffscreenCanvas → JPEG */
+export const defaultResizeImage: ResizeImageFn = async (
+  bytes,
+  mime,
+  maxW = RESIZE_MAX_W,
+  q = RESIZE_JPEG_Q,
+) => {
+  if (
+    typeof createImageBitmap !== "function" ||
+    typeof OffscreenCanvas === "undefined"
+  ) {
+    return null;
+  }
+  try {
+    const blob = new Blob(
+      [bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)],
+      {type: mime || "image/png"},
+    );
+    const bmp = await createImageBitmap(blob);
+    const scale = Math.min(1, maxW / Math.max(1, bmp.width));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const cv = new OffscreenCanvas(w, h);
+    const ctx = cv.getContext("2d");
+    if (!ctx) {
+      bmp.close?.();
+      return null;
+    }
+    ctx.drawImage(bmp, 0, 0, w, h);
+    const out = await cv.convertToBlob({type: "image/jpeg", quality: q});
+    const buf = new Uint8Array(await out.arrayBuffer());
+    bmp.close?.();
+    return {bytes: buf, mime: "image/jpeg", w, h};
+  } catch {
+    return null;
+  }
 };
 
 export type DocBlockPayloadItem =
@@ -72,15 +126,21 @@ function xmlEscape(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function captionParagraph(seqName: "表" | "图", caption: string): string {
+/** 二十五·2：缓存真序号 + begin dirty，避免全是「图 1」 */
+function captionParagraph(
+  seqName: "表" | "图",
+  caption: string,
+  seqValue: number,
+): string {
   const t = xmlEscape(caption || "");
+  const n = Math.max(1, Math.round(seqValue) || 1);
   return (
     `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="60" w:after="180"/></w:pPr>` +
     `<w:r><w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>${seqName} </w:t></w:r>` +
-    `<w:r><w:fldChar w:fldCharType="begin"/></w:r>` +
+    `<w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r>` +
     `<w:r><w:instrText xml:space="preserve"> SEQ ${seqName} \\* ARABIC </w:instrText></w:r>` +
     `<w:r><w:fldChar w:fldCharType="separate"/></w:r>` +
-    `<w:r><w:t>1</w:t></w:r>` +
+    `<w:r><w:t>${n}</w:t></w:r>` +
     `<w:r><w:fldChar w:fldCharType="end"/></w:r>` +
     `<w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve"> ${t}</w:t></w:r>` +
     `</w:p>`
@@ -106,7 +166,11 @@ export function computeInlineEmu(pxW: number, pxH: number): {emuW: number; emuH:
   return {emuW, emuH};
 }
 
-function buildTableXml(caption: string, rows: string[][]): string {
+function buildTableXml(
+  caption: string,
+  rows: string[][],
+  seqValue: number,
+): string {
   if (!rows.length) return "";
   const cols = Math.min(5, Math.max(...rows.map((r) => r.length), 1));
   const clipped = rows.slice(0, 8).map((r) => {
@@ -146,7 +210,7 @@ function buildTableXml(caption: string, rows: string[][]): string {
     `<w:tblLayout w:type="fixed"/></w:tblPr>` +
     `<w:tblGrid>${grid}</w:tblGrid>${trs}</w:tbl>` +
     `<w:p/>`;
-  const cap = caption ? captionParagraph("表", caption) : "";
+  const cap = caption ? captionParagraph("表", caption, seqValue) : "";
   return cap + tbl;
 }
 
@@ -154,6 +218,7 @@ function buildFigureXml(
   item: Extract<DocBlockPayloadItem, {kind: "figure"}>,
   rId: string,
   docPrId: number,
+  seqValue: number,
 ): string {
   const {emuW, emuH} = computeInlineEmu(item.pxW, item.pxH);
   const name = `Picture${docPrId}`;
@@ -174,15 +239,35 @@ function buildFigureXml(
     `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${emuW}" cy="${emuH}"/></a:xfrm>` +
     `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
     `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
-  return drawing + captionParagraph("图", item.caption);
+  return drawing + captionParagraph("图", item.caption || "", seqValue);
 }
 
-function buildMissingFigureXml(caption: string, ref: string): string {
-  const msg = xmlEscape(`［图片缺失：${ref || caption || "unknown"}］`);
+/** 二十五·3 / 三十五·4：正文只留人类可读文案；ref 仅 console */
+export const UPLOAD_GONE_REF = "__upload_gone__";
+
+function buildMissingFigureXml(
+  caption: string,
+  ref: string,
+  kind: "figure-missing" | "figure-blocked",
+  seqValue: number,
+): string {
+  const label =
+    kind === "figure-blocked"
+      ? "［图片不可用］"
+      : ref === UPLOAD_GONE_REF || /本地上传图已失效/.test(ref)
+        ? "［本地上传图已失效，请重新上传］"
+        : "［图片缺失］";
+  console.warn("[DocBlock]", kind, ref || "(空)", caption || "");
+  const msg = xmlEscape(label);
+  // 二十八·1 P2：blocked 不挂空题注（避免「图 N …」空挂）
+  const capXml =
+    kind !== "figure-blocked" && caption
+      ? captionParagraph("图", caption, seqValue)
+      : "";
   return (
     `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="60" w:after="60"/></w:pPr>` +
     `<w:r><w:rPr><w:color w:val="C00000"/><w:sz w:val="18"/></w:rPr><w:t>${msg}</w:t></w:r></w:p>` +
-    (caption ? captionParagraph("图", caption) : "")
+    capXml
   );
 }
 
@@ -282,6 +367,8 @@ export function injectDocBlocks(
   let rels = zip.file(relsPath)?.asText() || "";
   let nextId = nextRelId(rels);
   let imgN = 0;
+  let tblN = 0;
+  let capFigN = 0;
   let docPrId = 1;
   const replacements: string[] = [];
 
@@ -294,14 +381,21 @@ export function injectDocBlocks(
     let frag = "";
     for (const item of items) {
       if (item.kind === "table") {
-        frag += buildTableXml(item.caption, item.rows);
-      } else if (
-        item.kind === "figure-missing" ||
-        item.kind === "figure-blocked"
-      ) {
-        frag += buildMissingFigureXml(item.caption, item.ref);
+        const seqVal = item.caption ? ++tblN : 0;
+        frag += buildTableXml(item.caption, item.rows, seqVal || 1);
+      } else if (item.kind === "figure-blocked") {
+        frag += buildMissingFigureXml(item.caption, item.ref, item.kind, 0);
+      } else if (item.kind === "figure-missing") {
+        const seqVal = item.caption ? ++capFigN : 0;
+        frag += buildMissingFigureXml(
+          item.caption,
+          item.ref,
+          item.kind,
+          seqVal || 1,
+        );
       } else {
         imgN += 1;
+        const capSeq = ++capFigN;
         const ext = mimeToExt(item.mime);
         const mediaPath = `word/media/img${imgN}.${ext}`;
         zip.file(mediaPath, item.bytes);
@@ -311,7 +405,7 @@ export function injectDocBlocks(
           `Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" ` +
           `Target="media/img${imgN}.${ext}"/>`;
         rels = rels.replace("</Relationships>", `${rel}</Relationships>`);
-        frag += buildFigureXml(item, rId, docPrId++);
+        frag += buildFigureXml(item, rId, docPrId++, capSeq);
       }
     }
     replacements.push(frag);
@@ -419,6 +513,13 @@ export async function resolveBlocksToPayloads(
       }
       const ref = normalizeKbAssetRef(b.assetRef || "");
       if (allow != null && !allow.has(ref)) {
+        const allowedList = [...allow];
+        // 二十八·1：诊断——区分「清单空（4B）」与「模型改写 ref」
+        console.warn("[DocBlock] figure-blocked", {
+          ref: ref || "(空)",
+          allowed: allowedList.length,
+          sample: allowedList.slice(0, 3),
+        });
         items.push({
           kind: "figure-blocked",
           caption: b.caption || "",
@@ -431,33 +532,57 @@ export async function resolveBlocksToPayloads(
         items.push({
           kind: "figure-missing",
           caption: b.caption || "",
-          ref: ref || "(空)",
+          // 三十五·4：本地上传失效与 KB 缺失区分文案
+          ref: ref.startsWith("upload:") ? UPLOAD_GONE_REF : ref || "(空)",
         });
         continue;
       }
       let bytes = new Uint8Array(resolved.bytes);
       let mime = resolved.mime || "image/png";
+      let pxW = 0;
+      let pxH = 0;
+      // 二十五·1：超闸先降采样，压不动/仍超才 missing
       if (bytes.byteLength > MAX_IMG_BYTES) {
-        items.push({
-          kind: "figure-missing",
-          caption: b.caption || "",
-          ref: `${ref}（>${MAX_IMG_BYTES}B）`,
-        });
-        continue;
+        const resizeFn = opts.resizeImage ?? defaultResizeImage;
+        const rs = await resizeFn(bytes, mime, RESIZE_MAX_W, RESIZE_JPEG_Q);
+        if (!rs || rs.bytes.byteLength > MAX_IMG_BYTES) {
+          console.warn(
+            "[DocBlock] 单图超限且降采样失败/仍超",
+            ref,
+            bytes.byteLength,
+            rs?.bytes.byteLength,
+          );
+          items.push({
+            kind: "figure-missing",
+            caption: b.caption || "",
+            ref: ref || "(空)",
+          });
+          continue;
+        }
+        bytes = rs.bytes;
+        mime = rs.mime;
+        pxW = rs.w;
+        pxH = rs.h;
       }
       if (totalImg + bytes.byteLength > MAX_TOTAL_IMG_BYTES) {
+        console.warn("[DocBlock] 总图体积超限", ref, totalImg, bytes.byteLength);
         items.push({
           kind: "figure-missing",
           caption: b.caption || "",
-          ref: `${ref}（总图体积超限）`,
+          ref: ref || "(空)",
         });
         continue;
       }
-      const size = readImageSize(
-        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
-      );
-      const pxW = size?.w || 800;
-      const pxH = size?.h || 600;
+      if (!pxW || !pxH) {
+        const size = readImageSize(
+          bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ),
+        );
+        pxW = size?.w || 800;
+        pxH = size?.h || 600;
+      }
       totalImg += bytes.byteLength;
       items.push({
         kind: "figure",

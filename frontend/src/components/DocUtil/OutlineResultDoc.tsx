@@ -8,11 +8,21 @@ import {
 } from "@/components/DocUtil/ViewItem4Doc";
 import {CheckCircleTwoTone, CheckSquareTwoTone} from "@ant-design/icons";
 import React from "react";
+import DocFigureStrip from "@/components/DocUtil/DocFigureStrip";
 
 interface OutlineResultProps {
   chapters: Chapter[];
   activeKey: string;
   fn: (e: string) => void;
+  /** 三十三：KB 页传库名以拼缩略图 URL；Ai 页不传 */
+  kbName?: string;
+  /** 三十三：换图 / 移除；Ai 页不传 */
+  onFigureChange?: (
+    chKey: string,
+    pKey: string,
+    blockIndex: number,
+    nextRef: string | null,
+  ) => void;
 }
 const panelStyle: React.CSSProperties = {
   background: "aliceblue",
@@ -55,6 +65,8 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
   chapters,
   activeKey,
   fn,
+  kbName,
+  onFigureChange,
 }) => {
   const keys = Doc.getKeysFromKey(chapters, activeKey);
   if (!keys) {
@@ -70,7 +82,7 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
       尚未生成
     </p>
   );
-  const contentShow = (paragraph: Paragraph) => {
+  const contentShow = (paragraph: Paragraph, chapterKey: string) => {
     const {tables, figures} = countParagraphMedia(paragraph);
     return (
       <div>
@@ -95,6 +107,22 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
           )}
         </p>
         <div style={{whiteSpace: "pre-wrap"}}>{paragraph.content}</div>
+        <DocFigureStrip
+          paragraph={paragraph}
+          kbName={kbName}
+          editable={Boolean(onFigureChange)}
+          onPick={
+            onFigureChange
+              ? (blockIndex, nextRef) =>
+                  onFigureChange(
+                    chapterKey,
+                    paragraph.key,
+                    blockIndex,
+                    nextRef,
+                  )
+              : undefined
+          }
+        />
       </div>
     );
   };
@@ -139,7 +167,7 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
             children:
               paragraph.content.length === 0
                 ? contentEmpty()
-                : contentShow(paragraph),
+                : contentShow(paragraph, chapter.key),
             style: panelStyle,
             extra: getParagraphExtra(paragraph),
           });

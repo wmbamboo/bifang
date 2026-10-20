@@ -17,10 +17,12 @@ import {
   buildHeadingLevelPlan,
   inferDocMaxHeadingLevel,
   patchTocOutlineLevels,
+  stripHeadingAutoNumbering,
 } from "@/components/DocUtil/docHeadingLevels";
 import {fetchAssetBytes} from "@/services/chatchat/kb";
 import {scrubConclusionChapters, isConclusionChapter} from "@/components/DocUtil/conclusionGate";
 import {collectParagraphAllowedFigureRefLists} from "@/components/DocUtil/docFigureAssets";
+import {readUploadAsset} from "@/components/DocUtil/docUploadAssets";
 import {
   buildFactLedger,
   formatFactLedgerAppendix,
@@ -207,6 +209,7 @@ const AiOutlineGenDoc: React.FC = () => {
                   file_name,
                   asset_id,
                 }),
+              resolveUpload: async (key) => readUploadAsset(key),
               // 二十一·9 / 二十三·13：Ai 无图资产 → 段级空白名单
               allowedFigureRefsByList:
                 collectParagraphAllowedFigureRefLists(chapters),
@@ -223,6 +226,9 @@ const AiOutlineGenDoc: React.FC = () => {
               buildHeadingLevelPlan(chapters, maxLvl),
             );
             if (hl.warning) console.warn(hl.warning);
+            // 二十六·A：去 heading 自动编号，只留 label 手写编号
+            const stripped = stripHeadingAutoNumbering(doc.getZip());
+            if (stripped) console.info("[DocHeading] stripped numPr from", stripped, "heading styles");
             const blob = doc.getZip().generate({
               type: "blob",
               mimeType:

@@ -14,6 +14,8 @@ import {
   KB_DOC_WRITING_CONSTRAINT_PROMPT,
   KB_WRITING_CONSTRAINT_PROMPT,
 } from "@/components/DocUtil/parseChatCompletion";
+import {outlineKbBindUi} from "@/components/ChatUtil/outlineKbBindUi";
+import {ALL_KB_NAME} from "@/components/DocUtil/kbCache";
 import {readFileSync} from "fs";
 import {join} from "path";
 
@@ -173,6 +175,32 @@ describe("doc writing contracts", () => {
     expect(buildIdx).toBeGreaterThan(-1);
     const buildBody = src.slice(buildIdx, buildIdx + 280);
     expect(buildBody).not.toMatch(/PPT_OUTLINE_LAYOUT_CATALOG/);
+  });
+});
+
+describe("三十四 OutlinePromptComposer 库上下文分流", () => {
+  test("Ai：kbName=undefined → 无 Alert、不可绑文档", () => {
+    const ui = outlineKbBindUi(undefined, true);
+    expect(ui.hasKbContext).toBe(false);
+    expect(ui.canBindFiles).toBe(false);
+    expect(ui.showAllKbAlert).toBe(false);
+  });
+
+  test("KB 全库：kbName=__all__ → Alert、不可绑文档", () => {
+    const ui = outlineKbBindUi(ALL_KB_NAME, true);
+    expect(ui.hasKbContext).toBe(true);
+    expect(ui.isAllKb).toBe(true);
+    expect(ui.canBindFiles).toBe(false);
+    expect(ui.showAllKbAlert).toBe(true);
+    expect(ALL_KB_NAME).toBe("__all__");
+  });
+
+  test("KB 具体库 → 可绑文档、无全库 Alert", () => {
+    const ui = outlineKbBindUi("服装选品", true);
+    expect(ui.hasKbContext).toBe(true);
+    expect(ui.isAllKb).toBe(false);
+    expect(ui.canBindFiles).toBe(true);
+    expect(ui.showAllKbAlert).toBe(false);
   });
 });
 

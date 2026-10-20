@@ -30,6 +30,7 @@ import {scrubConclusionChapters} from "@/components/DocUtil/conclusionGate";
 import {
   buildFigureAssetAppendix,
   collectParagraphAllowedFigureRefLists,
+  countBlockedFigures,
   countUnresolvedFigures,
   figureAssetsFromAssignedKeys,
   formatKbAssetRef,
@@ -236,18 +237,24 @@ const KbOutlineGenDoc: React.FC = () => {
               allowedFigureRefsByList:
                 collectParagraphAllowedFigureRefLists(chapters),
             });
-            // 十·7：注入诊断（blockLists / payloads / warning）
+            // 十·7 / 二十四·D：missing 与 blocked 分计分提示
             const unresolved = countUnresolvedFigures(payloads);
+            const blocked = countBlockedFigures(payloads);
             console.info("[DocBlock]", {
               blockLists: blockLists.length,
               withBlocks: blockLists.filter((b) => b.length > 0).length,
               payloads: payloads.filter((p) => p && p.length).length,
               unresolvedFigures: unresolved,
+              blockedFigures: blocked,
             });
             if (unresolved > 0) {
-              // 7c′：不可 resolve 拦截提示（仍注入「图片缺失」占位，不静默丢）
               message.error(
                 `有 ${unresolved} 张插图无法解析（ref 不可 resolve），已写入「图片缺失」占位`,
+              );
+            }
+            if (blocked > 0) {
+              message.warning(
+                `有 ${blocked} 处 figure ref 不在可用清单（模型改写），已占位`,
               );
             }
             const inj = injectDocBlocks(doc.getZip(), payloads);

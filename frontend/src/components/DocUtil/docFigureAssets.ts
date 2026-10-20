@@ -114,6 +114,18 @@ export function formatKbAssetRef(fileName: string, assetId: string): string {
 }
 
 /**
+ * 二十四·C：ref 归一化（解析侧与白名单匹配侧共用）。
+ * - 去首尾空白与包裹引号/反引号
+ * - `kb:` 后多余空白收掉（`kb: a.pdf/1` → `kb:a.pdf/1`）
+ */
+export function normalizeKbAssetRef(raw: string): string {
+  let r = String(raw || "").trim();
+  r = r.replace(/^[`"']+/, "").replace(/[`"']+$/, "").trim();
+  r = r.replace(/^kb:\s*/i, "kb:");
+  return r;
+}
+
+/**
  * 二十三·13：与 prepareChaptersBlocks / collectParagraphBlocks 同序的段级白名单。
  * - 有 allowedFigureRefs → 原样列表
  * - allowFigure===false → 空数组（禁全部）
@@ -165,7 +177,7 @@ export function buildFigureAssetAppendix(entries: DocFigureAsset[]): string {
   );
 }
 
-/** 统计 payload 里不可 resolve 的 figure（7c′） */
+/** 统计 payload 里不可 resolve 的 figure（7c′）；不含白名单拒绝 */
 export function countUnresolvedFigures(
   payloads: Array<Array<{kind: string}> | null>,
 ): number {
@@ -174,6 +186,20 @@ export function countUnresolvedFigures(
     if (!items) continue;
     for (const it of items) {
       if (it.kind === "figure-missing") n += 1;
+    }
+  }
+  return n;
+}
+
+/** 二十四·D：白名单拒绝（模型改写 ref） */
+export function countBlockedFigures(
+  payloads: Array<Array<{kind: string}> | null>,
+): number {
+  let n = 0;
+  for (const items of payloads) {
+    if (!items) continue;
+    for (const it of items) {
+      if (it.kind === "figure-blocked") n += 1;
     }
   }
   return n;

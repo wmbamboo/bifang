@@ -12,6 +12,7 @@ import {
   evidenceHasMetric,
   isPriceBandBoundToken,
 } from "@/components/DocUtil/outlineEvidenceValidate";
+import {normalizeKbAssetRef} from "@/components/DocUtil/docFigureAssets";
 
 const DOCBLOCK_MARK = "⟦DOCBLOCK⟧";
 const PAGE_W_EMU = 5400675;
@@ -38,7 +39,7 @@ export type DocBlockResolveOpts = {
   evidenceText?: string;
   /**
    * 二十三·13：可用 ref 白名单（formatKbAssetRef 输出）。
-   * 精确匹配才取图；不命中 → figure-missing（保留 caption）。
+   * 归一化后精确匹配才取图；不命中 → figure-blocked（保留 caption）。
    * 空集合 = 禁全部 figure（Ai / 无资产段）。
    */
   allowedFigureRefs?: Set<string> | string[];
@@ -59,7 +60,9 @@ export type DocBlockPayloadItem =
       pxW: number;
       pxH: number;
     }
-  | {kind: "figure-missing"; caption: string; ref: string};
+  | {kind: "figure-missing"; caption: string; ref: string}
+  /** 二十四·D：白名单拒绝（模型改写 ref），非取字节失败 */
+  | {kind: "figure-blocked"; caption: string; ref: string};
 
 function xmlEscape(s: string): string {
   return (s || "")
@@ -292,7 +295,10 @@ export function injectDocBlocks(
     for (const item of items) {
       if (item.kind === "table") {
         frag += buildTableXml(item.caption, item.rows);
-      } else if (item.kind === "figure-missing") {
+      } else if (
+        item.kind === "figure-missing" ||
+        item.kind === "figure-blocked"
+      ) {
         frag += buildMissingFigureXml(item.caption, item.ref);
       } else {
         imgN += 1;
@@ -380,7 +386,8 @@ function toAllowedRefSet(
   src: Set<string> | string[] | undefined | null,
 ): Set<string> | undefined {
   if (src == null) return undefined;
-  return src instanceof Set ? src : new Set(src);
+  const raw = src instanceof Set ? [...src] : src;
+  return new Set(raw.map((r) => normalizeKbAssetRef(r)).filter(Boolean));
 }
 
 export async function resolveBlocksToPayloads(
@@ -410,10 +417,10 @@ export async function resolveBlocksToPayloads(
         items.push({kind: "table", caption: kept.caption || "", rows: kept.rows});
         continue;
       }
-      const ref = (b.assetRef || "").trim();
+      const ref = normalizeKbAssetRef(b.assetRef || "");
       if (allow != null && !allow.has(ref)) {
         items.push({
-          kind: "figure-missing",
+          kind: "figure-blocked",
           caption: b.caption || "",
           ref: `${ref || "(空)"}（不在可用清单）`,
         });
@@ -471,7 +478,7 @@ export async function resolveAssetBytes(
   assetRef: string,
   opts: DocBlockResolveOpts = {},
 ): Promise<{bytes: ArrayBuffer; mime: string} | null> {
-  const ref = (assetRef || "").trim();
+  const ref = normalizeKbAssetRef(assetRef || "");
   if (!ref) return null;
   if (ref.startsWith("upload:")) {
     const key = ref.slice("upload:".length).trim();

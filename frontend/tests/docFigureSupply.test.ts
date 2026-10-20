@@ -4,16 +4,22 @@
 import {
   buildFigureAssetAppendix,
   collectParagraphAllowedFigureRefLists,
+  countBlockedFigures,
   countUnresolvedFigures,
   figureAssetsFromAssignedKeys,
   figureAssetsFromKbDocs,
   formatKbAssetRef,
+  normalizeKbAssetRef,
 } from "@/components/DocUtil/docFigureAssets";
 import {
   filterTableBlockByEvidence,
   resolveAssetBytes,
   resolveBlocksToPayloads,
 } from "@/components/DocUtil/DocBlockInjector";
+import {
+  Paragraph,
+  absorbBlocksFromParagraphContent,
+} from "@/components/DocUtil/ViewItem4Doc";
 import {readFileSync} from "fs";
 import {join} from "path";
 
@@ -161,7 +167,7 @@ describe("二十三·13 ref 白名单", () => {
     expect(lists).toEqual([["kb:a.pdf/x.png"], [], undefined]);
   });
 
-  it("脏 ref → figure-missing 且保留 caption；白名单命中才取图", async () => {
+  it("脏 ref → figure-blocked 且保留 caption；白名单命中才取图", async () => {
     const okRef = "kb:demo.pdf/elements/p1.png";
     const dirtyRef = "kb:demo.pdf/elements/p1_chart.png";
     let fetched = 0;
@@ -183,15 +189,17 @@ describe("二十三·13 ref 白名单", () => {
     );
     expect(payloads[0]).toHaveLength(2);
     expect(payloads[0]![0]).toMatchObject({
-      kind: "figure-missing",
+      kind: "figure-blocked",
       caption: "概览题",
     });
     expect(String((payloads[0]![0] as any).ref)).toMatch(/不在可用清单/);
     expect(payloads[0]![1]).toMatchObject({kind: "figure", caption: "真图"});
     expect(fetched).toBe(1);
+    expect(countBlockedFigures(payloads)).toBe(1);
+    expect(countUnresolvedFigures(payloads)).toBe(0);
   });
 
-  it("空白名单禁全部 figure", async () => {
+  it("空白名单禁全部 figure → blocked", async () => {
     const payloads = await resolveBlocksToPayloads(
       [[{kind: "figure", assetRef: "kb:a.pdf/x.png", caption: "c"}]],
       {
@@ -200,6 +208,46 @@ describe("二十三·13 ref 白名单", () => {
         fetchKbAsset: async () => new ArrayBuffer(8),
       },
     );
-    expect(payloads[0]![0].kind).toBe("figure-missing");
+    expect(payloads[0]![0].kind).toBe("figure-blocked");
+  });
+
+  it("二十四·C：kb: 后空格归一后命中白名单", async () => {
+    expect(normalizeKbAssetRef("kb: a.pdf/1 ")).toBe("kb:a.pdf/1");
+    expect(normalizeKbAssetRef("`kb:a.pdf/1`")).toBe("kb:a.pdf/1");
+    const p = new Paragraph(1, "段");
+    p.setContent(
+      "文\n```figure\nref: kb: a.pdf/1 \ncaption: 图\n```\n",
+    );
+    expect(p.blocks).toHaveLength(1);
+    if (p.blocks[0].kind === "figure") {
+      expect(p.blocks[0].assetRef).toBe("kb:a.pdf/1");
+    }
+    let fetched = 0;
+    const payloads = await resolveBlocksToPayloads(
+      [[{kind: "figure", assetRef: "kb: a.pdf/1 ", caption: "图"}]],
+      {
+        kbName: "服装",
+        allowedFigureRefs: ["kb:a.pdf/1"],
+        fetchKbAsset: async () => {
+          fetched += 1;
+          return new ArrayBuffer(8);
+        },
+      },
+    );
+    expect(payloads[0]![0].kind).toBe("figure");
+    expect(fetched).toBe(1);
+  });
+
+  it("二十四·D：missing / blocked 分别计数", () => {
+    expect(
+      countUnresolvedFigures([
+        [{kind: "figure-missing"}, {kind: "figure-blocked"}],
+      ]),
+    ).toBe(1);
+    expect(
+      countBlockedFigures([
+        [{kind: "figure-missing"}, {kind: "figure-blocked"}],
+      ]),
+    ).toBe(1);
   });
 });

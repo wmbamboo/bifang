@@ -70,13 +70,23 @@ describe("十九·3 围栏退化", () => {
     expect(p.blocks.map((b) => b.kind)).toEqual(["table", "figure"]);
   });
 
-  test("无法归一化 → 丢弃不留原文", () => {
+  test("无图表语义的代码块不吸收、原文保留（二十四·B）", () => {
     const raw =
       "可见文字\n```xyz\nstrange payload\n```\n还有";
     const p = new Paragraph(1, "段");
     p.setContent(raw);
-    expect(p.content).toBe("可见文字\n还有");
+    expect(p.content).toMatch(/strange payload/);
+    expect(p.content).toMatch(/```xyz/);
     expect(p.blocks).toHaveLength(0);
+  });
+
+  test("吸收过程中 unknown 围栏丢弃不回灌", () => {
+    const raw =
+      "前\n```figure\nref: kb:a.pdf/1\ncaption: 样\n```\n```xyz\nstrange\n```\n后";
+    const p = new Paragraph(1, "段");
+    p.setContent(raw);
+    expect(p.blocks).toHaveLength(1);
+    expect(p.content).toBe("前\n后");
     expect(p.content).not.toMatch(/strange|```/);
   });
 
@@ -174,5 +184,56 @@ describe("二十一·9 allowFigure 约束", () => {
       {allowFigure: true},
     );
     expect(yes).not.toMatch(/本页无可用插图资产/);
+  });
+});
+
+describe("二十四·A 空单元格表格", () => {
+  test("3 列含空单元格不拆坏", () => {
+    const raw = [
+      "```table",
+      "caption: 对比",
+      "| 指标 | 数值 | 说明 |",
+      "| --- | --- | --- |",
+      "| A |  | 高 |",
+      "| B | 3 | 中 |",
+      "```",
+    ].join("\n");
+    const p = new Paragraph(1, "段");
+    p.setContent(raw);
+    expect(p.blocks).toHaveLength(1);
+    expect(p.blocks[0].kind).toBe("table");
+    if (p.blocks[0].kind === "table") {
+      expect(p.blocks[0].rows).toEqual([
+        ["指标", "数值", "说明"],
+        ["A", "", "高"],
+        ["B", "3", "中"],
+      ]);
+    }
+  });
+
+  test("真 || 粘连仍拆行", () => {
+    const raw =
+      "```table\ncaption: t\n| a | b || c | d |\n```\n";
+    const p = new Paragraph(1, "段");
+    p.setContent(raw);
+    expect(p.blocks[0].kind).toBe("table");
+    if (p.blocks[0].kind === "table") {
+      expect(p.blocks[0].rows.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+});
+
+describe("二十四·B 非图表代码块不误清 blocks", () => {
+  test("已有 figure + 正文含 json 代码块 → 保留图与代码", () => {
+    const p = new Paragraph(1, "段");
+    p.blocks = [
+      {kind: "figure", assetRef: "kb:a.pdf/1", caption: "样图"},
+    ];
+    p.content = '正文\n```json\n{"a":1}\n```\n收尾';
+    absorbBlocksFromParagraphContent(p);
+    expect(p.blocks).toHaveLength(1);
+    expect(p.blocks[0].kind).toBe("figure");
+    expect(p.content).toMatch(/```json/);
+    expect(p.content).toMatch(/收尾/);
   });
 });

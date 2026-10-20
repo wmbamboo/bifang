@@ -98,6 +98,20 @@ export function seedFenceBuffer(
   buf.push(`caption: ${r}`);
 }
 
+/** 标准 table/figure 开栏（窄口径，兼容旧调用） */
 export function contentMayHaveDocFences(raw: string): boolean {
   return /```\s*(?:table|figure)/i.test(String(raw || ""));
+}
+
+/**
+ * 二十四·B：是否可能含需吸收的图表围栏（含退化开栏）。
+ * 比 contentMayHaveDocFences 宽：认 figureref / ```ref: / ```kb: 等；
+ * 不含普通 ```json 等非图表代码块。
+ */
+export function contentMayHaveDocBlockFences(raw: string): boolean {
+  const s = String(raw || "");
+  return (
+    /```\s*(?:table|figure|figureref|tablecaption|figurecaption)/i.test(s) ||
+    /```\s*(?:ref|kb:|caption)\s*[:：]/i.test(s)
+  );
 }

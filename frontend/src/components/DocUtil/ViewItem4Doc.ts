@@ -11,7 +11,9 @@ import {
   preprocessDegradedFences,
   matchFenceOpen,
   seedFenceBuffer,
+  contentMayHaveDocBlockFences,
 } from "@/components/DocUtil/docFenceNormalize";
+import {normalizeKbAssetRef} from "@/components/DocUtil/docFigureAssets";
 export type { WordBudget } from "@/components/DocUtil/docWordBudget";
 export {
   DOC_WORD_BUDGET,
@@ -758,8 +760,8 @@ export function countChapterMedia(chapter: Chapter): {
 /** 从已生成正文剥离 ```table/figure 并入 paragraph.blocks，返回清洁正文 */
 export function absorbBlocksFromParagraphContent(paragraph: Paragraph): string {
   const raw0 = paragraph.content || "";
-  // 正文已无围栏（曾吸收过）→ 保留既有 blocks，避免下载前二次吸收清空
-  if (!/```/.test(raw0)) {
+  // 二十四·B：仅当可能含图表围栏才重吸；普通 ```json 等早退，保留既有 blocks
+  if (!/```/.test(raw0) || !contentMayHaveDocBlockFences(raw0)) {
     return raw0.trim();
   }
   const raw = preprocessDegradedFences(raw0);
@@ -838,11 +840,11 @@ function pushTableRowChunks(blob: string, rows: string[][]) {
 }
 
 function parseTableFenceLines(lines: string[]): DocBlock | null {
-  // 二十一·18：只在 table 缓冲内把 || 拆成多行，避免全文误伤
-  const expanded = lines
-    .join("\n")
-    .replace(/\|[ \t]*\|/g, "|\n|")
-    .split("\n");
+  // 二十四·A：仅当确有 || 粘连信号才拆行；|  | 合法空单元格不得误拆
+  const joined = lines.join("\n");
+  const expanded = /\|\|/.test(joined)
+    ? joined.replace(/\|\|/g, "|\n|").split("\n")
+    : lines;
   let caption = "";
   const rows: string[][] = [];
   for (const raw of expanded) {
@@ -899,10 +901,10 @@ function parseFigureFenceLines(lines: string[]): DocBlock | null {
         /^(.*\.(?:png|jpe?g|gif|webp))\s*(?:caption|图)\s*[:：]\s*(.*)$/i,
       );
       if (glued) {
-        assetRef = glued[1].trim();
+        assetRef = normalizeKbAssetRef(glued[1]);
         if (!caption) caption = glued[2].trim();
       } else {
-        assetRef = r;
+        assetRef = normalizeKbAssetRef(r);
       }
       continue;
     }

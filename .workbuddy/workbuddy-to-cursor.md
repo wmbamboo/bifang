@@ -4979,7 +4979,7 @@ CONNECT ok / EHLO 250 / LOGIN OK
 
 **41.1 → 41.2 → 41.3 → 41.4（41.4 已是必做，不要再跳过）**。测试：
 - 后端：至少覆盖「user 改状态 403」「admin 改状态 200」「提交人无 email 时 `notify_status='skipped'` 且不报错」「SMTP 异常时状态变更仍返回 200、`notify_status='failed'`」四条；
-- 邮件自测：用 `ab/smtp_probe.py` 先验证连接，再真发一封到 `hezeling@zptxtech.cn` 自收，确认主题前缀与正文链接正确；
+- 邮件自测：用 `ab/smtp_probe.py` 先验证连接，再真发一封到 `<邮箱>` 自收，确认主题前缀与正文链接正确；
 - 前端：jest 至少覆盖「context 快照截断 ≤32KB」「提交幂等（同 id 两次只入库一条）」两条纯函数。
 
 ### 41.6 不在本单（勿顺手）
@@ -4989,3 +4989,409 @@ CONNECT ok / EHLO 250 / LOGIN OK
 - 段/页级「就地反馈」按钮（P1）；
 - 富文本、@提及、企微通知、Gitee 同步；
 - 邮件模板美化（纯文本即可：反馈编号 + 状态 + 直达链接）。
+
+
+## 四十二、指针章：本单做「四十章 PPT 小项描述长度校验治理」（2026-10-22 02:05）
+
+### 42.0 为什么要有这一章（必读，别跳过）
+
+**本单不做四十一，也不要再动反馈闭环的任何文件。** 四十一（反馈闭环 P0）已由 `0b70859` 落地并验收通过，本单与它无关。
+
+本章存在的原因只有一个：**四十章写在了四十一章前面**（四十章在本文档 4836-4904 行，四十一章在 4907 行）。你的开工规则是「读末章」，所以四十章一直处于「已下发但读不到」的状态。实测确认它**从未被执行**：
+
+- `ViewItem4Ppt.ts:1375` 仍是 `if (content.length < PPT_ITEM_DESC_MIN || content.length > PPT_ITEM_DESC_MAX)` —— 裸算 `content.length`，没剥离引用标记；
+- `ViewItem4Ppt.ts` / `AiOutlineGenPpt.tsx` / `KbOutlineGenPpt.tsx` / `ChatWithSpeech4Ppt.tsx` / `PptTemplate.ts` 五个文件里 `stripHallucinatedDocCitations|stripCitations` 命中数**全为 0**；
+- `SliderDrawer.tsx:212` `maxLength={tMax}`、`:222` `maxLength={dMax}` 硬限仍在。
+
+**所以：本单只做四十章，执行 40.1 → 40.2 → 40.3 → 40.4，40.5 列出的三条一律不做，40.6 的验收照做。** 四十章正文在 4836-4904 行，开工前请完整读一遍（下面 42.1-42.4 只是把关键行号复述一遍，防止你翻错位置，**不是正文的替代品**）。
+
+### 42.1 P0：引用标记三件套（四十章 40.1）
+
+用户报的原始现场：PPT 某页橙叹号「第 1 点描述须为 20～70 字，当前 108 字」，描述尾部带 `[文档13]`。
+
+根因比「计数没剔除引用」更靠前：**PPT 侧完全没有引用标记治理**。后端检索片段本来就带编号（`kb_service.py:926-928`），文档侧有 `stripHallucinatedDocCitations`（`parseChatCompletion.ts:204-218`），PPT 侧零命中 ⇒ `[文档13]` 会原样灌进幻灯片，而 PPT 没有文末资料来源清单，编号悬空。
+
+三件套缺一不可：
+1. `buildPptItemFormatPrompt`（`ViewItem4Ppt.ts:1139`）各分支统一加：`不要用 [文档N]，不要输出任何来源标注。`；
+2. `Slide.setContent`（`:1670-1692`）在 `genViewItemByRegex` 之后、校验之前，对每条 `vi.title/vi.content` 跑剥离（抽到 PPT 侧公共处复用，**不要复制第二份正则**）；
+3. 校验计数改用剥离后的长度（见 42.2）。
+
+**只做第 3 条 = 让告警消失但页面仍脏，不接受。**
+
+### 42.2 P1：计数口径 + 编辑器软限（四十章 40.2）
+
+- 新增纯函数 `pptItemLength(s)` = `stripHallucinatedDocCitations(s).text.trim().length`；
+- 换掉 `:1376`（描述）、`:1373`（标题）、`:1368`（metric 解读）以及 `:1273/:1298/:1328/:1332/:1351/:1365` 各处裸算，保证「报错里的数字」与「编辑器显示的字数」同源；
+- **顺带修一个静默丢数据的 bug**：`SliderDrawer.tsx:222` 描述 `TextArea` 的 `maxLength={dMax}`（70）会把粘贴的 108 字**从尾部静默截断**，最容易丢掉末尾的数字与出处。去掉 `maxLength`，改成软限：超限把 `:221` 已有的 `{item.content.trim().length}/{dMax}` 显示变红，保存仍由 `validateSlideViewItems` 拦。标题 `:212` 同理（`PPT_ITEM_TITLE_MAX=12` 也会硬截）。
+
+### 42.3 P1：一键 AI 精简（四十章 40.3）
+
+入口**不要放 hover Tooltip**（`EditableResultCollapse.tsx:159` 是 `<Tooltip title={tip}>`，纯文本、hover 即消失，塞按钮易误触）。
+
+放在 `SliderDrawer` 每条描述下方（`:217-224` 那个 TextArea 下面），仅当 `len > dMax` 时出现：
+
+```tsx
+{over && <Button size="small" type="link" onClick={() => onShorten(index)}>AI 精简至 {dMax} 字</Button>}
+```
+
+`onShorten` 走**单条重写**（复用该页已有的单条生成通道），prompt 用：「把下面这句压缩到 ≤70 字，保留全部数字与出处，只删连接词与重复限定，不要新增内容」。**不要重新生成整页**（会动到其他点）。
+
+### 42.4 P2：数据密集点走 metric，而不是给 list 放宽（四十章 40.4）
+
+用户原始建议是「叙述点 20~70 / 数据点 20~100」。方向对，实现要换路径：
+
+- `PPT_ITEM_DESC_MAX=70`（`:372`）与 `SliderDrawer` 的 `maxLength` 同源，是**版式容量约束**。没验模板就把 70 放宽到 100 ⇒ 溢出比告警更糟。**不许凭这个数字拍板**。
+- 系统**已有分档**：`metric` / `metric_list` = 数据点走「原数字 2~12 字 + 短解读 4~16 字」（`:368-371`、`:1155-1156`）。
+- 真正的洞在版式判定：`outlineJson.ts:146-158` 的 `metricCue` 只对**页标题**正则（`/大盘|增速|规模|占比|GMV|销售额|同比|渗透|播放量|金额|人次/`）。页标题不含这些词、但要点塞了三组质押数字 ⇒ 判 `list` ⇒ 挤在 20~70。
+- 改法：`metricCue` 增加对**要点文本**的判定（要点里 ≥2 个「数字+单位」视为看数页），或在大纲侧给数据密集页显式标 `layout: metric`。**P2，可以延后到 42.1-42.3 之后单开一轮。**
+
+### 42.5 三条不要做（四十章 40.5，重申）
+
+1. **别只改计数让告警消失** —— 页面里的 `[文档13]` 还在（42.1）。
+2. **别把 70 放宽到 100** —— 除非先确认模板描述区容量；优先让数据点走 metric（42.4）。
+3. **别再把字数抄一遍进提示词** —— `buildPptItemFormatPrompt` 的 list 分支（`:1243-1251`）**已经写了** `具体描述（20～70字）`。「校验没前移」的前提不成立，108 字是模型为塞三组数字**主动违反**已写明的约束。再抄一遍收益≈0。
+
+### 42.6 执行序与验收（四十章 40.6）
+
+执行序：**42.1 → 42.2 → 42.3 → 42.4**（42.4 可延后）。
+
+jest 并入既有 PPT 套件，**不要新建测试文件**。三条用例：
+1. 含 `[文档13]` 的 108 字描述，剥离后 ≤70 ⇒ 校验**通过**，且返回的 `viewItems` 文本里**不含** `[文档`；
+2. 剥离后仍 >70 ⇒ 仍报错，且**报错里的数字是剥离后的长度**；
+3. 去掉 `maxLength` 后粘贴 108 字**不被截断**，超限标红。
+
+UI 验收：KB 页 PPT 重新生成同一页 → 橙叹号消失、描述里无 `[文档N]`；编辑器粘 108 字 → 标红不截断 → 点「AI 精简」→ 保存通过。
+
+提醒：橙叹号本身**不阻断下载**（`evaluatePptDownloadReady` 走 softWarnings，`ViewItem4Ppt.ts:2298-2300`），所以别把它当 blocker 处理；但 108 字灌进 list 版式会挤字溢出，导出前仍要压到 ~70 字。
+
+
+## 四十三、邮件 P0 修复 + 真 token 校验 + 登录/操作双审计（2026-10-22 02:20）
+
+### 43.0 本单范围与优先级（先说清楚，别做串）
+
+**四十二（PPT 描述长度校验）暂缓，做完本单再回四十二。** 本单执行序：
+
+**43.1 邮件修复（P0，这是四十一 41.4 没收尾的欠账）→ 43.2 真 token 校验 + session 超时（P0）→ 43.3 登录/退出审计（P1）→ 43.4 操作行为审计（P1）→ 43.5 审计查询页（P2）。**
+
+用户提的五个诉求，我逐项核过代码，**其中三条的现状与你的想象不同，先纠偏**（43.1-43.4 的开头都标了「现状实测」）。
+
+### 43.1 P0：邮件从未发出过（不是"没收到"，是压根没发）
+
+**实测证据**（我直连 `backend/data/bifang.db` 快照查的，后端进程持锁所以是复制快照读的）：
+
+```
+feedbacks: 8bc1d18f | user=admin | status=fixed | assignee=admin | notify_status='skipped'
+user_logs: rows = 0
+users: hezl(admin, email='')  lizy(admin, email='')  admin(admin, <邮箱>)
+```
+
+`notify_status='skipped'` 而不是 `'failed'` ⇒ 走的正是 `schedule_notify` 里的 `if not smtp_configured(): on_done("skipped", "未配置 SMTP")` 分支（**`feedback_mail.py:88`**）。不是发信失败，是**根本没进发信流程**。
+
+三个原因叠加，**少修一个都还是发不出去**：
+
+**(a) `Settings` 里压根没有 SMTP 字段。** `app/config.py` 的 `Settings` 只声明了 deepseek / embedding / retrieval / host / port / cors / data / chunk / ocr 这些，**没有** `smtp_*` / `feedback_*` 任何字段；而 `model_config` 写的是 `extra="ignore"` ⇒ `.env` 里的 `SMTP_HOST/SMTP_PORT/SMTP_SSL/SMTP_USER/SMTP_PASS/SMTP_FROM/FEEDBACK_SITE_BASE` 七个键被 pydantic **静默忽略**。
+
+**(b) 读的是 `os.getenv`，而 `.env` 从没进过进程环境变量。** `feedback_mail.py` 全文用 `os.getenv("SMTP_HOST")` 读；但 `start.sh` 只有 `source .venv/bin/activate` + `exec uvicorn`，**既没有 `set -a; source .env; set +a`，也没有 `export $(grep -v '^#' .env | xargs)`**。pydantic-settings 的 `env_file` 只填充 Settings 对象，**不回写 `os.environ`**。⇒ `os.getenv` 恒为空。
+
+**(c) 提交人邮箱是空的。** 即使 (a)(b) 都修好，`_user_email()` 取的是 `users.email`，而 **`hezl`、`lizy` 两行的 email 都是空字符串** ⇒ `valid_email('')` 为 False ⇒ `on_done("skipped", "提交人无有效邮箱")`（`:91-93`）。
+
+**修法：**
+
+1. `app/config.py` 的 `Settings` 增加七个字段（类型照抄）：
+   ```python
+   smtp_host: str = ""
+   smtp_port: int = 465
+   smtp_ssl: bool = True
+   smtp_user: str = ""
+   smtp_pass: str = ""
+   smtp_from: str = ""
+   feedback_site_base: str = "http://localhost:8000"
+   ```
+2. `app/services/feedback_mail.py` 里**全部 `os.getenv(...)` 改为 `get_settings()`**（`from app.config import get_settings`）。`smtp_configured()` / `_send_sync()` / `build_mail()` 三处都要改。**不要**用 `load_dotenv()` 把 `.env` 灌进 `os.environ` 来绕过 —— 与项目既有的 pydantic-settings 风格不一致，且会让密码长期驻留进程环境。
+3. **邮箱策略（用户 2026-10-22 拍板：`lizy` 的邮箱暂时不提供）**：`hezl` → `<邮箱>`；`lizy` 留空。**但"发不出去"这件事必须在产品界面上体现出来，不许静默 skip** —— 用户原话「产品界面通路要体现」：
+   - `notify_status` 增加 `'no_email'` 取值。现在的 `'skipped'` 语义太笼统（未配置 SMTP / 非通知事件 / 无邮箱 三种情况共用一个值），排查时看不出卡在哪个分支；
+   - 反馈列表与详情的「通知状态」列：显示「已发送 / 未发送·提交人未填邮箱 / 发送失败·<原因>」，未填邮箱用橙色标注，鼠标悬停给出"在个人中心补充邮箱后可重发"的提示；
+   - 管理页与个人中心**让 email 可编辑**（这条不变），补上邮箱后支持「重发通知」。
+   - 代码侧：`schedule_notify` 的 `on_done("skipped","提交人无有效邮箱")` 分支（`feedback_mail.py:91-93`）改成 `on_done("no_email","提交人未填邮箱")`。**先改状态值再改界面**，别只改文案。
+4. `FEEDBACK_SITE_BASE` 目前是 `http://localhost:8000`，链接别人打不开 —— 有对外地址就改，没有就先留着并在邮件里注明"需在内网访问"。
+
+**验收（41.4 欠账，这次必须真发一封）：** 后端重启后，在管理台把一条反馈置为 `fixed`，确认 `notify_status` 从 `skipped` 变成 **`sent`**，且 `<邮箱>` 真收到信。若仍是 `skipped`，把 `skipped` 的原因文案（"未配置 SMTP" / "提交人无有效邮箱"）报出来定位。
+
+### 43.2 P0：真 token 校验 + session 超时（现在是可以冒充管理员的）
+
+**现状实测：**
+
+- `mock_api.py:14` `_TOKENS: dict[str, str] = {}`，`:58` `_TOKENS[token] = username` —— **内存字典，无时间戳、无过期、无上限**，token 一旦签发**永不过期**，且进程重启即全丢；
+- `mock_api.py:75-77` `out_login()` **只 `return ok({}, msg="已退出")`，根本不删 token** ⇒ 点了退出登录，旧 token 照样能用（前端 `AvatarDropdown.tsx:46` 调的它）；
+- `feedback.py:_actor`（:31-67）鉴权顺序是 **token → 回退 `header username/loginUser`** ⇒ 任何人构造一个 `username: admin` 的请求头就能冒充管理员，看到全部反馈、改状态、指派。**这个回退必须去掉。**
+
+**修法：**
+
+1. `_TOKENS` 值改为结构：`{"username": str, "exp": float, "last": float}`，签发的 token 用 `secrets.token_urlsafe(32)`（现在是 `token_hex(16)`，够用但可加长）。
+2. **滑动过期**：TTL 默认 **2 小时**（用户 2026-10-22 拍板，原拟 30 分钟嫌短；先硬编码常量 + 注释，别一上来就加配置项）。**语义要说清**：2 小时是**从最后一次请求开始计时**（滑动窗口），不是从登录时刻算 —— 用户一直在操作就永不过期。另设**绝对上限 12 小时**，从登录时刻算，到点必须重登（防止一个永不活动的 token 靠滑动无限续命）。每次校验通过刷新 `last`。
+3. 新增统一依赖（放 `app/security/auth.py`，不要散在各 router）：
+   ```python
+   def require_user(request) -> dict   # 401 若 token 无效/过期
+   def current_user(request) -> dict|None  # 可为 None，用于公开接口
+   ```
+   `_actor` 改为调用它，**删除 `header username/loginUser` 回退**（`feedback.py:48-55` 整段删）。
+4. `out_login` 真正 `pop` token，并返回前端清 localStorage 的约定。
+5. **前端必须核实一件事**：`requestErrorConfig.ts` 的请求拦截器是否**统一**给所有请求带 `token` header（现有 `_actor` 的注释暗示"后端重启后 token 会丢、但 localStorage 里还有 loginUser" ⇒ 前端可能只有部分请求带 token）。若不是全量带，43.2 一上就会大面积 401。**这一条先查再改**，查完在回执里写明结论。
+6. 401 时前端跳登录页并提示"登录已过期"，不要静默失败。
+
+### 43.3 P1：登录 / 退出审计（现在是一行都没有）
+
+**现状实测：登录成功、登录失败、退出登录 —— 三条路径全部零记录。** 全仓 `grep user_logs` 只命中 `db.py:112`（建表）和 `mock_api.py:207`（**读**接口），**没有任何 INSERT**。`user_logs` 表 `rows = 0`，从建库至今一条没写过。也没有任何 session/超时概念（`grep expire|timeout|SESSION` 在 `app/` 下只命中 smtp 和 document_loader 的 timeout）。
+
+`user_logs` 现有字段是「页面访问/功能操作」口径（`user/name/org_code/org_name/source/url/module/menu/fcn/client_ip/request_id/record_time`），**装登录事件不合适**（没有事件类型、没有结果、没有时长、没有 session_id）。
+
+**新建 `login_logs` 表**（`db.py` 里加，注意存量库要 `CREATE TABLE IF NOT EXISTS`）：
+
+```sql
+CREATE TABLE IF NOT EXISTS login_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL DEFAULT '',
+    name TEXT DEFAULT '',
+    client_ip TEXT DEFAULT '',
+    user_agent TEXT DEFAULT '',
+    event TEXT NOT NULL,          -- login_ok | login_fail | logout | timeout | kicked
+    reason TEXT DEFAULT '',       -- 失败/踢出原因：密码错误 | 账号已停用 | 空
+    session_id TEXT DEFAULT '',   -- token 前 8 位，串联同一次登录
+    login_at TEXT,
+    logout_at TEXT,
+    duration_s INTEGER DEFAULT 0
+);
+```
+
+**埋点位置**（三处，都在 `app/routers/mock_api.py`）：
+- `login_account` 成功分支（`:58` 附近）：`event='login_ok'`，记 `client_ip`（取法见 43.4 的 IP 取值说明）、`user_agent`、`session_id`；
+- `login_account` 两个失败分支（`:37` 账号已停用、`:68` 密码错误）：`event='login_fail'` + `reason`；
+- `out_login`：真正 pop token 后写 `event='logout'` + `logout_at` + `duration_s`；
+- 43.2 的超时判定触发时：写 `event='timeout'`，`logout_at` 记为过期时刻。
+
+### 43.4 P1：操作行为审计（`user_logs` 是空壳，需要扩字段 + 定白名单）
+
+**现状实测：** 表存在、字段设计尚可（有 `client_ip`/`url`/`module`/`menu`/`fcn`），但 **零写入、无事件类型、无结果、无停留时长字段**。所以"是否支持判断都做了些啥操作"——**现在不支持，一条都没有**。
+
+**(a) 扩字段**（`db.py` 的 `user_logs` 建表语句加列；存量库用 `ALTER TABLE ... ADD COLUMN`，SQLite 支持，注意要 try/except 幂等）：
+
+```sql
+ALTER TABLE user_logs ADD COLUMN event TEXT DEFAULT '';       -- view | action
+ALTER TABLE user_logs ADD COLUMN action TEXT DEFAULT '';      -- 见下方白名单枚举
+ALTER TABLE user_logs ADD COLUMN target TEXT DEFAULT '';      -- 对象：kb名/文档id/反馈id
+ALTER TABLE user_logs ADD COLUMN result TEXT DEFAULT 'ok';    -- ok | fail
+ALTER TABLE user_logs ADD COLUMN detail TEXT DEFAULT '';      -- 失败原因/关键参数，≤500字，禁止记密码/token
+ALTER TABLE user_logs ADD COLUMN session_id TEXT DEFAULT '';
+ALTER TABLE user_logs ADD COLUMN duration_ms INTEGER DEFAULT 0;  -- 页面停留，见 (c)
+```
+
+**(b) 记录哪些 —— 白名单（不在清单里的一律不记，避免高频只读把表撑爆）：**
+
+| 类别 | action 枚举 | 说明 |
+|---|---|---|
+| 认证 | `login` / `logout` | 走 `login_logs`，**不重复**写 user_logs |
+| 知识库 | `kb_create` / `kb_delete` / `doc_upload` / `doc_delete` / `doc_revectorize` | 写操作 |
+| 生成 | `gen_doc_start` / `gen_doc_done` / `gen_ppt_start` / `gen_ppt_done` / `gen_fail` | 含失败，`detail` 记错误信息 |
+| 导出 | `export_docx` / `export_pptx` | 成品下载 |
+| 反馈 | `fb_create` / `fb_status` / `fb_assign` / `fb_comment` / `fb_image` | 全量记（本单新模块） |
+| 用户/权限 | `user_create` / `user_update` / `user_disable` / `pwd_change` / `role_change` | 敏感操作必记 |
+| 页面停留 | `page_view` | 路由级，见 (c) |
+
+**明确不记**：检索结果刷新、轮询（`upload_task` 状态轮询）、素材列表拉取、任何 GET 只读查询。
+
+**(c) 停留时长怎么算（这是用户明确问的）：**
+
+两个方案，**一期两个都做，互为兜底**：
+1. **前端上报（准）**：路由切换 / 页面卸载（`beforeunload` + `visibilitychange`）时，用 `performance.now()` 算出上一页停留毫秒数，随下一条日志或单独 `POST /mock_api/user-log` 上报，写进 `duration_ms`。
+2. **后端兜底（零前端改动）**：同一 `session_id` 下相邻两条 `page_view` 的 `record_time` 差值 ≈ 上一页停留时长。查询时**用 SQL 窗口函数 `LAG()` 现算**，不要写入表（写入会有"最后一段永远算不出"和"回填时序"两个坑）。
+
+⚠️ 前端上报那条如果工作量太大，可以先只做后端兜底（`LAG()` 方案），**但要在回执里明确说清"最后访问的页面停留时长缺失"这个已知边界**，别让它悄悄变成"看起来数据不全"的 bug。
+
+**(d) 埋点方式：中间件 + 白名单，不要散点手写。**
+新增 `app/services/audit.py`：一个 FastAPI 中间件，按 (b) 的白名单匹配 `method + path` → 自动落 `user_logs`；白名单用一张常量表维护（`AUDIT_RULES: list[(method, path_regex, action)]`）。好处是不遗漏、新增接口改一处。**不要**在每个 router 里手写 INSERT。
+
+**IP 取值**：`request.client.host` 在有反向代理时会拿到 `127.0.0.1` ⇒ 依次取 `X-Forwarded-For` 首段 → `X-Real-IP` → `request.client.host`。
+
+### 43.5 P2：审计查询页（否则记了也看不见）
+
+- `mock_api.py:207` 的 `user_logs` 读接口扩：**分页**（`page/size`，默认 20/50）+ **筛选**（`user` / `action` / `event` / `result` / 起止时间），返回 `total`；
+- 新增 `login_logs` 读接口（同款分页筛选）；
+- 前端加菜单「日志审计」，`menus` 走 `INSERT OR IGNORE`、`role_res` 带 `NOT EXISTS` 防重（**照抄四十一反馈管理那套幂等补丁的写法**，存量库不走 `count==0` 分支）；
+- 页面两栏：登录日志（账号/IP/UA/事件/时长）+ 操作日志（用户/动作/对象/结果/停留）。**只读，不给删除按钮**（审计数据不可篡改是前提）。
+
+### 43.6 保留策略与隐私（别省）
+
+- 日志量：`page_view` 会是大头，建议 `page_view` 保留 **30 天**、其余 **180 天**，启动时跑一次清理（`DELETE FROM user_logs WHERE record_time < ?`），**不要**用定时任务增加运维面；
+- 审计含 IP / UA，属个人信息。需求文档 `docs/2026-10-21-feedback-loop-requirements.md` 里已定的口径是"入口常驻 + 隐私声明占位"，这里保持一致：**先只在内部使用，不给客户开放前补隐私声明**。
+
+### 43.7 不在本单（勿顺手）
+
+- 审计数据的可视化图表 / 用户行为分析 / AI 洞察（P2，攒够数据再说）；
+- 单点登录、验证码、密码复杂度策略、异地登录告警；
+- **角色细化 / 多角色（RBAC 演进）** —— 用户提出了但**方案尚未拍板**，见 43.10。**本单不要动角色体系本身**（不建表、不改 `roles` / `role_res` 的结构）。
+- ~~把 `lizy` 从 admin 降级~~ → **已拍板：降为 `user`**（用户 2026-10-22）。但降级必须保住他的「知识库管理」能力，本单按 **43.10 方案 A** 做（给 `user` 角色补授知识库管理菜单）。`hezl` 保持 `admin`（他是反馈处理人）。
+
+### 43.8 执行序与验收
+
+**43.1 → 43.2 → 43.3 → 43.4 → 43.5**。
+
+验收（逐条贴结果，别只说"已完成"）：
+1. 邮件：重启后端 → 置 fixed → `notify_status='sent'` → `<邮箱>` 收到信（**贴 `notify_status` 的实际值**）；
+2. token：`curl` 不带 token 请求 `GET /mock_api/feedback` ⇒ 401；带 `username: admin` 头但**无 token** ⇒ **401**（这一条专门验弱鉴权是否真去掉）；带有效 token ⇒ 200；
+3. session：登录后静置超过 TTL 再请求 ⇒ 401 且 `login_logs` 多一条 `event='timeout'`；
+4. 登录审计：登一次、密码错一次、退出一次 ⇒ `login_logs` 三条，含 IP、时长非空；
+5. 操作审计：新建知识库 / 生成一次 PPT / 提交一条反馈 ⇒ `user_logs` 三条，`action` 命中白名单枚举；
+6. 查询页：分页 + 按 user/action 筛选返回正确 `total`。
+
+### 43.9 本单完成后 → 接「四十二」（别让前章烂掉，机制缺陷）
+
+用户 2026-10-22 指出一个真问题：**交接文档是「读末章开工」，每追加一章，前面的未完成章就被永久压住**，四十二会变成"永远的前章"。
+
+事实求是：四十二（PPT 小项描述长度校验，`## 四十二、` 在 4994 行）**已经被压过一次** —— 它原本被四十一压住，靠追加四十二章这个指针才排上队，现在又被四十三压住。
+
+**从本章起定一条规则：每一章末尾必须写明「本单完成后，下一单做哪一章」。**
+
+本单（四十三）完成后，**接四十二**：直接执行 `## 四十二、`（4994 行）里 42.1 → 42.2 → 42.3 → 42.4，42.5 三条不做，42.6 验收照做。四十二本身是完整独立的指令章，不需要再为它写指针章。
+
+⚠️ 后续任何人（我或用户）再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。
+
+**当前待办链条（写在这里，防止丢）：**
+1. **四十三**（本单，邮件 / token / 双审计）→ 正在做
+2. **四十二**（PPT 小项描述长度校验，4994 行）→ 本单完成后接
+3. **RBAC 方案 C**（真·多角色，见 43.10，用户 2026-10-22 已拍板）→ 四十二之后，**需单独开一章**，不要只靠这条备注。
+
+### 43.10 待用户拍板：角色与权限细化（本单不动，先摆方案）
+
+用户 2026-10-22 提出：`lizy` 应降为 `user`，但又需要「知识库管理」权限；进而问是否需要细化角色与权限的关系、支持一个用户多个角色（即 `user` 身份带部分管理权限）。
+
+**现状实测**：`users.access` 是**单值**（`admin` / `user`）；`roles` / `role_res` / `menus` 是标准 RBAC 三表，但**只有 role→res 的授权，没有「用户-角色」关联表** ⇒ 一个用户只能有一个角色（就是 `access` 本身）。`_actor` 返回 `access`，前端 `initialState` 拿它判菜单。
+
+三个方案：
+
+| 方案 | 做法 | 代价 | 适用 |
+|---|---|---|---|
+| **A. 改授权（最小）** | `lizy` 降为 `user`，再给 `role_res` 中 `role_code='user'` 补授「知识库管理」菜单 | 零代码，一条 `INSERT` | **副作用：所有 `user` 都获得知识库管理权**，粒度粗。内部测试期（就 4 个账号）可接受 |
+| **B. 加中间角色** | 新建 `role_code='kb_manager'`，只授知识库菜单；`lizy` 的 `access` 直接改成 `kb_manager`（仍是单值） | 要排查前端是否有硬编码 `access === 'admin'` 的分支 | 比 A 干净，但仍是单角色；将来"既是 kb_manager 又要提反馈"还得再改 |
+| **C. 真·多角色** | 新增 `user_roles(user_id, role_code)` 关联表，权限取并集；`_actor` 返回角色集合，前端菜单按并集渲染 | 改动面最大：db + 后端鉴权 + 前端 `initialState`/菜单渲染 + 用户管理界面 | 将来给客户用必走这条路；现在 4 个账号，做了收益不划算 |
+
+**本单按 A 做**（先把 `lizy` 的权限打通、不阻塞），**C 记为技术债**，等"要给客户用"或"角色数超过 3 个"时再开单。走 A 时 `role_res` 的补丁**必须照抄四十一那套 `INSERT ... WHERE NOT EXISTS` 幂等写法**，别用 `count==0` 分支（存量库不走那条路）。
+
+**已拍板（用户 2026-10-22 02:40）：走 C（真·多角色），但不在本单做，等四十三全部完成后单独开一章。**
+
+本单仍按 A 执行（先把 `lizy` 的权限打通、不阻塞）。⚠️ **A 的产出现在 C 落地时必须回滚**：A 是把「知识库管理」直接授给 `user` 角色，C 落地后权限按角色并集计算，若 A 的授权还留着，就会变成「所有 user 都带知识库管理」——正好是 A 的副作用被固化下来。**开 C 那一单时，第一条就是删掉这条 `role_res` 记录，并改成给 `kb_manager` 角色授权。**
+
+
+## 四十四、四十三验收判卷：两件收尾 + 接四十二（2026-10-22 02:50）
+
+### 44.0 判卷结论（我实测过，不是看你的回执复述）
+
+四十三**整体通过**。以下每条我都有实测证据：
+
+| 验收项（43.8） | 结果 | 证据 |
+|---|---|---|
+| 邮件 `notify_status` | ✅ | `feedbacks` 里 `0d88a429 \| user=hezl \| status=fixed \| notify=sent`（对比修复前的 `8bc1d18f \| notify=skipped`） |
+| 弱鉴权真的去掉 | ✅ | 我 curl 三种情况全部 **401**：① `-H "username: admin"` 无 token ② 完全无身份 ③ 伪造 `token: deadbeef`。返回体 `{"detail":"登录已过期或未登录"}` |
+| SMTP 改走 Settings | ✅ | `config.py:73-79` 七个字段齐全；`feedback_mail.py` 三处 `get_settings()`，无 `os.getenv` |
+| 登录/失败/退出埋点 | ✅ | `login_logs` 11 行，含 `login_fail`(reason=密码错误, ip=127.0.0.1) 与 `logout`(duration_s=3) |
+| 白名单 + 停留时长 | ✅ | `user_logs` 8 行，`page_view` duration_ms=37606（约 37.6 秒，与相邻记录间隔自洽）、`fb_create`/`fb_status` 均在白名单内 |
+| 审计页 | ✅ | `routes.ts:230` `/admin/audit` + `AuditLogs.tsx` + `menu.ts:35`「日志审计」 |
+| lizy 降 user + 知识库授权 | ✅ | `users` 表 `lizy \| access=user`；`db.py:302` 幂等补丁（审计菜单 + user 补授知识库管理） |
+| 中间件已生效 | ✅ | 不用再提醒重启了 —— `user_logs` 有 02:44 的数据，说明新代码已在跑 |
+
+### 44.1 P0（先做这个）：四十三的改动**一行都没提交**
+
+`git status` 显示 **12 个 `M` + 2 个未跟踪新文件**（`backend/app/security/auth.py`、`backend/app/services/audit.py`），最新提交还停在 `00d4871`。
+
+**先把四十三整体提交，再动任何新代码。** 理由不是洁癖：现在工作区里混着邮件修复、token 改造、审计中间件三件事，一旦四十二的改动叠上来，出问题没法回滚到"四十三完成"这个已知好状态。
+
+提交时按 43.1 / 43.2 / 43.3+43.4 / 43.5 拆成 2-4 个 commit，别一个 `feat: 一大堆`。
+
+### 44.2 P1：`login_logs` 缺独立时间字段 —— 这是我的设计疏漏，你照做就行
+
+**问题**：表里只有 `login_at` / `logout_at`，**没有事件自身的记录时间**。登录失败时 `login_at` 是 NULL ⇒ 实测 `login_fail` 那一列时间全是空的。
+
+后果很实际：**登录失败恰恰是安全审计最需要时间戳的事件**（谁、什么时候、连续几次试密码），现在查不出来。审计日志没有时间等于废数据。
+
+**修法**（`db.py` 的 `_ensure_login_logs` 里加，注意存量库要幂等）：
+```sql
+ALTER TABLE login_logs ADD COLUMN record_time TEXT;
+```
+然后 `write_login_log()` 里**所有事件**（`login_ok` / `login_fail` / `logout` / `timeout` / `kicked`）都写 `record_time = _now()`，`login_at` 保持只在成功时有值的语义。
+
+顺带把审计页的登录日志表格加上这一列，并按 `record_time` 倒序。
+
+### 44.3 提醒（不用你改，别再动密码）
+
+`login_logs` 里有 **5 条 `hezl` 的 `login_fail`（reason=密码错误）**，之后你把它重置成了创建时密码。现在五个账号的 `password` 都是标准 bcrypt（`$2b$` 前缀、长度 60），形态正常。
+
+**别再动任何账号的密码。** 用户会自己登一次确认；如果登不上，他会走个人中心的改密流程，不需要你介入。
+
+另：用户已明确 **RBAC 走方案 C（真·多角色）**，但**不在本单、也不在四十二做**，等排到那一单我再开章。你不需要做任何角色体系的改动。
+
+### 44.4 收尾完成后 → 接「四十二」
+
+执行序：**44.1（提交）→ 44.2（补时间字段，提同一个 commit 或紧邻的第二个）→ 四十二**。
+
+四十二：`## 四十二、` 在 4994 行，执行 42.1 → 42.2 → 42.3 → 42.4，42.5 三条不做，42.6 验收照做。它是完整独立的指令章，不用再为它写指针章。
+
+### 44.5 待办链条（继续继承，别丢）
+
+1. ~~四十三（邮件 / token / 双审计）~~ → 已落地待收尾
+2. **四十四**（提交 + `login_logs` 时间字段）→ 本单
+3. **四十二**（PPT 小项描述长度校验）→ 接在 44 之后
+4. **RBAC 方案 C**（真·多角色，43.10 已拍板）→ 单独开章，排最后
+
+
+## 四十五、四十二验收判卷 + 交接文档入库 + 做 42.4（2026-10-22 03:40）
+
+### 45.0 四十二（42.1–42.3）验收通过（我逐项实测过）
+
+| 项 | 证据 |
+|---|---|
+| 剥离复用同一套正则 | ✅ `ViewItem4Ppt.ts:4` `import { stripHallucinatedDocCitations }`，`:8` 包装函数，注释写明「勿复制第二份」——正是 42.1 要求的 |
+| 提示词禁写 | ✅ `:17` `"不要用 [文档N]，不要输出任何来源标注。"` |
+| 写入前剥离 + 校验用剥离后 | ✅ `:1696` 「校验前剥离 [文档N]，写入也用清洗后文本」；主校验 `:1393-1397`（标题/描述）全部换成 `pptItemLength(...)` |
+| 编辑器软限 | ✅ `SliderDrawer.tsx` 已无 `maxLength`（原 `:212/:222` 已删）；`:241/:253` `type={dOver ? 'danger' : 'secondary'}` 超限标红 |
+| AI 精简仅超长出现 | ✅ `:264-268` 条件 `dOver && props.onShortenItem && !asColumn && !asMetric` —— 还额外排除了分栏/指标版式，考虑得比我写的细 |
+| `login_logs.record_time` | ✅ 新事件有值（实测 `03:30:25 login_fail` 带 `record_time`）；失败事件终于能按时间查了 |
+| commit 拆分 | ✅ 6 个 commit 结构清楚：邮件 / token / 审计 / record_time / PPT / docs |
+
+两点说明，不是缺陷：
+
+- **`record_time` 有 6 条历史 NULL** —— 是加字段之前的旧记录（`ALTER TABLE ADD COLUMN` 不回填）。**不要去回填它们**：`login_ok` / `logout` 还能用 `login_at` 凑，但 `login_fail` 的旧行 `login_at` 本来就是 NULL，回填只会造出假数据。留空即可，新数据已正确。
+- **用户 `hezl` 03:30 有两次 `login_fail` 后 `login_ok`** —— 是用户在自己验证登录（密码已确认可用）。**不要因为看到登录失败就去重置密码**，这条我再说一次。
+
+### 45.1 P0：把 `.workbuddy/workbuddy-to-cursor.md` 单独提交（你之前的判断是对的）
+
+你不把它混进功能提交是对的，**继续这么干**。这一份单独开一个 commit。
+
+我在提交前扫了一遍，**没有明文凭据**（唯一命中的是 `token_urlsafe(32)` 这种代码描述，不是真密钥）。但有 **5 处 `<邮箱>`** 企业邮箱 —— 属个人信息，不是密钥。**仓库若是私有就直接提交；若公开或将来要公开，先把邮箱脱敏成 `<邮箱>`。** 这点由用户确认，你不用自己决定，提交前问一句。
+
+### 45.2 P1：现在把 42.4 做掉（原本标 P2 延后，我改主意了）
+
+**为什么现在做**：42.4 是四十二里唯一没做的，刚做完 42.1–42.3，上下文还在，接着做成本最低；拖到下一轮要重新读一遍代码。
+
+**更要紧的是，当初把它定为 P2 的理由其实不成立**：P2 的顾虑是「放宽字数上限会溢出模板」，但 **42.4 根本不碰 70 这个上限** —— 它改的是版式判定，让数据密集页走 `metric`（metric 有自己的「原数字 2~12 字 + 短解读 4~16 字」约束，与 list 的 20~70 是两套）。所以没有模板容量风险，是我当初把两类风险混在一起标了 P2。
+
+**改什么**（`frontend/src/components/DocUtil/outlineJson.ts:146-158`）：
+
+`metricCue` 现在只对**页标题**做正则（`/大盘|增速|规模|占比|GMV|销售额|同比|渗透|播放量|金额|人次/`）。页标题不含这些词、但要点里塞了三组质押数字 ⇒ 判成 `list` ⇒ 挤在 20~70 字里 ⇒ 就是用户最初报的那个 108 字现场。
+
+改成：**同时看要点正文** —— 一条页的要点里出现 **≥2 组「数字 + 单位」**（如 `6.7亿股`、`22.1亿股`、`7.28亿股`）即判为数据页走 `metric`。或者更稳妥：在大纲侧给数据密集页显式标 `layout: 'metric'`。
+
+**风险与验收（这条别省）**：判定放宽 ⇒ 会有更多页走 metric 版式 ⇒ 版式发生变化。所以必须实测：拿最初报 108 字那一页（三组质押数字）重新生成，确认 ① 判成 `metric` ② 数字完整没被截 ③ 不溢出。同时**反验一页叙述型内容**，确认没被误判成 metric（若误伤，把阈值收紧到「≥2 组数字+单位 **且** 数字字符占该条描述比例 > 20%」）。
+
+jest 继续并入 `outlineStructureAssert`，用例两条：① 要点含 3 组「数字+单位」、页标题无关键词 ⇒ 判 metric；② 要点纯叙述 ⇒ 仍判 list。
+
+### 45.3 提醒（不用你做）：main 领先 origin 6 个 commit
+
+6 个 commit 都还在本地。用户决定何时 push —— **push 之前必须先确认 45.1 的仓库可见性**（有企业邮箱和 RBAC 实现细节在里面）。
+
+### 45.4 待办链条
+
+1. ~~四十四（提交 + record_time）~~ ✅
+2. ~~四十二 42.1–42.3~~ ✅
+3. **42.4（metricCue 扩到要点）** ← 本单
+4. **RBAC 方案 C（真·多角色）** ← 43.10 已拍板，单独开章，排最后
+
+⚠️ 排到 RBAC-C 那一单时，**第一条是回滚 43.10 方案 A 的副作用**：A 把「知识库管理」直接授给了 `user` 角色，C 落地后权限按角色并集算，若 A 的授权残留 ⇒ 所有 user 都带知识库管理。必须先删那条 `role_res`、改授 `kb_manager`。

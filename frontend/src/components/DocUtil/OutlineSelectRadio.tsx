@@ -1,4 +1,4 @@
-import {Radio, Input, RadioChangeEvent, Row, Tag, Col, Tooltip, message, Space} from 'antd';
+import {Radio, Input, RadioChangeEvent, Row, Tag, Tooltip, message, Space} from 'antd';
 import React, {useEffect, useState} from "react";
 import OutlineRec, {outlineType, outlineTypeAiPPT, outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import {CloudDownloadOutlined, DeleteTwoTone, EditOutlined, CheckOutlined, CloseOutlined} from "@ant-design/icons";
@@ -66,21 +66,18 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
     props.outlineSelectFn(e.target.value);
   };
 
-  const radioStyle = {
-      display: 'block',
-      height: '1.6em',
-      lineHeight: '1.5em',
-      verticalAlign: 'middle',
-      fontSize: '1.3em',
-      marginTop: '0.2em',
-    };
-  const showName=(name:string)=>{
-    if (name.length>20){
-      return name.substring(0,20)+"...";
-    }else{
-      return name;
-    }
-  }
+  // 三十七·1：单行省略，勿固定高度 / 勿按字数截断
+  const radioStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    fontSize: '1.1em',
+    lineHeight: 1.6,
+    whiteSpace: 'nowrap',
+    minWidth: 0,
+    width: '100%',
+    marginTop: '0.2em',
+  };
 
   /** 与右侧树/解析器同一条链路：去掉 H1 后按 ## 计章 */
   const outlineBody = (content: string) => {
@@ -123,8 +120,17 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
     return (
       <Radio.Group onChange={onChange} value={value} style={{width:"98%"}}>
         {props.outlineRecs.map((item, i) => (
-          <Row key={item.outlineId} id={`outline-rec-${item.outlineId}`} style={{ borderBottom: '1px solid #000',paddingBottom:"5px"  }}>
-            <Col span={18}>
+          <Row
+            key={item.outlineId}
+            id={`outline-rec-${item.outlineId}`}
+            wrap={false}
+            style={{
+              borderBottom: '1px solid var(--color-border-tertiary, #f0f0f0)',
+              paddingBottom: 5,
+              alignItems: 'center',
+            }}
+          >
+            <div style={{flex: '1 1 auto', minWidth: 0, overflow: 'hidden'}}>
               {editingId === item.outlineId ? (
                 <Space.Compact style={{width: '100%', marginTop: 4}}>
                   <Input
@@ -145,16 +151,36 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
                 </Space.Compact>
               ) : (
                 <Radio key={item.outlineId} style={radioStyle} value={item.outlineId}>
-                  <Tag color="blue">{i + 1}</Tag>
-                  <Tooltip title={`${chapterHint(item.outlineContent)}\nID: ${item.outlineId}`}>
-                    {showName(item.outlineName)}
+                  <Tag color="blue" style={{flex: '0 0 auto', marginInlineEnd: 0}}>{i + 1}</Tag>
+                  <Tooltip
+                    title={
+                      <div>
+                        <div style={{fontWeight: 500}}>{item.outlineName}</div>
+                        <div style={{opacity: 0.8}}>{chapterHint(item.outlineContent)}</div>
+                        <div style={{opacity: 0.8}}>ID: {item.outlineId}</div>
+                      </div>
+                    }
+                  >
+                    <span
+                      style={{
+                        flex: '1 1 auto',
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {item.outlineName}
+                    </span>
                   </Tooltip>
-                  <Tag style={{marginLeft: 8}}>{chapterCount(item.outlineContent)} 章</Tag>
+                  <Tag style={{marginLeft: 4, flex: '0 0 auto', marginInlineEnd: 0}}>
+                    {chapterCount(item.outlineContent)} 章
+                  </Tag>
                 </Radio>
               )}
-            </Col>
+            </div>
             {(value===item.outlineId)&&
-              <Col span={6} style={{display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8}}>
+              <div style={{flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginLeft: 8}}>
                 <EditOutlined
                   style={{fontSize: 'x-large', color: '#2998ff'}}
                   title="改名"
@@ -175,7 +201,7 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
                                          downloadTextFile(props.outlineType,item.outlineContent,item.outlineName)
                                         }
                 />
-              </Col>
+              </div>
             }
           </Row>))}
       </Radio.Group>

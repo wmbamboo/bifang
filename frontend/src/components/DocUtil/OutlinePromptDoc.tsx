@@ -1,5 +1,12 @@
-import {Collapse, CollapseProps, Tag} from "antd";
-import {Chapter, Doc, DocPromptSavePatch} from "./ViewItem4Doc";
+import {Collapse, CollapseProps, Empty, Space, Tag} from "antd";
+import {
+  Chapter,
+  Doc,
+  DocPromptSavePatch,
+  formatWordBudgetZh,
+  paragraphPointLabels,
+  wordBudgetFor,
+} from "./ViewItem4Doc";
 import {useState} from "react";
 import EditablePromptCollapse4Doc from "@/components/DocUtil/EditablePromptCollapse4Doc";
 
@@ -38,8 +45,15 @@ const OutlinePromptDoc: React.FC <DocOutlinePromptProps>
       fn(next);
     }
   }
+  // 三十八·2① / 三十七·3：空大纲显示引导，勿空 Collapse
   if (!keys) {
-    return <Collapse ghost accordion items={[]} />;
+    return (
+      <Empty
+        style={{marginTop: 48}}
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="尚未生成写作大纲：请先在左侧完成构思与大纲生成"
+      />
+    );
   }
   /**
    * promptCollapse中的编辑按钮消息传递,根据子组件的通知更新本组件的状态
@@ -76,13 +90,53 @@ const OutlinePromptDoc: React.FC <DocOutlinePromptProps>
       if (Array.isArray(chapter.paragraphs)) {
         const paragraphsNew: CollapseProps['items'] = [];
         for (let paragraph of chapter.paragraphs) {
+          // 三十七·2：摘要取字段，勿正则切 prompt
+          const b = wordBudgetFor(paragraph);
+          const chips = [
+            `约 ${formatWordBudgetZh(b)} 字`,
+            `要点 ${paragraphPointLabels(paragraph).length}`,
+            paragraph.allowTable === false ? "禁表" : "可表",
+            paragraph.allowFigure === false ? "禁图" : "可图",
+            paragraph.promptManual ? "自定义提示词" : null,
+          ].filter(Boolean) as string[];
           paragraphsNew.push(
             {
               key: paragraph.key,
               label: paragraph.label,
-              children: <p><Tag color={"volcano"}>提示词<br/></Tag>
-                {paragraph.prompt}
-              </p>,
+              children: (
+                <div>
+                  <Space size={4} wrap style={{marginBottom: 6}}>
+                    {chips.map((c) => (
+                      <Tag key={c}>{c}</Tag>
+                    ))}
+                  </Space>
+                  <Collapse
+                    ghost
+                    size="small"
+                    defaultActiveKey={
+                      paragraph.promptManual ? ["contract"] : []
+                    }
+                    items={[
+                      {
+                        key: "contract",
+                        label:
+                          "写作契约与完整提示词（系统统一注入，通常无需修改）",
+                        children: (
+                          <div
+                            style={{
+                              whiteSpace: "pre-wrap",
+                              fontSize: 12,
+                              color: "var(--color-text-secondary, #8c8c8c)",
+                            }}
+                          >
+                            {paragraph.prompt}
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
+                </div>
+              ),
               style: panelStyle
             }
           )

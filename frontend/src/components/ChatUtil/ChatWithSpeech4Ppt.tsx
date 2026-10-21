@@ -225,10 +225,10 @@ const Chat=(props:ChatProps)=> {
             return null;
           }
           return (
-            <Button  key={"outlineSave"} size={"small"} style={{marginTop:"0.5em"}}
-                    type="dashed"
-                    onClick={(e) => {
-                      console.log(e,props.message);
+              <Button  key={"outlineSave"} size={"small"} style={{marginTop:"0.5em"}}
+                      type="dashed"
+                      onClick={(e) => {
+                        console.log(e,props.message);
                       const preferredTitle =
                         (pendingDisplayTitleRef.current ||
                           lastTopicRef.current ||
@@ -258,12 +258,12 @@ const Chat=(props:ChatProps)=> {
                       }
                       let recContent = Ppt.getContentFromMsg(content);
                       if (!recTitle || recTitle.length === 0) {
-                        message.error("无法保存，大纲markdown格式有误,标题应该以【# 】开头并在第一行单独成行，请检查并修改。",20)
-                        return;
-                      }
-                      const chapters=Ppt.getChaptersFromContent(recContent)
-                      const t=Ppt.checkChapter(chapters);
-                      if(t.code!==0){
+                          message.error("无法保存，大纲markdown格式有误,标题应该以【# 】开头并在第一行单独成行，请检查并修改。",20)
+                          return;
+                        }
+                        const chapters=Ppt.getChaptersFromContent(recContent)
+                        const t=Ppt.checkChapter(chapters);
+                        if(t.code!==0){
                         message.error(t.msg, 20);
                         return;
                       }
@@ -274,24 +274,24 @@ const Chat=(props:ChatProps)=> {
                           `结构不合格：${chapters.length} 章中有 ${thin} 章不足 2 页。请重新构思（系统将先定标题树再填要点）。`,
                           20,
                         );
-                        return;
-                      }
-                      message.success(t.msg)
+                          return;
+                        }
+                        message.success(t.msg)
                       let newPptOutlineRec=new OutlineRec(
                         recTitle,
                         recContent,
                         outlineType===outlineTypePPT ? (kb_name || "samples") : (kb_name || ""),
                         "",
                       );
-                      console.log("the new OutlineRec:", JSON.stringify(newPptOutlineRec));
-                      OutlineRec.save(outlineType,newPptOutlineRec)
-                      cb4setOutlineRec(newPptOutlineRec.outlineId!);
+                        console.log("the new OutlineRec:", JSON.stringify(newPptOutlineRec));
+                        OutlineRec.save(outlineType,newPptOutlineRec)
+                        cb4setOutlineRec(newPptOutlineRec.outlineId!);
                       let newRecs=OutlineRec.listRecs(outlineType, outlineType===outlineTypePPT ? (kb_name || "samples") : undefined)
-                      cb4setTempOutlineRecs(newRecs);
-                    }}
-            >
-              大纲保存
-            </Button>
+                        cb4setTempOutlineRecs(newRecs);
+                      }}
+              >
+                大纲保存
+              </Button>
           );
         },
       }}
@@ -537,7 +537,7 @@ const Chat=(props:ChatProps)=> {
             new ReadableStream({
               start(controller) {
                 controller.enqueue(encoder.encode(errText));
-                controller.close();
+                    controller.close();
               },
             }),
           );

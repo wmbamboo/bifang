@@ -14,7 +14,7 @@ import {
 
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
-import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT, paragraphsToGenerate, wordBudgetFor, DocPromptSavePatch, applyDocPromptSavePatch, flagEmptyDocParagraphs} from "@/components/DocUtil/ViewItem4Doc";
+import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT, paragraphsToGenerate, wordBudgetFor, DocPromptSavePatch, applyDocPromptSavePatch, flagEmptyDocParagraphs, absorbBlocksFromParagraphContent} from "@/components/DocUtil/ViewItem4Doc";
 import {applyDocHeadingNumbers} from "@/components/DocUtil/docHeadingDepth";
 import {
   prepareChaptersBlocks,
@@ -236,8 +236,9 @@ const KbOutlineGenDoc: React.FC = () => {
           }
           try {
             const curDate = new Date();
-            const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
-            const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
+            const pad2 = (n: number) => String(n).padStart(2, "0");
+            const curDateStr = `${curDate.getFullYear()}-${pad2(curDate.getMonth() + 1)}-${pad2(curDate.getDate())}`;
+            const curSimpleDateStr = `${curDate.getFullYear()}${pad2(curDate.getMonth() + 1)}${pad2(curDate.getDate())}`;
             // 三十·④：隐去标注时深拷贝剥离，不改 state 里的 chapters
             let renderChapters = chapters;
             if (!keepCitations) {
@@ -674,9 +675,15 @@ const KbOutlineGenDoc: React.FC = () => {
           }
           setBibliography(bib);
           console.info("[DocCite] 聚合资料来源", bib.length, "条");
+          // 生成收尾：再吸一遍围栏 + 新数组引用，避免同引用 setState 跳过重渲导致「图未解析」
+          for (const ch of chapters) {
+            for (const p of ch.paragraphs || []) {
+              absorbBlocksFromParagraphContent(p);
+            }
+          }
           setLoading(false);
           setProgressHidden(true);
-          setChapters(chapters);
+          setChapters(chapters.slice());
           setDownloadable(true);
         } else {
           message.warning(

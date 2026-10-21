@@ -721,7 +721,7 @@ function isTableSepLine(line: string): boolean {
   return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c) || c === "");
 }
 
-/** 段内表/图块计数（优先 blocks；正文仍含围栏时兜底扫描） */
+/** 段内表/图块计数（blocks + 正文残留围栏取较大值） */
 export function countParagraphMedia(paragraph: Paragraph): {
   tables: number;
   figures: number;
@@ -732,12 +732,12 @@ export function countParagraphMedia(paragraph: Paragraph): {
     if (b.kind === "table") tables += 1;
     else if (b.kind === "figure") figures += 1;
   }
-  if (!tables && !figures) {
-    const c = String(paragraph.content || "");
+  const c = String(paragraph.content || "");
+  if (/```/.test(c)) {
     const tm = c.match(/```\s*table\b/gi);
     const fm = c.match(/```\s*figure\b/gi);
-    tables = tm ? tm.length : 0;
-    figures = fm ? fm.length : 0;
+    if (tm) tables = Math.max(tables, tm.length);
+    if (fm) figures = Math.max(figures, fm.length);
   }
   return {tables, figures};
 }

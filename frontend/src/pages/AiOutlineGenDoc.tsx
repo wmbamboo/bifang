@@ -1,11 +1,11 @@
 import { PageContainer, ProCard } from '@ant-design/pro-components';
-import {Button, Spin, Row, Col, message, Flex, Progress} from 'antd';
+import {Button, Spin, Row, Col, message, Flex, Progress, Typography} from 'antd';
 import React, {useState} from "react";
 import axios from "axios";
-import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, buildKbDocWritingConstraintPrompt, stripHallucinatedDocCitations} from "@/components/DocUtil/parseChatCompletion";
+import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, buildKbDocWritingConstraintPrompt, stripHallucinatedDocCitations, stripCitationsDeep} from "@/components/DocUtil/parseChatCompletion";
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
-import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT, paragraphsToGenerate, wordBudgetFor, DocPromptSavePatch, applyDocPromptSavePatch, flagEmptyDocParagraphs} from "@/components/DocUtil/ViewItem4Doc";
+import {ViewItem4Doc, Chapter, Doc, Paragraph, clean4DocTitle, buildDocParagraphFormatPrompt, DOC_OUTLINE_MARKDOWN_INIT, paragraphsToGenerate, wordBudgetFor, DocPromptSavePatch, applyDocPromptSavePatch, flagEmptyDocParagraphs, absorbBlocksFromParagraphContent} from "@/components/DocUtil/ViewItem4Doc";
 import {applyDocHeadingNumbers} from "@/components/DocUtil/docHeadingDepth";
 import {
   prepareChaptersBlocks,
@@ -177,11 +177,18 @@ const AiOutlineGenDoc: React.FC = () => {
           }
           try {
             const curDate = new Date();
-            const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
-            const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
-            flagEmptyDocParagraphs(chapters);
-            const blockLists = prepareChaptersBlocks(chapters);
-            applyDocHeadingNumbers(chapters);
+            const pad2 = (n: number) => String(n).padStart(2, "0");
+            const curDateStr = `${curDate.getFullYear()}-${pad2(curDate.getMonth() + 1)}-${pad2(curDate.getDate())}`;
+            const curSimpleDateStr = `${curDate.getFullYear()}${pad2(curDate.getMonth() + 1)}${pad2(curDate.getDate())}`;
+            // 三十八·2②：Ai 恒剥引注（深拷贝，不改 state）
+            const cite = stripCitationsDeep(chapters);
+            const renderChapters = cite.chapters as Chapter[];
+            if (cite.stripped > 0) {
+              console.info("[DocCite] Ai 导出剥离引注", cite.stripped);
+            }
+            flagEmptyDocParagraphs(renderChapters);
+            const blockLists = prepareChaptersBlocks(renderChapters);
+            applyDocHeadingNumbers(renderChapters);
             const zip = new PizZip(content);
             const doc = new Docxtemplater(zip, {
               paragraphLoop: true,
@@ -199,7 +206,7 @@ const AiOutlineGenDoc: React.FC = () => {
               description: "The Acme Product",
               itemName1: "test1",
               itemName2: "test2",
-              chapters: chapters,
+              chapters: renderChapters,
             });
             const payloads = await resolveBlocksToPayloads(blockLists, {
               kbName,
@@ -212,18 +219,18 @@ const AiOutlineGenDoc: React.FC = () => {
               resolveUpload: async (key) => readUploadAsset(key),
               // 二十一·9 / 二十三·13：Ai 无图资产 → 段级空白名单
               allowedFigureRefsByList:
-                collectParagraphAllowedFigureRefLists(chapters),
+                collectParagraphAllowedFigureRefLists(renderChapters),
             });
             const inj = injectDocBlocks(doc.getZip(), payloads);
             if (inj.warning) {
               console.warn(inj.warning);
               message.warning(inj.warning);
             }
-            const maxLvl = inferDocMaxHeadingLevel(chapters);
+            const maxLvl = inferDocMaxHeadingLevel(renderChapters);
             patchTocOutlineLevels(doc.getZip(), maxLvl);
             const hl = applyHeadingLevels(
               doc.getZip(),
-              buildHeadingLevelPlan(chapters, maxLvl),
+              buildHeadingLevelPlan(renderChapters, maxLvl),
             );
             if (hl.warning) console.warn(hl.warning);
             // 二十六·A：去 heading 自动编号，只留 label 手写编号
@@ -413,9 +420,14 @@ const AiOutlineGenDoc: React.FC = () => {
               timeDiff +
               "分钟",
           );
+          for (const ch of chapters) {
+            for (const p of ch.paragraphs || []) {
+              absorbBlocksFromParagraphContent(p);
+            }
+          }
           setLoading(false);
           setProgressHidden(true);
-          setChapters(chapters);
+          setChapters(chapters.slice());
           setDownloadable(true);
         } else {
           message.warning(
@@ -518,6 +530,9 @@ const AiOutlineGenDoc: React.FC = () => {
           headerBordered
           style={{ minHeight: '80vh', background: theme.colorBgContainer }}
         >
+          <Typography.Text type="secondary" style={{display: "block", marginBottom: 8, fontSize: 12}}>
+            AI 模式无外部来源，正文不保留 [文档N]
+          </Typography.Text>
           <OutlinePromptDoc id="prompt-container" chapters={chapters} docTitle={title}
                             activeKey={key} fn={cbFn} genFn={genFn} cbSaveResultFn={cbSavePromptResult}/>
         </ProCard>

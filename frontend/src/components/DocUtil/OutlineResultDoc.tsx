@@ -3,6 +3,7 @@ import {
   Chapter,
   Paragraph,
   Doc,
+  absorbBlocksFromParagraphContent,
   countChapterMedia,
   countParagraphMedia,
 } from "@/components/DocUtil/ViewItem4Doc";
@@ -83,6 +84,8 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
     </p>
   );
   const contentShow = (paragraph: Paragraph, chapterKey: string) => {
+    // 列表展示自愈：生成后若围栏仍在正文，当场吸收进 blocks（与 setContent 同口径）
+    absorbBlocksFromParagraphContent(paragraph);
     const {tables, figures} = countParagraphMedia(paragraph);
     return (
       <div>

@@ -218,3 +218,30 @@ describe("落点：调用方用 code < 0", () => {
     expect(drawer).toMatch(/chkMsg\.code\s*<\s*0/);
   });
 });
+
+describe("三十七 / 三十八 大纲空态与列表标题", () => {
+  test("OutlinePromptDoc 空态 Empty + chips 取字段", () => {
+    const src = readFileSync(
+      join(__dirname, "../src/components/DocUtil/OutlinePromptDoc.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/Empty\.PRESENTED_IMAGE_SIMPLE/);
+    expect(src).toMatch(/尚未生成写作大纲/);
+    expect(src).toMatch(/wordBudgetFor\(paragraph\)/);
+    expect(src).toMatch(/paragraphPointLabels\(paragraph\)/);
+    expect(src).not.toMatch(/paragraph\.points\.length/);
+    expect(src).toMatch(/写作契约与完整提示词/);
+  });
+
+  test("OutlineSelectRadio 单行省略、无 showName 截断", () => {
+    const src = readFileSync(
+      join(__dirname, "../src/components/DocUtil/OutlineSelectRadio.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/textOverflow:\s*['"]ellipsis['"]/);
+    expect(src).not.toMatch(/height:\s*['"]1\.6em['"]/);
+    expect(src).not.toMatch(/function showName|const showName\s*=/);
+    expect(src).toMatch(/item\.outlineName/);
+    expect(src).toMatch(/fontWeight:\s*500/);
+  });
+});

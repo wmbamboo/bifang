@@ -97,3 +97,53 @@ describe("stripHallucinatedDocCitations 烟雾", () => {
     ).toBe(1);
   });
 });
+
+describe("三十八 Ai 恒剥 / KB 开关", () => {
+  test("AiOutlineGenDoc saveDoc 无条件 stripCitationsDeep 且用返回值", () => {
+    const {readFileSync} = require("fs");
+    const {join} = require("path");
+    const src = readFileSync(
+      join(__dirname, "../src/pages/AiOutlineGenDoc.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/stripCitationsDeep\(chapters\)/);
+    expect(src).toMatch(/const renderChapters = cite\.chapters/);
+    expect(src).toMatch(/chapters:\s*renderChapters/);
+    // 无 keepCitations 开关
+    expect(src).not.toMatch(/keepCitations/);
+    expect(src).toMatch(/AI 模式无外部来源/);
+  });
+
+  test("KbOutlineGenDoc 仍按 keepCitations 条件剥离", () => {
+    const {readFileSync} = require("fs");
+    const {join} = require("path");
+    const src = readFileSync(
+      join(__dirname, "../src/pages/KbOutlineGenDoc.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/if\s*\(\s*!keepCitations\s*\)/);
+    expect(src).toMatch(/stripCitationsDeep\(chapters\)/);
+  });
+
+  test("导出文件名日期含 getMonth\\(\\) \\+ 1", () => {
+    const {readFileSync} = require("fs");
+    const {join} = require("path");
+    for (const f of [
+      "AiOutlineGenDoc.tsx",
+      "KbOutlineGenDoc.tsx",
+      "AiOutlineGenPpt.tsx",
+      "KbOutlineGenPpt.tsx",
+    ]) {
+      const src = readFileSync(join(__dirname, "../src/pages", f), "utf8");
+      expect(src).toMatch(/getMonth\(\)\s*\+\s*1/);
+      expect(src).not.toMatch(
+        /getFullYear\(\)\s*\+\s*["']-["']\s*\+\s*curDate\.getMonth\(\)\s*\+\s*["']-["']/,
+      );
+    }
+    const kbPpt = readFileSync(
+      join(__dirname, "../src/pages/KbOutlineGenPpt.tsx"),
+      "utf8",
+    );
+    expect(kbPpt).toMatch(/-Kb-v\$\{curSimpleDateStr\}/);
+  });
+});

@@ -4612,3 +4612,131 @@ doc.render({... chapters: exportChapters });
 4. Ai 页：正文手工加一个 `[文档3]` → 导出 docx 里该标记消失，且**源数据 `chapters` 里仍在**
    （再导一次仍会剥，验证深拷贝）（37.3）；
 5. KB 页回归：引用开关「保留/隐去」仍正常，图卡片与换图不受影响。
+
+## 三十八、执行序（本批次：只做三十七；行号已按 09a9fd9 校正）（2026-10-21）
+
+> **授权结论：可以开工，且只开工三十七。** 三十六（34→33→35）已验收闭环，工作区干净，不与其重叠。
+> 三十七章正文（4439 行起）的**设计不变**，但那里的行号是 `68a2835` 时代的，**已全部漂移**，以本章坐标为准。
+
+### 38.0 开工前状态（已核，勿重复确认）
+
+| 项 | 事实 |
+|---|---|
+| 基线 | `09a9fd9`（HEAD） |
+| 工作区 | 前端 `git status` 干净；仅 `backend/start.sh` 与两个 `:Zone.Identifier` 历史残留，**与本批次无关，勿动** |
+| 三十六落地物 | `DocFigureStrip.tsx` / `docUploadAssets.ts` / `outlineKbBindUi.ts` **均已入库**（09a9fd9 一并提交） |
+| 三十七三项 | 全部未落地：`OutlineSelectRadio.tsx` 仍是 `height:'1.6em'` + `showName` 截 20 字；`OutlinePromptDoc.tsx` 无 `Empty`；`AiOutlineGenDoc.tsx` 无 `stripCitationsDeep` |
+
+### 38.1 三十七·1（P0，用户截图仍在复现）大纲列表标题溢出
+
+**校正后坐标**（`frontend/src/components/DocUtil/OutlineSelectRadio.tsx`）：
+
+| 原章坐标 | 现坐标 | 内容 |
+|---|---|---|
+| `:78-85` | **`:69-76`** | `radioStyle`（`display:'block'` + `height:'1.6em'`） |
+| `:94-100` | **`:77-83`** | `showName()` 按 20 字截断 |
+| `:188` | **`:149`** | `<Tooltip title={chapterHint + ID}>`，未放全名 |
+| `Row/Col` | **`:126-127` / `:157`** | `Row {borderBottom:'1px solid #000'}`、`Col span={18}`、右侧 `Col span={6}` |
+| 调用点 | **`:147-153`** | `<Radio style={radioStyle}>` + `<Tag>{i+1}</Tag>` + Tooltip + `{showName(...)}` + `<Tag>{n} 章</Tag>` |
+
+做法照三十七·1 的代码块，**闭环判定**：抽屉拉到 1000px 宽时，第一条长标题必须是**单行省略号**，且第二行不再压到第 2 条；Tooltip 悬停能看到全名。删 `showName` 后确认无其它引用（`:150` 是唯一调用点）。
+
+### 38.2 三十七·2（P0）智能文章生成页对齐知识库页
+
+**① 写作大纲空态** —— 别新增判空分支，**改既有那条**：
+`OutlinePromptDoc.tsx:41-43` 现在是
+```tsx
+if (!keys) {
+  return <Collapse ghost accordion items={[]} />;
+}
+```
+`keys = Doc.getKeysFromKey(chapters, activeKey)`，chapters 为空时必然走到这里 ⇒ 直接换成 `<Empty description="尚未生成写作大纲：请先在左侧完成构思与大纲生成" image={Empty.PRESENTED_IMAGE_SIMPLE} />`。
+⚠️ 该 `return` 之后**没有其它 hook**（`cb4EditParagraph_prompt`、`get_items` 都是普通函数），所以提前 return 不会破坏 hooks 顺序；若你后续在它上面加 hook，必须先挪到 hook 之后。
+
+**② 导出兜底剥引注** —— `AiOutlineGenDoc.tsx:169 saveDoc`，照 `KbOutlineGenDoc.tsx:241-248` 的写法，但**不设开关**（Ai 无检索，恒剥）：
+```ts
+// :181 之前
+const cite = stripCitationsDeep(chapters);
+const renderChapters = cite.chapters as Chapter[];
+// 后面 :182 flagEmptyDocParagraphs / :183 prepareChaptersBlocks / :190 doc.render 的 chapters
+// 全部换成 renderChapters
+```
+⚠️ 两个必错点：
+- `stripCitationsDeep` 返回 **`{chapters, stripped}`**，不是数组；直接 `const renderChapters = stripCitationsDeep(chapters)` 会让 `chapters` 变对象，文档渲染成空。
+- `doc.render({... chapters: renderChapters ...})` 里那处也要换，否则只剥了统计路径、渲染路径没剥。
+
+**③ 引用开关：不加**（Ai 无 `ref_docs`，开关只能产出指向不存在来源的编号）。改为在写作大纲区（`:521` 附近）加一行灰字说明：「AI 模式无外部来源，正文不保留 [文档N]」。
+
+**④ 图卡片 / 换图 / 本地上传：保持不接**（Ai `allowFigure=false`）。已核：`DocFigureStrip` 只经 `OutlineResultDoc` 挂载，而 Ai 页未传 `onFigureChange` ⇒ 正确，**勿顺手接上**。
+
+**⑤ 摘要 chips（三十七·3）** —— 若做，数值一律取段落字段（`wordBudgetFor(p)` / `paragraphPointLabels(p).length` / `allowFigure`），**禁止正则切 `prompt` 字符串**。
+
+### 38.3 顺手项（5 分钟，只因为你要改同一个 `saveDoc`）
+
+`AiOutlineGenDoc.tsx:180` 与 `KbOutlineGenDoc.tsx:238` 的
+`curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate()`
+仍少 `+1`（32.1 未做）⇒ 生成 `2026921`。本批次统一改：
+
+```ts
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const curSimpleDateStr = `${curDate.getFullYear()}${pad2(curDate.getMonth() + 1)}${pad2(curDate.getDate())}`;
+```
+`curDateStr`（带分隔符的）同样 `+1`。**四处在同一 PR**：`AiOutlineGenDoc`、`KbOutlineGenDoc`、`AiOutlineGenPpt`、`KbOutlineGenPpt`（PPT 两处仅改 `+1`，文件名 `-Ai-v`/`-Kb-v` 一并核对）。
+
+### 38.4 jest 与验收
+
+- 断言**并入既有套件**，勿新建测试文件：`OutlineSelectRadio` 属 UI，至少对纯函数 `outlineKbBindUi` 已有的用例别动；新增的可放 `docCitation.test.ts`（Ai 恒剥、开关来回切）与 `docOutlineAlign.test.ts`（空态）。
+- 跑：`--testPathPattern='(docCitation|docOutlineAlign|docHeadingLevels|docFigureSupply)'`。
+- 用户侧验收（我判卷）：① 大纲预览抽屉长标题单行省略、不压行；② Ai 页写作大纲无内容时显示空态而非空面板；③ 手改正文塞一个 `[文档1]` → 导出后为 0；④ 导出文件名日期为 `20261021`。
+
+### 38.5 追加（用户 08:06）：写作大纲**只展示简单提示词**，整串模板退出展示面
+
+> 这是对你正在做的三十七·3 的**收口修正**，不是新功能。若 37.3 尚未落地，直接按本节做；若已落地（chips + 嵌套 Collapse「写作契约与完整提示词」），按本节改。
+
+**用户原话**：「智能文章生成中的『写作大纲』栏目中只要展示简单提示词即可」。
+⇒ 结论：**展示面只留简单提示词**，完整整串 `paragraph.prompt` 只在「编辑」态的高级抽屉里可看（该抽屉 `EditablePromptCollapse4Doc` 已有 `setAdvOpen`）。`paragraph.prompt` 仍是**唯一真源**，本次只改展示，不动数据结构、不改拼接逻辑。
+
+**① 新增纯函数**（`ViewItem4Doc.ts`，与 `paragraphPointLabels` 同区，便于单测）：
+
+```ts
+/** 三十八·6：写作大纲展示用的「简单提示词」——只含用户可感知的语义，不含系统契约 */
+export function simpleDocParagraphPrompt(p: Paragraph): string {
+  const zh = formatWordBudgetZh(wordBudgetFor(p));
+  const lines: string[] = [`【${(p.title || "").trim() || "本段"}】约 ${zh} 字`];
+  const role = (p.role || "").trim();
+  const question = (p.question || "").trim();
+  if (role) lines.push(`岗位视角：${role}`);
+  if (question) lines.push(`本章要回答的问题：${question}`);
+  const labels = paragraphPointLabels(p);
+  if (labels.length) lines.push(`本段要点：${labels.map((t, i) => `${i + 1}) ${t}`).join("；")}`);
+  else if ((p.pointGuide || "").trim()) lines.push(`本段要点：${p.pointGuide!.trim()}`);
+  if (p.promptManual && (p.prompt || "").trim()) {
+    const s = p.prompt.trim().replace(/\s+/g, " ");
+    lines.push(`已手改高级模板：${s.slice(0, 160)}${s.length > 160 ? "…（完整见编辑态高级抽屉）" : ""}`);
+  }
+  return lines.join("\n");
+}
+```
+⚠️ 字数一律走 `wordBudgetFor(p)`（**不许正则切 prompt**）；要点一律走 `paragraphPointLabels(p)`（**不许用 `p.points.length`**，maxLevel≤3 时被折进 pointGuide 恒 0）。
+
+**② `OutlinePromptDoc.tsx`**：删掉你刚加的嵌套 Collapse（`items=[{key:"contract", label:"写作契约与完整提示词…", children:<div>{paragraph.prompt}</div>}]`，现文件 `:113-137`），children 改成：
+
+```tsx
+children: (
+  <div style={{whiteSpace: "pre-wrap", lineHeight: 1.6}}>
+    {simpleDocParagraphPrompt(paragraph)}
+  </div>
+),
+```
+chips 行（`:108-112`）保留 —— 它与简单提示词的职责分工是：**chips 给数字口径（字数/要点数/可表/可图），简单提示词给语义（段题/岗位/问题/要点）**，二者不重复。
+`defaultActiveKey` 里 `promptManual ? ["contract"] : []` 随之删除。
+
+**③ `EditablePromptCollapse4Doc.tsx` 存量兜底**（`:204-223`）：`!structured` 分支现在是 `<pre>{paragraph.prompt}</pre>`，这会在段落缺结构化字段时把整串模板糊在展示面 ⇒ 改成 `{simpleDocParagraphPrompt(paragraph)}`（`<pre>` 保留换行）。**编辑态** `:270-299` 的整串 `TextArea` 不动（存量数据只能整串编辑）。
+
+**④ 两页都生效**：`OutlinePromptDoc` 是 KB / Ai 共用组件（KB `:887`、Ai `:521`）。本次**不要**做 props 开关——两页展示口径保持一致。
+
+**⑤ 验收**：随便一段，展示面只有 3~5 行（段题+字数 / 岗位视角 / 本章问题 / 本段要点），看不到「【输出格式·文章段落】」「```table」「禁止以…开头」等系统契约字样；点「编辑」→ 高级抽屉里仍能看到完整整串；改完保存后 `paragraph.prompt` 真源不变。
+
+### 38.6 不在本批次（勿顺手）
+
+32.2 `key_assets` captions + 主题闸、28.1 blocked 定案、32.3 题注清洗、二十九 P0 编号全局化。其中 28.1 仍等用户 Console 里那行 `[DocBlock] figure-blocked`。

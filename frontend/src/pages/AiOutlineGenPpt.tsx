@@ -251,8 +251,9 @@ const AiOutlineGenPpt: React.FC = () => {
     const department="AI智能工作室"
     const author="智能小毕"
     const curDate = new Date();
-    const curDateStr = curDate.getFullYear()+"-"+curDate.getMonth()+"-"+curDate.getDate();
-    const curSimpleDateStr = curDate.getFullYear()+""+curDate.getMonth()+""+curDate.getDate();
+    const pad2 = (n: number) => String(n).padStart(2, "0");
+    const curDateStr = `${curDate.getFullYear()}-${pad2(curDate.getMonth() + 1)}-${pad2(curDate.getDate())}`;
+    const curSimpleDateStr = `${curDate.getFullYear()}${pad2(curDate.getMonth() + 1)}${pad2(curDate.getDate())}`;
     const pptTemplate = new PptTemplate("urlFile","/pptTemplate-simple.pptx", `${title}-Ai-v${curSimpleDateStr}.pptx`);
     await pptTemplate.init();
     //page1

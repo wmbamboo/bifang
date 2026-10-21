@@ -18,10 +18,10 @@ import {
   OutlineTip,
   PptPromptSavePatch,
   parseSlideTips,
-  formatSlideTips,
   slideHasStructuredPrompt,
   simplePptSlidePrompt,
   pptLayoutLabelZh,
+  buildDualLayerPptSavePatch,
 } from "@/components/DocUtil/ViewItem4Ppt";
 import {layoutLabel} from "@/components/DocUtil/outlineSerialize";
 import {LAYOUTS} from "@/components/DocUtil/outlineJson";
@@ -64,15 +64,19 @@ const EditablePromptCollapse4Ppt: React.FC<EditablePromptCollapseProps> = (
 ) => {
   const [messageApi, contextHolder] = message.useMessage();
   const [draft, setDraft] = useState<EditDraft | null>(null);
+  /** 简单层要点是否被编辑过；未 dirty 时保存不带 subTitle，避免覆盖高级手改 */
+  const [tipsDirty, setTipsDirty] = useState(false);
 
   useEffect(() => {
     if (props.editKey === "-1") {
       setDraft(null);
+      setTipsDirty(false);
       return;
     }
     const slide = (props.slides || []).find((s) => s.key === props.editKey);
     if (!slide) {
       setDraft(null);
+      setTipsDirty(false);
       return;
     }
     const tips = parseSlideTips(slide.subTitle || "");
@@ -81,6 +85,7 @@ const EditablePromptCollapse4Ppt: React.FC<EditablePromptCollapseProps> = (
       tips: tips.length ? tips.map((t) => ({...t})) : [{role: "list", text: ""}],
       prompt: slide.prompt || "",
     });
+    setTipsDirty(false);
   }, [props.editKey, props.slides]);
 
   const patchDraft = (partial: Partial<EditDraft>) => {
@@ -95,19 +100,13 @@ const EditablePromptCollapse4Ppt: React.FC<EditablePromptCollapseProps> = (
       messageApi.success("提示词已保存");
       return;
     }
-    const tips = draft.tips
-      .map((t) => ({
-        role: (t.role === "metric" ? "metric" : "list") as TipRole,
-        text: (t.text || "").trim(),
-      }))
-      .filter((t) => t.text);
-    const subTitle = formatSlideTips(tips);
-    const patch: PptPromptSavePatch = {
-      layout: draft.layout,
-      subTitle,
-      prompt: draft.prompt,
-    };
+    const {patch, infoMsg} = buildDualLayerPptSavePatch(
+      slide,
+      draft,
+      tipsDirty,
+    );
     props.cbSaveResultFn(slide.key, patch);
+    if (infoMsg) messageApi.info(infoMsg);
     messageApi.success("提示词已保存");
   };
 
@@ -159,6 +158,7 @@ const EditablePromptCollapse4Ppt: React.FC<EditablePromptCollapseProps> = (
     const tips = draft.tips.map((t, i) =>
       i === index ? {...t, ...partial} : t,
     );
+    setTipsDirty(true);
     patchDraft({tips});
   };
 
@@ -168,11 +168,13 @@ const EditablePromptCollapse4Ppt: React.FC<EditablePromptCollapseProps> = (
       messageApi.warning("至少保留 1 条要点");
       return;
     }
+    setTipsDirty(true);
     patchDraft({tips: draft.tips.filter((_, i) => i !== index)});
   };
 
   const addTip = () => {
     if (!draft) return;
+    setTipsDirty(true);
     patchDraft({tips: [...draft.tips, {role: "list", text: ""}]});
   };
 

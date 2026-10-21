@@ -181,5 +181,6 @@ export function layoutLabel(layout: SlideLayout | string | undefined): string {
   if (layout === "metric_columns") return "数据卡+分栏";
   if (layout === "table") return "表格";
   if (layout === "image_grid") return "图鉴";
+  if (layout === "progress") return "进度";
   return "列表";
 }

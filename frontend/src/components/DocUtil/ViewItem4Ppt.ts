@@ -3,6 +3,7 @@ import { resolveTableGrid } from "@/components/DocUtil/templateManifest";
 import { splitTitleDescProtectingPriceBands } from "@/components/DocUtil/priceBandAtom";
 import { stripHallucinatedDocCitations } from "@/components/DocUtil/parseChatCompletion";
 import { countNumericUnitGroups } from "@/components/DocUtil/outlineJson";
+import { layoutLabel } from "@/components/DocUtil/outlineSerialize";
 
 /** PPT 侧剥离 `[文档N]`（复用文档侧同一套正则，勿复制第二份）。 */
 export function scrubPptItemText(s: string): string {
@@ -1071,16 +1072,9 @@ export function countOutlineTips(subTitle: string): number {
     .length;
 }
 
-/** 版式中文名（与 outlineSerialize.layoutLabel 同口径，避免循环依赖） */
+/** 版式中文名：委托 layoutLabel（单一真相；保留导出名以免动调用点） */
 export function pptLayoutLabelZh(layout: SlideLayout | string | undefined): string {
-  if (layout === 'metric') return '数据卡';
-  if (layout === 'metric_list') return '数据卡+要点';
-  if (layout === 'columns') return '分栏';
-  if (layout === 'metric_columns') return '数据卡+分栏';
-  if (layout === 'table') return '表格';
-  if (layout === 'image_grid') return '图鉴';
-  if (layout === 'progress') return '进度';
-  return '列表';
+  return layoutLabel(layout);
 }
 
 /** 写作大纲 chips：条数上限提示（四十七·3） */
@@ -1184,7 +1178,49 @@ export type PptPromptSavePatch = {
   subTitle?: string;
   layout?: SlideLayout;
   prompt?: string;
+  /**
+   * 是否把 subTitle 要点同步进 prompt 要点段。
+   * 默认 true；高级区手改过要点段时应为 false，避免静默覆盖（四十八·2）。
+   */
+  syncTipsIntoPrompt?: boolean;
 };
+
+/**
+ * 双层编辑保存：tipsDirty 才带 subTitle；高级区手改则不 sync。
+ * 供 EditablePromptCollapse4Ppt / jest 共用，避免 onSave 与测试分叉。
+ */
+export function buildDualLayerPptSavePatch(
+  slide: { prompt?: string; layout?: SlideLayout | string },
+  draft: { layout: SlideLayout; tips: OutlineTip[]; prompt: string },
+  tipsDirty: boolean,
+): { patch: PptPromptSavePatch; infoMsg?: string } {
+  const tips = (draft.tips || [])
+    .map((t) => ({
+      role: (t.role === 'metric' ? 'metric' : 'list') as TipRole,
+      text: (t.text || '').trim(),
+    }))
+    .filter((t) => t.text);
+  const advancedDirty = draft.prompt !== (slide.prompt || '');
+  const patch: PptPromptSavePatch = {
+    layout: draft.layout,
+    prompt: draft.prompt,
+  };
+  if (tipsDirty) {
+    patch.subTitle = formatSlideTips(tips);
+  }
+  if (advancedDirty) {
+    // 高级区改过：保留 prompt 原文，不做 sync
+    patch.syncTipsIntoPrompt = false;
+    return {
+      patch,
+      infoMsg: '高级提示词已改动，要点段以高级区为准',
+    };
+  }
+  if (tipsDirty) {
+    patch.syncTipsIntoPrompt = true;
+  }
+  return { patch };
+}
 
 export function applyPptPromptSavePatch(
   slide: Slide,
@@ -1202,14 +1238,15 @@ export function applyPptPromptSavePatch(
     slide.subTitle = patch.subTitle;
     tips = parseSlideTips(patch.subTitle);
   }
+  const doSync = patch.syncTipsIntoPrompt !== false;
   if (patch.prompt !== undefined) {
     let next = patch.prompt;
-    // 简单层改了要点时，必须同步 prompt 内要点段（47.6）
-    if (tips !== undefined) {
+    // 简单层改了要点时，必须同步 prompt 内要点段（47.6）；高级手改则跳过（48.2）
+    if (tips !== undefined && doSync) {
       next = syncOutlineTipsIntoPrompt(next, tips);
     }
     slide.setPrompt(next);
-  } else if (tips !== undefined) {
+  } else if (tips !== undefined && doSync) {
     slide.setPrompt(syncOutlineTipsIntoPrompt(slide.prompt || '', tips));
   }
 }

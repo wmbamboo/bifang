@@ -17,10 +17,14 @@ import {
   simplePptSlidePrompt,
   slideHasStructuredPrompt,
   applyPptPromptSavePatch,
+  buildDualLayerPptSavePatch,
   countOutlineTips,
   countPromptOutlineTipLines,
   pptLayoutLabelZh,
 } from "@/components/DocUtil/ViewItem4Ppt";
+import type {SlideLayout} from "@/components/DocUtil/ViewItem4Ppt";
+import {layoutLabel} from "@/components/DocUtil/outlineSerialize";
+import {LAYOUTS} from "@/components/DocUtil/outlineJson";
 import {
   coerceLayoutBySlideTitle,
   tipsSuggestMetricLayout,
@@ -369,5 +373,92 @@ describe("四十七 PPT 写作大纲简单层", () => {
     }).not.toThrow();
     expect(slide.prompt).toBe("仅整串编辑后的新 prompt");
     expect(slide.subTitle).toBe("");
+  });
+});
+
+describe("四十八 版式名统一 / 高级手改不覆盖", () => {
+  it("只改高级 prompt 要点段、不动简单层 ⇒ 手改保留", () => {
+    const slide = new Slide(5, "高级手改页", "list: 原要点甲\nlist: 原要点乙");
+    slide.layout = "list";
+    const origPrompt = [
+      "【本页标题】",
+      "高级手改页",
+      "",
+      "【大纲要点】",
+      "（请优先采信其中的事实与数据，据此展开，勿编造冲突数字）",
+      "1) [要点] 原要点甲",
+      "2) [要点] 原要点乙",
+      "",
+      "【写作任务】",
+      "写列表",
+    ].join("\n");
+    slide.prompt = origPrompt;
+    const handEdited = origPrompt.replace("原要点甲", "高级手改后的要点甲");
+    const {patch, infoMsg} = buildDualLayerPptSavePatch(
+      slide,
+      {
+        layout: "list",
+        tips: [
+          {role: "list", text: "原要点甲"},
+          {role: "list", text: "原要点乙"},
+        ],
+        prompt: handEdited,
+      },
+      false, // 简单层未 dirty
+    );
+    expect(patch.subTitle).toBeUndefined();
+    expect(patch.syncTipsIntoPrompt).toBe(false);
+    expect(infoMsg || "").toMatch(/高级/);
+    applyPptPromptSavePatch(slide, patch);
+    expect(slide.prompt).toContain("高级手改后的要点甲");
+    expect(slide.prompt).not.toContain("1) [要点] 原要点甲");
+  });
+
+  it("只改简单层要点 ⇒ 保存后 prompt 要点段同步", () => {
+    const slide = new Slide(6, "简单层改要点", "list: 旧甲\nlist: 旧乙");
+    slide.layout = "list";
+    slide.prompt = [
+      "【本页标题】",
+      "简单层改要点",
+      "",
+      "【大纲要点】",
+      "（请优先采信其中的事实与数据，据此展开，勿编造冲突数字）",
+      "1) [要点] 旧甲",
+      "2) [要点] 旧乙",
+      "",
+      "【写作任务】",
+      "写列表",
+    ].join("\n");
+    const {patch} = buildDualLayerPptSavePatch(
+      slide,
+      {
+        layout: "list",
+        tips: [
+          {role: "list", text: "新甲"},
+          {role: "list", text: "新乙"},
+          {role: "list", text: "新丙"},
+        ],
+        prompt: slide.prompt, // 高级未改
+      },
+      true,
+    );
+    expect(patch.subTitle).toBeTruthy();
+    expect(patch.syncTipsIntoPrompt).toBe(true);
+    applyPptPromptSavePatch(slide, patch);
+    expect(countOutlineTips(slide.subTitle)).toBe(3);
+    expect(countPromptOutlineTipLines(slide.prompt)).toBe(3);
+    expect(slide.prompt).toContain("新甲");
+    expect(slide.prompt).toContain("新丙");
+    expect(slide.prompt).not.toContain("旧甲");
+  });
+
+  it("pptLayoutLabelZh 与 layoutLabel 对全部 layout 全等", () => {
+    const all = [...LAYOUTS] as SlideLayout[];
+    expect(all.length).toBe(8);
+    for (const lay of all) {
+      expect(pptLayoutLabelZh(lay)).toBe(layoutLabel(lay));
+    }
+    expect(pptLayoutLabelZh("progress")).toBe("进度");
+    expect(layoutLabel("progress")).toBe("进度");
   });
 });

@@ -96,14 +96,39 @@ export function normalizeSlideLayout(raw: string | undefined): OutlineJsonLayout
   return "list";
 }
 
+/** 与数据卡口径一致：% / 亿 / 万（含「亿股」等单位粘连） */
+const METRIC_UNIT_GROUP_RE =
+  /\d+(?:\.\d+)?\s*[%％]|\d+(?:\.\d+)?\s*亿|\d+(?:\.\d+)?\s*万/gu;
+
+/** 统计正文中「数字+单位」组数（跨多条 tip 合计）。 */
+export function countNumericUnitGroups(text: string): number {
+  const m = String(text || "").match(METRIC_UNIT_GROUP_RE);
+  return m ? m.length : 0;
+}
+
 /**
- * 按页标题做轻量结构纠偏（不写领域词表）：
+ * 要点正文是否像「看数页」：≥2 组数字+单位，且数字字符占比 >20%（防叙述误伤）。
+ */
+export function tipsSuggestMetricLayout(tips: string[] | undefined): boolean {
+  const list = (tips || []).map((s) => String(s || "").trim()).filter(Boolean);
+  if (list.length === 0) return false;
+  const blob = list.join("\n");
+  if (countNumericUnitGroups(blob) < 2) return false;
+  const compact = blob.replace(/\s+/g, "");
+  const digits = (compact.match(/\d/g) || []).length;
+  return digits / Math.max(1, compact.length) > 0.2;
+}
+
+/**
+ * 按页标题（+可选要点）做轻量结构纠偏（不写领域词表）：
  * - 问句式枚举、或以「类型/清单/话题」收尾的平铺页 → 不宜 columns
  * - 无明显「看数」线索时不宜硬上 metric*
+ * - 42.4：页标题无关键词时，要点 ≥2 组「数字+单位」也可抬 metric
  */
 export function coerceLayoutBySlideTitle(
   title: string,
   layout: OutlineJsonLayout,
+  tips?: string[],
 ): OutlineJsonLayout {
   const t = String(title || "");
   const enumQuestion = /(?:是什么|有哪些|哪几|哪些|怎么看|如何选)/.test(t);
@@ -143,8 +168,10 @@ export function coerceLayoutBySlideTitle(
   if (imageGridCue && (layout === "list" || layout === "columns" || layout === "progress")) {
     return "image_grid";
   }
-  const metricCue =
+  const titleMetricCue =
     /大盘|增速|规模|占比|GMV|销售额|同比|渗透|播放量|金额|人次/.test(t);
+  const tipMetricCue = tipsSuggestMetricLayout(tips);
+  const metricCue = titleMetricCue || tipMetricCue;
   // 看数页被标成 list → 抬成 metric（填充阶段材料不够数字再降回 list）
   if (
     metricCue &&
@@ -1100,7 +1127,7 @@ export function parseFilledChapterFromModel(
     const title = pickStr(lockedSl.title, sl.title, sl.标题, sl.name, sl.页标题);
     const layoutRaw = normalizeSlideLayout(String(sl.layout || sl.版式 || "list"));
     let tips = coerceTips(sl.tips || sl.要点 || sl.items || sl.points || sl.bullets);
-    let layout = layoutRaw;
+    let layout = coerceLayoutBySlideTitle(title || lockedSl.title, layoutRaw, tips);
     if (layout === "metric_list" || layout === "metric") {
       tips = normalizeMetricListTipsArray(tips);
     }
@@ -1362,7 +1389,11 @@ export function validateOutlineFilled(
             `材料不足时并入有证据的页或写含事实/数字的 tip，勿写「材料未覆盖」或照抄「回查属性页」`,
         };
       }
-      let layout = layoutRaw;
+      let layout = coerceLayoutBySlideTitle(
+        title || lockedSl.title,
+        layoutRaw,
+        tips,
+      );
       if (layout === "metric_list" || layout === "metric") {
         tips = normalizeMetricListTipsArray(tips);
       }

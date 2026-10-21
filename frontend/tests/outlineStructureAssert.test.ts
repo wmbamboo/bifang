@@ -16,6 +16,10 @@ import {
   buildPptItemFormatPrompt,
 } from "@/components/DocUtil/ViewItem4Ppt";
 import {
+  coerceLayoutBySlideTitle,
+  tipsSuggestMetricLayout,
+} from "@/components/DocUtil/outlineJson";
+import {
   assertImageGridSameSource,
 } from "@/components/DocUtil/kbImageAssetsCore";
 import {aspectDeviation, coverSrcRect} from "@/components/DocUtil/imageBufferMeta";
@@ -198,5 +202,31 @@ describe("四十二 PPT 小项描述长度 / 引用剥离", () => {
 
   it("format prompt 禁止 [文档N]", () => {
     expect(buildPptItemFormatPrompt(3, "list")).toContain("不要用 [文档N]");
+  });
+});
+
+describe("四十二·42.4 metricCue 扩到要点", () => {
+  it("要点含 3 组数字+单位、页标题无关键词 ⇒ 判 metric", () => {
+    const tips = [
+      "质押 6.7亿股 占流通盘 12%",
+      "另有 22.1亿股 待解禁",
+      "本季新增 7.28亿股",
+    ];
+    expect(tipsSuggestMetricLayout(tips)).toBe(true);
+    expect(
+      coerceLayoutBySlideTitle("质押与解禁安排一览", "list", tips),
+    ).toBe("metric");
+  });
+
+  it("要点纯叙述 ⇒ 仍判 list", () => {
+    const tips = [
+      "关注城市户外流行款式与穿搭公式",
+      "保持多场景意识，适配商务与休闲",
+      "分析 Clean Fit 需求与简约裁剪",
+    ];
+    expect(tipsSuggestMetricLayout(tips)).toBe(false);
+    expect(
+      coerceLayoutBySlideTitle("选品技巧与穿搭建议", "list", tips),
+    ).toBe("list");
   });
 });

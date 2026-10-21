@@ -858,6 +858,19 @@ const Chat=(props:ChatProps)=> {
                 );
                 if (parsed.ok) {
                   filledSlide = parsed.value;
+                  // 42.4：要点里数字密集时，即使页标题无关键词也抬 metric
+                  {
+                    const tipCoerced = coerceLayoutBySlideTitle(
+                      slTitle,
+                      normalizeSlideLayout(filledSlide.layout || layout),
+                      filledSlide.tips,
+                    );
+                    if (tipCoerced !== layout) {
+                      layout = tipCoerced;
+                      layouts![si] = tipCoerced;
+                      filledSlide = {...filledSlide, layout: tipCoerced};
+                    }
+                  }
                   // image_grid：把证据 chunk.asset_ids 写成 img: 行，灌模按 id 绑定
                   if (
                     normalizeSlideLayout(layout) === 'image_grid' &&
@@ -897,7 +910,11 @@ const Chat=(props:ChatProps)=> {
                         layout === 'metric_list' ||
                         layout === 'metric_columns')
                     ) {
-                      const coerced = coerceLayoutBySlideTitle(slTitle, layout);
+                      const coerced = coerceLayoutBySlideTitle(
+                        slTitle,
+                        layout,
+                        slidesOut[si]?.tips,
+                      );
                       nextLay =
                         coerced !== layout &&
                         coerced !== 'metric' &&

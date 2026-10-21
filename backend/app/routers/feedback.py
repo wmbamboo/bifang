@@ -31,16 +31,19 @@ def _imgs_dir() -> Path:
 
 
 def _actor(request: Request, *, required: bool = False) -> tuple[str, str, str]:
-    """返回 (username, name, access)。仅认 token，无 username/loginUser 回退。"""
+    """返回 (username, name, access)。access 按角色并集：含 admin 则为 admin。"""
+    from app.security.rbac import is_admin
+
     user = auth_mod.current_user(request, on_timeout=audit.on_token_timeout)
     if not user:
         if required:
             raise HTTPException(status_code=401, detail="登录已过期或未登录")
         return "", "", "guest"
+    access = "admin" if is_admin(user) else (user.get("access") or "user")
     return (
         user.get("username") or "",
         user.get("name") or user.get("username") or "",
-        user.get("access") or "user",
+        access,
     )
 
 

@@ -55,12 +55,18 @@ def client_meta(request: Request) -> tuple[str, str]:
 
 
 def _load_user(username: str) -> Optional[dict]:
+    from app.security.rbac import load_user_roles
+
     with get_conn() as conn:
         row = conn.execute(
             "SELECT userid, username, name, access, email, user_status FROM users WHERE username=?",
             (username,),
         ).fetchone()
-    return dict(row) if row else None
+        if not row:
+            return None
+        data = dict(row)
+        data["roles"] = load_user_roles(conn, username)
+    return data
 
 
 def validate_token(

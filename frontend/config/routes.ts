@@ -178,41 +178,32 @@ export default [
     path: '/admin',
     name: 'admin',
     icon: 'crown',
-    access: 'canAdmin',
+    // 父级不设 access：子路由按角色并集各自可见（RBAC-C）
     routes: [
       {
         path: '/admin',
         redirect: '/admin/kb-mgt',
       },
-
-/*      {
-        path: '/admin/kb-manage',
-        name: 'kb-manage',
-        component: './Admin',
-      },*/
       {
         path: '/admin/kb-mgt',
         name: 'kb-mgt',
         icon: 'FolderOpenOutlined',
         component: './KbMgt',
+        access: 'canKbMgt',
       },
-       {
+      {
         path: '/admin/kb-file-mgt',
         name: 'kb-file-mgt',
         icon: 'FileTextOutlined',
         component: './KbFilesMgt',
+        access: 'canKbMgt',
       },
-      // {
-      //   path: '/admin/sub-page',
-      //   name: 'sub-page',
-      //   component: './Admin',
-      // },
       {
         path: '/admin/userList',
         name: 'user-list',
         icon: 'ProfileOutlined',
         component: './User/Mgt',
-        //access: 'isAdmin', // 只有管理员可见
+        access: 'canAdmin',
       },
       {
         path: '/admin/userProfile',
@@ -225,12 +216,14 @@ export default [
         name: 'feedback-mgt',
         icon: 'MessageOutlined',
         component: './FeedbackAdmin',
+        // 登录用户可读自己的反馈与处理结果；改状态/指派仍由页内 isAdmin 限制
       },
       {
         path: '/admin/audit',
         name: 'audit-logs',
         icon: 'ProfileOutlined',
         component: './AuditLogs',
+        access: 'canAdmin',
       },
     ],
   },

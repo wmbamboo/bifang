@@ -24,12 +24,21 @@ def _user_by_username(username: str) -> Optional[dict]:
 
 
 def _public_user(u: dict) -> dict:
+    from app.security.rbac import load_user_roles
+
     data = dict(u)
     data.pop("password", None)
     data.pop("_token", None)
     data.pop("_session_id", None)
     data.pop("_login_at", None)
     data["user_status"] = bool(data.get("user_status", 1))
+    if "roles" not in data or not data.get("roles"):
+        username = data.get("username") or ""
+        if username:
+            with get_conn() as conn:
+                data["roles"] = load_user_roles(conn, username)
+        else:
+            data["roles"] = [data.get("access") or "user"]
     return data
 
 
@@ -155,9 +164,14 @@ async def users():
 
 @router.post("/user/add")
 async def user_add(request: Request):
+    from app.security.rbac import derive_access, normalize_roles, replace_user_roles
+
     body = await request.json()
     userid = body.get("userid") or new_id()[:8]
     plain = body.get("password") or "bifang.intronlink"
+    roles = normalize_roles(body.get("roles") or [body.get("access") or "user"])
+    access = derive_access(roles)
+    username = body.get("username")
     with get_conn() as conn:
         conn.execute(
             """
@@ -166,10 +180,10 @@ async def user_add(request: Request):
             """,
             (
                 userid,
-                body.get("username"),
+                username,
                 hash_password(plain),
-                body.get("name") or body.get("username"),
-                body.get("access") or "user",
+                body.get("name") or username,
+                access,
                 body.get("email") or "",
                 body.get("phone") or "",
                 body.get("org_code") or "",
@@ -182,12 +196,22 @@ async def user_add(request: Request):
                 1 if body.get("user_status", True) else 0,
             ),
         )
+        replace_user_roles(conn, username, roles)
     return ok(msg="添加成功")
 
 
 @router.post("/user/update")
 async def user_update(request: Request):
+    from app.security.rbac import derive_access, normalize_roles, replace_user_roles
+
     body = await request.json()
+    username = body.get("username")
+    roles = None
+    if body.get("roles") is not None:
+        roles = normalize_roles(body.get("roles") or ["user"])
+        access = derive_access(roles)
+    else:
+        access = body.get("access")
     with get_conn() as conn:
         conn.execute(
             """
@@ -197,7 +221,7 @@ async def user_update(request: Request):
             """,
             (
                 body.get("name"),
-                body.get("access"),
+                access,
                 body.get("email"),
                 body.get("phone"),
                 body.get("org_code"),
@@ -208,13 +232,15 @@ async def user_update(request: Request):
                 body.get("signature"),
                 body.get("avatar"),
                 1 if body.get("user_status", True) else 0,
-                body.get("username"),
+                username,
             ),
         )
+        if roles is not None:
+            replace_user_roles(conn, username, roles)
         if body.get("password"):
             conn.execute(
                 "UPDATE users SET password=? WHERE username=?",
-                (hash_password(body.get("password")), body.get("username")),
+                (hash_password(body.get("password")), username),
             )
     return ok(msg="更新成功")
 
@@ -263,8 +289,10 @@ async def user_logs(
     start: str = Query(""),
     end: str = Query(""),
 ):
+    from app.security.rbac import is_admin
+
     actor = auth_mod.require_user(request, on_timeout=audit.on_token_timeout)
-    if (actor.get("access") or "") != "admin":
+    if not is_admin(actor):
         return fail("无权限", 403)
     clauses: list[str] = ["1=1"]
     params: list[Any] = []
@@ -312,8 +340,10 @@ async def login_logs(
     start: str = Query(""),
     end: str = Query(""),
 ):
+    from app.security.rbac import is_admin
+
     actor = auth_mod.require_user(request, on_timeout=audit.on_token_timeout)
-    if (actor.get("access") or "") != "admin":
+    if not is_admin(actor):
         return fail("无权限", 403)
     clauses: list[str] = ["1=1"]
     params: list[Any] = []
@@ -524,7 +554,16 @@ async def role_delete(role_code: str = Query(""), role_name: str = Query("")):
 @router.get("/cur_user_role_menus")
 @router.get("/role_menus")
 async def role_menus(user_name: str = Query(""), role_code: str = Query("")):
+    """按角色查菜单；若传 user_name 则取该用户全部角色的菜单并集。"""
+    from app.security.rbac import load_user_roles, menu_auth_union
+
     with get_conn() as conn:
+        if user_name:
+            roles = load_user_roles(conn, user_name)
+            data = menu_auth_union(conn, roles)
+            for item in data:
+                item["role_code"] = ",".join(roles)
+            return ok(data)
         rows = conn.execute(
             "SELECT * FROM role_res WHERE role_code=? AND res_type='menu'",
             (role_code,),

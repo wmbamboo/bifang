@@ -85,6 +85,8 @@ declare namespace API {
     password:string,
     name: string,
     access?:string,
+    /** 多角色勾选（RBAC-C） */
+    roles?: string[],
     email?:string,
     phone?:string,
     unit?:string,

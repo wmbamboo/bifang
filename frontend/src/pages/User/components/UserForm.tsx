@@ -69,8 +69,18 @@ const UserForm: React.FC<UserFormProps> = ({
          <Form.Item name="email" label="邮箱" rules={[{ required: false }]}>
           <Input placeholder={"请输入用户邮箱"} />
         </Form.Item>
-        <Form.Item name="access" label="角色" rules={[{ required: true }]}>
-          <Select options={userRoles} placeholder={"请选择用户角色"} />
+        <Form.Item
+          name="roles"
+          label="角色"
+          rules={[{ required: true, type: 'array', min: 1, message: '请至少选择一个角色' }]}
+          extra="可多选；含「管理员」则主身份为 admin，否则为 user；「知识库管理员」可叠加"
+        >
+          <Select
+            mode="multiple"
+            options={userRoles}
+            placeholder={"请选择用户角色（可多选）"}
+            allowClear
+          />
         </Form.Item>
         <Form.Item
           name="user_status"

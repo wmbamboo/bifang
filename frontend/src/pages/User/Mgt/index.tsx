@@ -12,8 +12,23 @@ const UserList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);
   const [currentUser, setCurrentUser] = useState<API.UserType | undefined>();
-  const userRoleList = [{ label: '管理员', value: 'admin' },{ label: '用户', value: 'user' },];
+  const userRoleList = [
+    { label: '管理员', value: 'admin' },
+    { label: '用户', value: 'user' },
+    { label: '知识库管理员', value: 'kb_manager' },
+  ];
   const beInUsers=new Set(['admin','user']);
+  const roleLabel = (codes: string[] | string | undefined) => {
+    const list = Array.isArray(codes)
+      ? codes
+      : codes
+        ? [codes]
+        : [];
+    if (!list.length) return '-';
+    return list
+      .map((c) => userRoleList.find((i) => i.value === c)?.label || c)
+      .join('、');
+  };
 
   /** 始终从数据库接口拉列表，不用 localStorage.userList */
   const fetchUsers = useCallback(async () => {
@@ -48,13 +63,25 @@ const UserList: React.FC = () => {
       dept: '',
       email: '',
       password: '',
-      access: '',
+      access: 'user',
+      roles: ['user'],
       user_status: true,
     } as API.UserType);
   };
   const handleEditUser = (user: API.UserType) => {
     setVisible(true);
-    setCurrentUser({ ...user, password: '', user_status: user.user_status !== false });
+    const roles =
+      user.roles && user.roles.length
+        ? user.roles
+        : user.access
+          ? [user.access]
+          : ['user'];
+    setCurrentUser({
+      ...user,
+      password: '',
+      roles,
+      user_status: user.user_status !== false,
+    });
   };
   const handleDeleteUser = async (user: API.UserType) => {
      const beInUserFlag=beInUsers.has(user.username)
@@ -136,10 +163,9 @@ const UserList: React.FC = () => {
     },
     {
       title: '角色',
-      dataIndex: 'access',
-      render: (text: string) => {
-        return userRoleList.find(item=>item.value===text)?.label;
-      }
+      dataIndex: 'roles',
+      render: (_: unknown, record: API.UserType) =>
+        roleLabel(record.roles?.length ? record.roles : record.access),
     },
     {
       title: '状态',

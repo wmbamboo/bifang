@@ -14,6 +14,7 @@ const Profile = () => {
   const userRoleList = [
     { label: '管理员', value: 'admin' },
     { label: '用户', value: 'user' },
+    { label: '知识库管理员', value: 'kb_manager' },
   ];
 
   const fetchLoginUser = async () => {
@@ -22,9 +23,18 @@ const Profile = () => {
     try {
       const curUserRes = await currentUser({ username });
       const curUser = curUserRes.data as API.UserType;
-      setUser(curUser);
-      form.setFieldsValue(curUser);
-      localStorage.setItem('userInfo', JSON.stringify(curUser));
+      const withRoles = {
+        ...curUser,
+        roles:
+          curUser.roles && curUser.roles.length
+            ? curUser.roles
+            : curUser.access
+              ? [curUser.access]
+              : ['user'],
+      };
+      setUser(withRoles);
+      form.setFieldsValue(withRoles);
+      localStorage.setItem('userInfo', JSON.stringify(withRoles));
     } catch (e) {
       console.error(e);
       const cached = localStorage.getItem('userInfo');
@@ -130,8 +140,8 @@ const Profile = () => {
           <Form.Item name="email" label="邮箱" rules={[{ required: false }]}>
             <Input disabled={!isEditing} />
           </Form.Item>
-          <Form.Item name="access" label="角色" rules={[{ required: true }]}>
-            <Select disabled options={userRoleList} />
+          <Form.Item name="roles" label="角色">
+            <Select mode="multiple" disabled options={userRoleList} />
           </Form.Item>
           <Space>
             {isEditing ? (

@@ -99,6 +99,13 @@ def init_db() -> None:
                 role_code TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS user_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                role_code TEXT NOT NULL,
+                UNIQUE(username, role_code)
+            );
+
             CREATE TABLE IF NOT EXISTS orgs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 org_code TEXT UNIQUE NOT NULL,
@@ -249,6 +256,7 @@ def init_db() -> None:
         _ensure_login_logs(conn)
         _patch_audit_menu_and_kb_user(conn)
         _patch_user_emails_and_lizy(conn)
+        _patch_rbac_scheme_c(conn)
 
     # 启动清理旧日志（短事务）
     try:
@@ -307,7 +315,7 @@ def _ensure_login_logs(conn: sqlite3.Connection) -> None:
 
 
 def _patch_audit_menu_and_kb_user(conn: sqlite3.Connection) -> None:
-    """审计菜单 + user 角色补授知识库管理（43.5 / 43.10A）。"""
+    """审计菜单授权给 admin（43.5）。知识库授 user 已由方案 C 回滚，见 _patch_rbac_scheme_c。"""
     conn.execute(
         """
         INSERT OR IGNORE INTO menus
@@ -325,18 +333,81 @@ def _patch_audit_menu_and_kb_user(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _patch_rbac_scheme_c(conn: sqlite3.Connection) -> None:
+    """
+    RBAC 方案 C：user_roles 多角色；回滚 43.10A（user 全员知识库）；
+    新建 kb_manager 并改授知识库菜单；回填既有用户角色。
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            role_code TEXT NOT NULL,
+            UNIQUE(username, role_code)
+        )
+        """
+    )
+    # 回滚 A：删掉授给 user 的知识库菜单
+    conn.execute(
+        """
+        DELETE FROM role_res
+        WHERE role_code='user' AND res_type='menu'
+          AND auth_res IN ('kbMgt', 'kbFileMgt')
+        """
+    )
+    # kb_manager 角色
+    conn.execute(
+        """
+        INSERT INTO roles (role_code, role_name, role_desc, sys_role_flag, role_status, update_time)
+        SELECT 'kb_manager', '知识库管理员', '可管理知识库与文件，无系统管理权', 0, 1, ?
+        WHERE NOT EXISTS (SELECT 1 FROM roles WHERE role_code='kb_manager')
+        """,
+        (_now(),),
+    )
     for access in ("kbMgt", "kbFileMgt"):
         conn.execute(
             """
             INSERT INTO role_res (auth_res, res_type, res_status, role_code)
-            SELECT ?, 'menu', '1', 'user'
+            SELECT ?, 'menu', '1', 'kb_manager'
             WHERE NOT EXISTS (
                 SELECT 1 FROM role_res
-                WHERE auth_res=? AND res_type='menu' AND role_code='user'
+                WHERE auth_res=? AND res_type='menu' AND role_code='kb_manager'
             )
             """,
             (access, access),
         )
+    # 回填：每个用户至少有一条 user_roles（来自 users.access）
+    users = conn.execute("SELECT username, access FROM users").fetchall()
+    for u in users:
+        username = u["username"]
+        access = (u["access"] or "user").strip() or "user"
+        exists = conn.execute(
+            "SELECT 1 FROM user_roles WHERE username=? LIMIT 1", (username,)
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                "INSERT INTO user_roles (username, role_code) VALUES (?, ?)",
+                (username, access if access in ("admin", "user", "kb_manager") else "user"),
+            )
+    # lizy：user + kb_manager（保住知识库能力，且不污染全体 user）
+    lizy = conn.execute(
+        "SELECT username FROM users WHERE username='lizy'"
+    ).fetchone()
+    if lizy:
+        for code in ("user", "kb_manager"):
+            conn.execute(
+                """
+                INSERT INTO user_roles (username, role_code)
+                SELECT 'lizy', ?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM user_roles WHERE username='lizy' AND role_code=?
+                )
+                """,
+                (code, code),
+            )
 
 
 def _patch_user_emails_and_lizy(conn: sqlite3.Connection) -> None:

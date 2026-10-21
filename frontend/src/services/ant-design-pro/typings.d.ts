@@ -15,6 +15,8 @@ declare namespace API {
     unreadCount?: number;
     country?: string;
     access?: string;
+    /** 多角色并集（RBAC-C）；缺省时前端回退为 [access] */
+    roles?: string[];
     geographic?: {
       province?: { label?: string; key?: string };
       city?: { label?: string; key?: string };

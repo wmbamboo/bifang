@@ -1,8 +1,13 @@
 import {CollapseProps} from "antd/es/collapse/Collapse";
-import {Collapse, Tag, Input, message, Button, Tooltip, Space, Card, Typography} from "antd";
+import {Collapse, Tag, Input, Button, Tooltip, Space, Card, Typography} from "antd";
 import React from "react";
 import {Slide, parseColumnBlocks, alignItemsToColumnSlots} from "@/components/DocUtil/ViewItem4Ppt";
-import {CheckCircleTwoTone, FormOutlined} from "@ant-design/icons";
+import {
+  CheckCircleTwoTone,
+  ExclamationCircleTwoTone,
+  FormOutlined,
+  MinusCircleTwoTone,
+} from "@ant-design/icons";
 const {TextArea} = Input;
 const {Text} = Typography;
 const panelStyle: React.CSSProperties = {
@@ -23,18 +28,40 @@ interface CollapseEditableProps extends CollapseProps{
 }
 
 const FORMAT_HINT =
-  '内容生成了，但格式不正确，需要点击右侧【内容修改】按钮或点击大纲对应项目的【重新生成】';
+  '内容已生成但格式不正确，请【内容修改】或大纲【重新生成】（须「1. 标题 - 描述」）';
+
+type SlideStatus = 'ok' | 'warn' | 'bad' | 'empty';
+
+function slideStatus(slide: Slide): SlideStatus {
+  const hasItems = !!(slide.viewItems && slide.viewItems.length > 0);
+  const hasRaw = !!(slide.content && slide.content.trim());
+  const genErr = !!(slide.genError && slide.genError.trim());
+  if (hasItems) return genErr ? 'warn' : 'ok';
+  if (hasRaw || genErr) return 'bad';
+  return 'empty';
+}
+
+function slideStatusTip(slide: Slide): string {
+  const status = slideStatus(slide);
+  const err = (slide.genError || '').trim();
+  if (status === 'ok') return '已就绪';
+  if (status === 'warn') return err || '有校验提示，可下载前请人工复核';
+  if (status === 'bad') {
+    if (err) return err;
+    if (slide.content?.trim()) return FORMAT_HINT;
+    return '生成失败';
+  }
+  return '尚未生成';
+}
 
 const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseEditableProps) => {
-  const [messageApi, contextHolder] = message.useMessage();
-  const warnFormat = (hint?: string) => {
-    messageApi.open({
-      type: 'error',
-      content: hint || FORMAT_HINT,
-      duration: 6,
-    });
-  };
-  const contentEmpty=() => <p><Tag color="geekblue">生成内容</Tag><br/>尚未生成</p>;
+  const contentEmpty=() => (
+    <p>
+      <Tag color="default">生成内容</Tag>
+      <br />
+      <Text type="secondary">尚未生成</Text>
+    </p>
+  );
   const contentShow=(slide:Slide) => {
       const cols =
         slide.layout === 'columns' || slide.layout === 'metric_columns'
@@ -99,15 +126,21 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
       );
   }
   const contentRawUnparsed=(slide:Slide) => {
-      return <p>
-        <Tag color="error">{FORMAT_HINT}</Tag>
-        <TextArea key={"ta-raw-" + slide.key} value={slide.content} autoSize contentEditable={false}/>
-      </p>;
+      return (
+        <p>
+          <Tag color="default">生成内容（未解析）</Tag>
+          <TextArea key={"ta-raw-" + slide.key} value={slide.content} autoSize contentEditable={false}/>
+        </p>
+      );
   }
-  const contentGenFailed=(slide:Slide) => {
-      return <p>
-        <Tag color="error">{slide.genError || FORMAT_HINT}</Tag>
-      </p>;
+  const contentGenFailed=() => {
+      return (
+        <p>
+          <Tag color="default">生成内容</Tag>
+          <br />
+          <Text type="secondary">生成未成功（悬停左侧标记查看原因）</Text>
+        </p>
+      );
   }
   const onChange=(e:string[])=>{
     props.fn(e[0])
@@ -116,56 +149,49 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
     event.stopPropagation();
     props.editResultFn(slide.key);
   };
+  const statusIcon = (slide: Slide) => {
+    const status = slideStatus(slide);
+    const tip = slideStatusTip(slide);
+    let icon: React.ReactNode;
+    if (status === 'ok') {
+      icon = <CheckCircleTwoTone twoToneColor="#52c41a" />;
+    } else if (status === 'warn') {
+      icon = <ExclamationCircleTwoTone twoToneColor="#faad14" />;
+    } else if (status === 'bad') {
+      icon = <ExclamationCircleTwoTone twoToneColor="#ff4d4f" />;
+    } else {
+      icon = <MinusCircleTwoTone twoToneColor="#bfbfbf" />;
+    }
+    return <Tooltip title={tip}>{icon}</Tooltip>;
+  };
   const getSlideExtra = (slide:Slide) => {
-    const contentLen = slide.content?.length || 0;
-    const viewItemsLen = slide.viewItems?slide.viewItems.length:0;
-    const genFailed = !!(slide.genError && slide.genError.length > 0);
-    if (viewItemsLen > 0) {
-      return (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <CheckCircleTwoTone twoToneColor="#52c41a" />
+    const status = slideStatus(slide);
+    const showEdit = status !== 'empty';
+    return (
+      <Space size={4} onClick={(e) => e.stopPropagation()}>
+        {statusIcon(slide)}
+        {showEdit ? (
           <Tooltip title="内容修改">
             <Button
               type="dashed"
               size="small"
+              danger={status === 'bad' || status === 'warn'}
               icon={<FormOutlined />}
               onClick={(e) => openEdit(slide, e)}
             />
           </Tooltip>
-        </Space>
-      );
-    } else if(viewItemsLen === 0 && (contentLen>0 || genFailed)){
-      return (
-        <Space size={4} onClick={(e) => e.stopPropagation()}>
-          <CheckCircleTwoTone
-            twoToneColor="red"
-            onClick={() => warnFormat(genFailed ? slide.genError : undefined)}
-          />
-          <Tooltip title="内容修改">
-            <Button
-              type="dashed"
-              size="small"
-              danger
-              icon={<FormOutlined />}
-              onClick={(e) => {
-                warnFormat(genFailed ? slide.genError : undefined);
-                openEdit(slide, e);
-              }}
-            />
-          </Tooltip>
-        </Space>
-      );
-    }else{
-      return ''
-    }
+        ) : null}
+      </Space>
+    );
   };
   const slides= props.slides;
   const cItemsSubNew: CollapseProps['items'] = [];
   if (Array.isArray(slides)) {
     for (let slide of slides) {
-      const hasItems = slide.viewItems && slide.viewItems.length > 0;
-      const hasRaw = !hasItems && slide.content && slide.content.length > 0;
-      const genFailed = !hasItems && !hasRaw && !!(slide.genError && slide.genError.length > 0);
+      const status = slideStatus(slide);
+      const hasItems = status === 'ok' || status === 'warn';
+      const hasRaw = status === 'bad' && !!(slide.content && slide.content.trim()) && !(slide.viewItems?.length);
+      const genFailedOnly = status === 'bad' && !hasRaw;
       cItemsSubNew.push(
         {
           key: slide.key,
@@ -178,16 +204,21 @@ const EditableResultCollapse: React.FC <CollapseEditableProps>=(props: CollapseE
                 : slide.layout === 'metric_columns'
                   ? `${slide.label}（数据卡+分栏）`
                   : slide.label,
-          // eslint-disable-next-line react/no-unescaped-entities
-          children: hasItems ? contentShow(slide) : hasRaw ? contentRawUnparsed(slide) : genFailed ? contentGenFailed(slide) : contentEmpty(),
+          children: hasItems
+            ? contentShow(slide)
+            : hasRaw
+              ? contentRawUnparsed(slide)
+              : genFailedOnly
+                ? contentGenFailed()
+                : contentEmpty(),
           style: panelStyle,
           extra: getSlideExtra(slide)
         }
       )
     }
   }
-  return (<>{contextHolder}<Collapse accordion items={cItemsSubNew} onChange={onChange}
-                   activeKey={props.activeKey}/></>);
+  return (<Collapse accordion items={cItemsSubNew} onChange={onChange}
+                   activeKey={props.activeKey}/>);
 }
 
 export default EditableResultCollapse;

@@ -1034,19 +1034,21 @@ export default class PptTemplate {
   }
 
   downloadFile(filename: string, data: Buffer) {
-    // 创建一个Blob实例，类型为纯文本
-    const blob = new Blob([data], { type: 'nodebuffer' });
-    // 创建一个指向Blob的URL
+    // nodebuffer 不是合法 MIME；用 Uint8Array 兼容浏览器 Blob
+    const bytes =
+      data instanceof Uint8Array
+        ? data
+        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    const blob = new Blob([bytes], {
+      type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    });
     const url = URL.createObjectURL(blob);
-    // 创建一个a标签并设置属性
     const link = document.createElement('a');
-    link.style.display = 'none'; // 隐藏a标签
+    link.style.display = 'none';
     link.href = url;
-    link.download = filename; // 设置下载文件名
-    // 将a标签添加到文档中，并模拟点击
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
-    // 清理并移除元素和对象URL
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
   }

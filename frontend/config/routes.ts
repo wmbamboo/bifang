@@ -220,6 +220,12 @@ export default [
         icon: 'UserOutlined',
         component: './User/Profile',
       },
+      {
+        path: '/admin/feedback',
+        name: 'feedback-mgt',
+        icon: 'MessageOutlined',
+        component: './FeedbackAdmin',
+      },
     ],
   },
   {

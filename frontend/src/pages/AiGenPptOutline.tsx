@@ -10,6 +10,7 @@ import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import ChatWithSpeech4Ppt from "@/components/ChatUtil/ChatWithSpeech4Ppt";
 import {PPT_OUTLINE_WELCOME_SAMPLES} from "@/components/ChatUtil/outlineWelcomeSamples";
 import {message, Button} from "antd";
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 const AiGenPptOutline: React.FC = () => {
   const theme = useTheme();
@@ -35,7 +36,7 @@ const AiGenPptOutline: React.FC = () => {
   const buttonMessages_init:ButtonMessage[] = PPT_OUTLINE_WELCOME_SAMPLES;
   const openai = new OpenAI({
     apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-    baseURL: process.env.bf_baseUrl+'/chat',
+    baseURL: getBfBaseUrl()+'/chat',
     dangerouslyAllowBrowser: true,
   });
 

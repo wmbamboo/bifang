@@ -11,6 +11,7 @@ import {
   KB_GEN_EMPTY_ERROR,
   stripCitationsDeep,
 } from "@/components/DocUtil/parseChatCompletion";
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
@@ -346,7 +347,7 @@ const KbOutlineGenDoc: React.FC = () => {
     setLoading(true);
     if (!genKey) setBibliography([]);
     // 需要使用kbName
-    const url=process.env.bf_baseUrl+'/knowledge_base/local_kb'+`/${kbName}/chat/completions`;
+    const url=getBfBaseUrl()+'/knowledge_base/local_kb'+`/${kbName}/chat/completions`;
     // 指定header
     const headers = {
       'Content-Type': 'application/json',

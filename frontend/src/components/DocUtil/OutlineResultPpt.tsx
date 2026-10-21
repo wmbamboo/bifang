@@ -1,6 +1,10 @@
-import {Collapse, CollapseProps} from "antd";
+import {Collapse, CollapseProps, Tooltip} from "antd";
 import {Chapter, Ppt, } from "@/components/DocUtil/ViewItem4Ppt";
-import {CheckSquareTwoTone} from "@ant-design/icons";
+import {
+  CheckSquareTwoTone,
+  ExclamationCircleTwoTone,
+  MinusCircleTwoTone,
+} from "@ant-design/icons";
 import EditableResultCollapse from "@/components/DocUtil/EditableResultCollapse";
 import React from "react";
 interface PptOutlineResultProps {
@@ -27,36 +31,44 @@ const PptOutlineResult: React.FC <PptOutlineResultProps>= ({chapters, activeKey,
 
   const getChapterExtra = (chapter:Chapter) => {
     const slides=chapter.slides;
-    let flag=0
-    for (let slide of slides) {
+    if (!slides?.length) return '';
+    const badNames: string[] = [];
+    const emptyNames: string[] = [];
+    let okCount = 0;
+    for (const slide of slides) {
+      const title = slide.title || slide.label || slide.key;
       const contentLen = slide.content?.length || 0;
-      const viewItemsLen = slide.viewItems?slide.viewItems.length:0;
+      const viewItemsLen = slide.viewItems ? slide.viewItems.length : 0;
       const genFailed = !!(slide.genError && slide.genError.length > 0);
-      if(viewItemsLen === 0 && (contentLen>0 || genFailed)){
-        flag=2
-        break;
-      }
-      if(contentLen>0){
-        flag=1
+      const allowsEmpty = Ppt.slideAllowsEmptyVItem(slide.layout, slide.subTitle);
+      if (genFailed || (viewItemsLen === 0 && contentLen > 0 && !allowsEmpty)) {
+        badNames.push(title);
+      } else if (viewItemsLen > 0 || allowsEmpty) {
+        okCount++;
+      } else {
+        emptyNames.push(title);
       }
     }
-    if (flag===1) {
-      return <CheckSquareTwoTone twoToneColor="#52c41a"
-                                 onClick={(event) => {
-                                   // If you don't want click extra trigger collapse, you can prevent this:
-                                   event.stopPropagation();
-                                 }}
-      />
-    }else if(flag===2){
-      return <CheckSquareTwoTone twoToneColor="red"
-                                 onClick={(event) => {
-                                   // If you don't want click extra trigger collapse, you can prevent this:
-                                   event.stopPropagation();
-                                 }}
-      />
-    }else{
-      return ''
+    const stop = (event: React.MouseEvent) => event.stopPropagation();
+    if (badNames.length) {
+      return (
+        <Tooltip title={`未完成：${badNames.slice(0, 4).join('、')}${badNames.length > 4 ? '…' : ''}`}>
+          <ExclamationCircleTwoTone twoToneColor="#ff4d4f" onClick={stop} />
+        </Tooltip>
+      );
     }
+    if (emptyNames.length || okCount === 0) {
+      return (
+        <Tooltip title={emptyNames.length ? `尚未生成：${emptyNames.slice(0, 4).join('、')}${emptyNames.length > 4 ? '…' : ''}` : '尚未生成'}>
+          <MinusCircleTwoTone twoToneColor="#bfbfbf" onClick={stop} />
+        </Tooltip>
+      );
+    }
+    return (
+      <Tooltip title="本章已就绪">
+        <CheckSquareTwoTone twoToneColor="#52c41a" onClick={stop} />
+      </Tooltip>
+    );
   };
 
   const getCollapseItems=(chapters:Chapter[])=> {

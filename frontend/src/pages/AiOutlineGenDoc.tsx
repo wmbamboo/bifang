@@ -37,6 +37,7 @@ import { useModel } from '@umijs/max';
 import { useTheme } from 'antd-style';
 import {CompassTwoTone, FileWordTwoTone, FolderOpenTwoTone} from "@ant-design/icons";
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 // 本地无大纲时的种子样例（十一·2：### + 结论章）
 const markdown_init = DOC_OUTLINE_MARKDOWN_INIT;
@@ -255,7 +256,7 @@ const AiOutlineGenDoc: React.FC = () => {
 
   const genDoc = async (genKey:string="") => {
     setLoading(true);
-    const url=process.env.bf_baseUrl+'/chat'+"/chat/completions";
+    const url=getBfBaseUrl()+'/chat'+"/chat/completions";
     // 指定header
     const headers = {
       'Content-Type': 'application/json',

@@ -3,6 +3,7 @@ import {useModel} from '@umijs/max';
 import {Button, Card, Col, Divider, Image, Input, message, Row, Tag, theme, Typography} from 'antd';
 import React, {useEffect} from 'react';
 import {WordCloud} from '@ant-design/charts';
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 // import { RotateCwOutlined } from '@ant-design/icons';
 import {useSearchParams} from 'react-router-dom';
 // import {Label} from "@antv/g6";
@@ -313,7 +314,7 @@ const Welcome: React.FC = (props) => {
 
   const fetchData=async (url:string,plat_chan:string="抖音",period_type="周",
                          period="2024W38",cate_id="20189",goods_id:string,dataKey:string,cb:(jsonData: string)=>void)=>{
-    const baseUrl=process.env.bf_baseUrl+"/goods-labels-mgt/dyGooods/";
+    const baseUrl=getBfBaseUrl()+"/goods-labels-mgt/dyGooods/";
     let urlParam="?plat_chan="+plat_chan;
     urlParam+="&period_type="+period_type;
     urlParam+="&period="+period;

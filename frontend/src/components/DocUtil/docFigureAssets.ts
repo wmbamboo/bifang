@@ -1,3 +1,4 @@
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 /**
  * Word 段落插图资产附录（九·2 / 十·7 7a′）：纯函数，不 import 服务层。
  * assetRef 口径与 resolveAssetBytes 一致：kb:<fileName>/<assetId>
@@ -165,7 +166,7 @@ export function kbAssetFileUrl(
   fileName: string,
   assetId: string,
 ): string {
-  const base = (process.env.bf_baseUrl || "").replace(/\/$/, "");
+  const base = (getBfBaseUrl() || "").replace(/\/$/, "");
   const q = new URLSearchParams({
     knowledge_base_name: kbName,
     file_name: fileName,

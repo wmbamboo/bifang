@@ -2,7 +2,7 @@ import {PageContainer, ProCard} from '@ant-design/pro-components';
 import {useModel} from '@umijs/max';
 import {useTheme} from 'antd-style';
 import {Button, Empty, Flex, message, Progress, Spin, Tag} from 'antd';
-import React, {useCallback, useEffect, useState} from "react";
+import React, {useCallback, useEffect, useMemo, useState} from "react";
 import axios from "axios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
 import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets} from "@/components/DocUtil/ViewItem4Ppt";
@@ -25,6 +25,7 @@ import KnowledgeBaseSelector, {opStackStyle, opBtnStyle, opKbTagStyle, ALL_KB_NA
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 import {fetchCorpusProfile} from "@/services/chatchat/kb";
 import {loadCorpusProfileJson, resetCorpusProfile} from "@/components/DocUtil/corpusProfile";
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 interface Dictionary {
   [key: string]: string;
 }
@@ -168,6 +169,8 @@ const KbOutlineGenPpt: React.FC = () => {
   const [editSlide, setEditSlide] = useState<Slide>(new Slide(-1,""));
   const [slideDrawerOpen, setSlideDrawerOpen] = useState(false);
   const [slideTemplateDrawerOpen, setSlideTemplateDrawerOpen] = useState(false);
+  /** 灌模实际只用 pptTemplate-simple；列表选型仅记录外观偏好 */
+  const [selectedTemplateName, setSelectedTemplateName] = useState<string>('标准模板');
   const [olRecs, setOlRecs] = useState<OutlineRec[]>(outlineRecs);
 
   useEffect(() => {
@@ -193,6 +196,19 @@ const KbOutlineGenPpt: React.FC = () => {
       resetCorpusProfile();
     }
   }, [kbName]);
+
+  /** 选模板不点亮下载；随章节内容重算是否可下载 */
+  const downloadEval = useMemo(
+    () => Ppt.evaluatePptDownloadReady(chapters),
+    [chapters],
+  );
+  useEffect(() => {
+    if (loading) {
+      setDownloadable(false);
+      return;
+    }
+    setDownloadable(downloadEval.ok);
+  }, [downloadEval, loading]);
 
   const onOutlineRecSelect=useCallback( (id:string)=>{
     // 按 ID 从全量列表取，避免同名大纲或知识库筛选导致取错份。
@@ -278,10 +294,7 @@ const KbOutlineGenPpt: React.FC = () => {
       for (const ch of chapters) {
         for (const sl of ch.slides || []) {
           if (i === idx) {
-            if (sl.layout === 'columns' || sl.layout === 'metric_columns') {
-              return !(sl.subTitle || '').trim();
-            }
-            return true;
+            return !Ppt.slideAllowsEmptyVItem(sl.layout, sl.subTitle);
           }
           i++;
         }
@@ -503,7 +516,7 @@ const KbOutlineGenPpt: React.FC = () => {
     message.info(`genPPT:ID:${title},${kbName},${chapters.length}`);
     setLoading(true);
     // 需要使用kbName
-    const url=process.env.bf_baseUrl+'/knowledge_base/local_kb'+`/${kbName}/chat/completions`;
+    const url=getBfBaseUrl()+'/knowledge_base/local_kb'+`/${kbName}/chat/completions`;
     // 指定header
     const headers = {
       'Content-Type': 'application/json',
@@ -627,24 +640,16 @@ const KbOutlineGenPpt: React.FC = () => {
           setLoading(false);
           setProgressHidden(true);
           Ppt.reparseAllSlideContents(chapters);
-          const badFormat = Ppt.getSlidesWithBadFormat(chapters);
           setChapters(chapters.slice());
-          if (badFormat.length > 0) {
-            const names = badFormat.slice(0, 3).map((s) => s.title).join('、');
-            message.error(
-              `有 ${badFormat.length} 张幻灯片内容生成了，但格式不正确，需要点击右侧【内容修改】按钮或点击大纲对应项目的【重新生成】（如：${names}${badFormat.length > 3 ? '…' : ''}）。`,
-            );
-            setDownloadable(false);
-          } else if (chapters.some((ch) => ch.slides?.some((s) => !!s.genError))) {
-            setDownloadable(false);
-          } else {
-            setDownloadable(true);
-          }
+          const ev = Ppt.evaluatePptDownloadReady(chapters);
+          setDownloadable(ev.ok);
         }else{
           message.warning("发生了一些错，完成个数："+completeCount+";少于请求幻灯片个数："+promiseArr.length)
           setChapters(chapters.slice());
           setLoading(false);
           setProgressHidden(true);
+          const ev = Ppt.evaluatePptDownloadReady(chapters);
+          setDownloadable(ev.ok);
         }
       });
     }catch(error){
@@ -781,15 +786,19 @@ const KbOutlineGenPpt: React.FC = () => {
       return false;
     }
     message.success('小项已更新，小节状态已刷新。');
-    if (Ppt.getSlidesWithBadFormat(chapters).length === 0) {
-      setDownloadable(true);
-    }
+    const ev = Ppt.evaluatePptDownloadReady(chapters);
+    setDownloadable(ev.ok);
     return true;
   }
   const selectTemplate=(id:number)=>{
     const slideTemplate=slideTemplates.find((t)=>t.id===id);
     if(slideTemplate) {
-      message.info(`已选择模板：${slideTemplate.name}`)
+      setSelectedTemplateName(slideTemplate.name);
+      setSlideTemplateDrawerOpen(false);
+      // 皮肤 pptx 尚未接入 manifest 灌模；下载始终用 /pptTemplate-simple.pptx
+      message.info(
+        `已选「${slideTemplate.name}」。文档下载使用标准灌模模板（皮肤包待接入）。`,
+      );
     }
   }
 
@@ -882,6 +891,11 @@ const KbOutlineGenPpt: React.FC = () => {
             </div>
             <div style={{marginBottom: 16}}>
               <Button type="dashed" block icon={<FilePptTwoTone style={{fontSize:"large"}}/>} disabled={!downloadable}
+                      title={
+                        downloadable
+                          ? `下载 PPT（${selectedTemplateName} / 标准灌模）`
+                          : '须全部幻灯片生成成功且格式正确（问题见右侧各段）'
+                      }
                       onClick={() =>saveDoc()}  style={opBtnStyle}>
                 文档下载
               </Button>

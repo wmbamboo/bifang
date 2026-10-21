@@ -1763,7 +1763,8 @@ export class Ppt{
     let slideVars=new Array<SlideVar>();
     let slideIndexG=1
     for(let chapter of chapters){
-      if(!chapter.slides||chapter.slides.length===0) return undefined;
+      // 空章跳过，勿整表 return undefined（否则下载直接「生成幻灯片变量出错」）
+      if(!chapter.slides||chapter.slides.length===0) continue;
       for(let slide of chapter.slides){
         let vItem:Dictionary<string>={};
         for (let vi of slide.viewItems){
@@ -1778,6 +1779,21 @@ export class Ppt{
       }
     }
     return slideVars;
+  }
+
+  /**
+   * vItem 为空时，是否仍可用大纲副标题/要点灌模（分栏/图鉴/表等）。
+   */
+  static slideAllowsEmptyVItem(layout: string | undefined, subTitle: string | undefined): boolean {
+    const sub = (subTitle || '').trim();
+    if (!sub) return false;
+    return (
+      layout === 'columns' ||
+      layout === 'metric_columns' ||
+      layout === 'metric_list' ||
+      layout === 'image_grid' ||
+      layout === 'table'
+    );
   }
 
   /**
@@ -2247,6 +2263,56 @@ export class Ppt{
       }
     }
     return bad;
+  }
+
+  /**
+   * 文档下载是否可点：每页须有可用小项（或副标题可灌的版式）。
+   * - 硬拦：未生成 / 有正文无小项 / 生成失败且无小项
+   * - 软警：已有小项但仍带 genError（校验提示）——不挡下载，UI 可提示
+   * 注意：选模板与 downloadable 无关。
+   */
+  static evaluatePptDownloadReady(chapters: Chapter[]): {
+    ok: boolean;
+    blockers: string[];
+    softWarnings: string[];
+  } {
+    const blockers: string[] = [];
+    const softWarnings: string[] = [];
+    if (!Array.isArray(chapters) || chapters.length === 0) {
+      return { ok: false, blockers: ['请先选择大纲'], softWarnings };
+    }
+    Ppt.reparseAllSlideContents(chapters);
+    let slideTotal = 0;
+    for (const chapter of chapters) {
+      const slides = chapter.slides;
+      if (!Array.isArray(slides) || slides.length === 0) continue;
+      for (const slide of slides) {
+        slideTotal++;
+        const title = slide.title || slide.label || slide.key;
+        const hasItems = !!(slide.viewItems && slide.viewItems.length > 0);
+        const allowsEmpty = Ppt.slideAllowsEmptyVItem(slide.layout, slide.subTitle);
+        const hasContent = !!(slide.content && slide.content.trim());
+        const genErr = (slide.genError || '').trim();
+
+        if (hasItems || allowsEmpty) {
+          if (genErr && hasItems) {
+            softWarnings.push(`「${title}」：${genErr}`);
+          }
+          continue;
+        }
+        if (genErr) {
+          blockers.push(`「${title}」生成失败：${genErr}`);
+        } else if (hasContent) {
+          blockers.push(`「${title}」格式不符（需「1. 标题 - 描述」）`);
+        } else {
+          blockers.push(`「${title}」尚未生成内容`);
+        }
+      }
+    }
+    if (slideTotal === 0) {
+      blockers.push('大纲中没有可生成的幻灯片');
+    }
+    return { ok: blockers.length === 0, blockers, softWarnings };
   }
 
   /**

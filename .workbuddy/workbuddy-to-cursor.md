@@ -4740,3 +4740,252 @@ chips 行（`:108-112`）保留 —— 它与简单提示词的职责分工是�
 ### 38.6 不在本批次（勿顺手）
 
 32.2 `key_assets` captions + 主题闸、28.1 blocked 定案、32.3 题注清洗、二十九 P0 编号全局化。其中 28.1 仍等用户 Console 里那行 `[DocBlock] figure-blocked`。
+
+## 三十九、三十七验收（我实跑）+ 四条收口（2026-10-21 08:20）
+
+> 基线 `0afdb81`（HEAD；注意该提交信息只写了「Typography 未定义」，实际把 37 + 38.3 + 围栏自愈全并进来了，**别按提交信息判范围**）。
+> jest 我本地实跑：`(docCitation|docOutlineAlign|docHeadingLevels|docFigureSupply)` → **4 suites / 62 passed**（219s），与你的回执一致。
+
+### 39.0 逐项验收
+
+| 项 | 结论 | 依据 |
+|---|---|---|
+| 37.1 大纲列表不压行 | ✅ 症状已消除 | `OutlineSelectRadio.tsx:70-80` 删掉 `height:'1.6em'` 改 flex+nowrap；`:124-136` `Row wrap={false}` + 左容器 `minWidth:0/overflow:hidden` |
+| 37.1 省略号 / 章数 Tag | ❌ 有缺陷 | 见 39.2 |
+| 37.2 空大纲 Empty | ✅ | `OutlinePromptDoc.tsx:48-57` |
+| 37.3 摘要 chips | ✅ | `OutlinePromptDoc.tsx:93-101`（走 `wordBudgetFor` / `paragraphPointLabels`，未正则切 prompt） |
+| 38.2① Ai 恒剥引注 | ✅ | `AiOutlineGenDoc.tsx:186-190` 深拷贝；`:182/:183/:184/:211/:227/:237/:242` 七处全部换 `renderChapters`，无遗漏 |
+| 38.2③ 灰字说明 | ✅ | `AiOutlineGenDoc.tsx:533-535` |
+| 38.3 日期 +1 | ✅ 四页 | `AiOutlineGenDoc` / `KbOutlineGenDoc` / `AiOutlineGenPpt` / `KbOutlineGenPpt` 全改 `pad2` 八位；`KbOutlineGenPpt.tsx:305` 文件名改 `-Kb-v` |
+| **38.5 写作大纲只展示简单提示词** | ❌ **未做** | 见 39.1 |
+
+### 39.1 P0：38.5 未落地（用户 08:06 的明确要求）
+
+`OutlinePromptDoc.tsx:113-137` 现在仍是「写作契约与完整提示词（系统统一注入，通常无需修改）」+ `children: {paragraph.prompt}` —— 整串仍在展示面（`promptManual` 时还默认展开）。按 38.5 执行：
+
+1. `ViewItem4Doc.ts` 新增 `simpleDocParagraphPrompt(p)`（38.5 有完整实现，字数走 `wordBudgetFor`、要点走 `paragraphPointLabels`）。
+2. `OutlinePromptDoc.tsx:113-137` 整段折叠换成 `<div style={{whiteSpace:"pre-wrap",lineHeight:1.6}}>{simpleDocParagraphPrompt(paragraph)}</div>`，并删掉 `defaultActiveKey`。
+3. `EditablePromptCollapse4Doc.tsx:204-223` 的 `<pre>{paragraph.prompt}</pre>` 同样换成 `simpleDocParagraphPrompt`（编辑态 `:270-299` 的整串 TextArea 保留，那是存量数据唯一编辑入口）。
+
+### 39.2 P1：37.1 的省略号不生效，「N 章」会被硬裁
+
+根因（我核了 antd 源码，不是猜）：`node_modules/antd/es/radio/radio.js:101`
+```js
+children !== undefined ? React.createElement("span", null, children) : null
+```
+⇒ `OutlineSelectRadio.tsx:153` 里的 children（Tag / Tooltip>span / Tag）全被塞进**一个匿名 `<span>`**。因此：
+- `:171-176` 那个 span 的 `flex:'1 1 auto'` **无效**（父容器不是 flex）；
+- 匿名 span 作为 flex item 的 `min-width:auto` 不肯收缩 ⇒ 长标题撑开后被 `:126` 的 `overflow:hidden` **硬裁**，`:177` 的「N 章」Tag 直接看不见（不是被省略号截断）。
+
+**修法 A（推荐，纯 inline，不用新建样式表）**：Radio 只留圆点，标题与 Tag 放 Radio 外面，整行自己接管点击：
+```tsx
+<div
+  style={{display:'flex', alignItems:'center', gap:6, minWidth:0}}
+  onClick={(e) => {
+    if ((e.target as HTMLElement).closest('.ant-radio-wrapper')) return; // 圆点自己会触发 onChange
+    setValue(item.outlineId!);
+    props.outlineSelectFn(item.outlineId!);
+  }}
+>
+  <Radio value={item.outlineId} style={{flex:'0 0 auto', marginInlineEnd:0}} />
+  <Tooltip title={<div><div style={{fontWeight:500}}>{item.outlineName}</div>
+    <div style={{opacity:.8}}>{chapterHint(item.outlineContent)}</div>
+    <div style={{opacity:.8}}>ID: {item.outlineId}</div></div>}>
+    <span style={{flex:'1 1 auto', minWidth:0, overflow:'hidden',
+                  textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{item.outlineName}</span>
+  </Tooltip>
+  <Tag style={{flex:'0 0 auto', marginInlineEnd:0}}>{chapterCount(item.outlineContent)} 章</Tag>
+</div>
+```
+⚠️ 必须加那句 `closest('.ant-radio-wrapper')` 早退，否则点圆点会走两次 `outlineSelectFn`（它会去拉大纲，重复请求）。
+
+**修法 B（不改结构）**：项目目前 **没有任何 .css/.less 文件**（`src/*.css` 为空），需新建并引入全局样式：
+```css
+.ant-radio-wrapper { display:flex; align-items:center; min-width:0; flex:1 1 auto; }
+.ant-radio-wrapper > span:last-child { display:flex; align-items:center; gap:6px; min-width:0; flex:1 1 auto; }
+```
+
+### 39.3 P1：新加的围栏宽松正则会把 ```json 当图表围栏吞掉（24·B 回归的窄版）
+
+`docFenceNormalize.ts:117`：
+```ts
+/```[\s\S]{0,80}?\bkb:\S+\/\S+\.(?:png|jpe?g|gif|webp)/i
+```
+命中后 `contentMayHaveDocBlockFences` 返回 true ⇒ `absorbBlocksFromParagraphContent` 先 `blocks=[]` 再解析；开栏行不是 table/figure 时进 `state="unknown"`，该分支只把行塞进 `buf`、**flush 时不输出** ⇒ **整段 ```json 从正文消失**（`ViewItem4Doc.ts:799-806`）。
+这不是假设：docGen 原始 JSON 的 `blocks` 里就带 `"assetRef": "kb:…png"`，模型若把这类元数据写进 ```json 围栏，80 字符内必命中。
+收紧（要求 ``` 后只有 figure/figureref 或直接换行，```json 不命中）：
+```ts
+/```[ \t]*(?:figure|figureref)?[ \t]*\r?\n[\s\S]{0,80}?\bkb:\S+\/\S+\.(?:png|jpe?g|gif|webp)/i
+```
+
+### 39.4 P2：`countParagraphMedia` 的 max() 会把「灰卡」显示成「含图1」
+
+`ViewItem4Doc.ts:735-741` 改成 `max(blocks, 正文残留围栏计数)`。若吸收失败（围栏被清、blocks 为空），标签仍报「含图1」，点开只有灰卡 —— 与用户看到的「图未解析」是同一现象，**用计数掩盖了症状**。
+建议：计数只认真实 `blocks`；残留围栏单独作为「未解析」提示（`DocFigureStrip` 已有 `unparsed` 判定，`DocFigureStrip.tsx:117-121`），让「有图 / 有图但没解析出来」两态在文案上分开。
+
+### 39.5 P2：`OutlineResultDoc.tsx:86-89` 在 render 里吸收
+
+`contentShow` 直接调 `absorbBlocksFromParagraphContent(paragraph)`：函数本身幂等（先 `blocks=[]`、末尾回写 `content`），当前只读列表可接受。但**将来一旦在列表里做内联编辑**，render 期吸收会把用户正在输入的半截围栏吞掉。建议把「改写」留在生成收尾（`KbOutlineGenDoc.tsx:677-688`、`AiOutlineGenDoc.tsx:420-425` 已有），列表这层只做「检测 + 提示」。
+
+### 39.6 执行序
+
+**39.1（38.5 补做，用户当前诉求）→ 39.2 A（列表视觉收口）→ 39.3（围栏正则收紧，防吞代码块）→ 39.4/39.5（P2，可同批）**。
+39.1 与 39.3 互不冲突，可同一提交；39.2 改的是另一个文件。
+仍未做（勿顺手）：32.2 captions + 主题闸、28.1 blocked 定案、32.3 题注清洗、二十九 P0。
+
+## 四十、PPT 小项描述长度校验：误报根因与四步治理（2026-10-21 22:50）
+
+用户报：页面内容生成完，幻灯片标题旁橙叹号，hover 提示「第 1 点描述须为 20～70 字，当前 108 字」。
+用户自提四条治理方案（计数剔除引用 / 数据点放宽到 100 / 一键 AI 精简 / 校验前移）。我逐条核过代码，**三条成立、两条需要纠偏**，另挖到一个用户没提但更该先做的根因。
+
+### 40.0 现场结论（先回答「能不能先继续」）
+
+**能继续，橙叹号不阻断下载。** 证据：`ViewItem4Ppt.ts:2274-2311` `evaluatePptDownloadReady`，`genErr && hasItems` 走 **softWarnings**（`:2298-2300`），只有 `!hasItems` 才进 blockers。
+即：`Slide.setContent`（`:1679-1692`）校验失败时 `genError = vErr` 但仍 `setResult(viewItems)` ⇒ 内容在、可展示、可下载，橙叹号只是复核提示（`EditableResultCollapse.tsx:35-50`，`hasItems && genErr → 'warn'`）。
+⚠️ 但描述 108 字灌进 list 版式会挤字/溢出，导出前建议至少压到 ~70 字。
+
+### 40.1 P0：PPT 侧完全没有引用标记治理（比「计数没剔除」更根本）
+
+用户判断①成立，但**只改计数是治标**。
+
+链路核实：
+- 后端检索片段本来就带编号（`kb_service.py:926-928`，`[文档{i}] 来源：…`）⇒ `[文档13]` 有真实出处，不是模型幻觉；
+- **文档侧**有 `stripHallucinatedDocCitations`（`parseChatCompletion.ts:204-218`）；
+- **PPT 侧零治理**：`grep stripHallucinatedDocCitations|stripCitations` 在 `ViewItem4Ppt.ts` / `AiOutlineGenPpt.tsx` / `KbOutlineGenPpt.tsx` / `ChatWithSpeech4Ppt.tsx` **全零命中**；提示词里也没有任何「禁止/允许 `[文档N]`」的条款。
+
+后果不止计数：`[文档13]` 会被**原样灌进 PPT 页面**，读者看到一个没有对照表的悬空编号（PPT 没有文末资料来源清单，也没地方放）。
+
+**三件套，缺一不可：**
+1. 提示词禁写 —— `buildPptItemFormatPrompt`（`ViewItem4Ppt.ts:1139`）各分支统一加一条：`不要用 [文档N]，不要输出任何来源标注。`
+2. 解析时剥离 —— `Slide.setContent`（`:1670-1692`）在 `genViewItemByRegex` 之后、校验之前，对每条 `vi.title/vi.content` 跑 `stripHallucinatedDocCitations`（提到 PPT 侧公共处复用，勿复制正则）。
+3. 校验计数用剥离后的长度 —— 见 40.2。
+
+只做 3 = 让告警消失但页面仍脏，**不接受**。
+
+### 40.2 P1：校验口径改为「剥离引用后计数」+ 编辑器软限
+
+`validateSlideViewItems`（`:1254-1261`）目前只 `trim()`，裸算 `content.length`。
+改动：新增纯函数 `pptItemLength(s)` = `stripHallucinatedDocCitations(s).text.trim().length`，`:1376`（描述）、`:1373`（标题）、`:1368`（metric 解读）、`:1273/:1298/:1328/:1332/:1351/:1365` 各处一并换掉，保证「提示的数字」与「编辑器显示的字数」同源。
+
+⚠️ **顺带修一个会静默丢数据的 bug**：`SliderDrawer.tsx:222` 描述 `TextArea` 硬写 `maxLength={dMax}`（70）。用户把 108 字原文粘进去会被**从尾部静默截断**，且不提示 —— 手改时最容易丢掉末尾的出处/数字。
+改法：去掉 `maxLength`，改成软限 —— 超限把 `Text type="secondary"` 的字数显示变红（`:221` 已有 `{item.content.trim().length}/{dMax}` 现成位置），保存时仍由 `validateSlideViewItems` 拦。标题那行 `:212` 同理（PPT_ITEM_TITLE_MAX=12 也会硬截）。
+
+### 40.3 P1：一键 AI 精简 —— 同意做，但别放 hover Tooltip
+
+`EditableResultCollapse.tsx:159` 的橙叹号是 `<Tooltip title={tip}>{icon}</Tooltip>`，纯文本、hover 即消失，**放不下一个可点按钮**（Tooltip 里塞按钮能点但极易误触/遮挡）。
+现成入口更好用：`getSlideExtra`（`:166-182`）已有「内容修改」按钮 → 打开 `SliderDrawer`。建议把「AI 精简至合规」放在 **`SliderDrawer` 每条描述下方**（`:217-224` 那个 TextArea 下面），仅在 `len > dMax` 时出现：
+
+```tsx
+{over && <Button size="small" type="link" onClick={() => onShorten(index)}>AI 精简至 {dMax} 字</Button>}
+```
+
+`onShorten` 走单条重写（复用该页已有的单条生成通道，prompt = 「把下面这句压缩到 ≤70 字，保留全部数字与出处，只删连接词与重复限定，不要新增内容」）。**不要**重新生成整页（会动到其他点）。
+
+### 40.4 P2：数据密集点不该挤在 list —— 分档机制已存在，判定太窄
+
+用户建议②「按点类型分档：叙述 20~70 / 数据 20~100」。**方向对，实现要换路径**：
+
+- 70 不是随手定的：`PPT_ITEM_DESC_MAX=70`（`:372`）与 `SliderDrawer` 的 `maxLength` 同源，是**版式容量约束**。直接放宽到 100 而没验模板 ⇒ 溢出比告警更糟（我没测模板实际容量，**不许凭这个数字拍板**）。
+- **系统已有分档**：`metric` / `metric_list` 布局 = 数据点走「原数字 2~12 字 + 短解读 4~16 字」（`:368-371`、`:1155-1156`）。数据密集的点本来就该走这条路，而不是给 list 放宽。
+- 真正的洞在**版式判定**：`outlineJson.ts:146-158` 的 `metricCue` 只对**页标题**正则（`/大盘|增速|规模|占比|GMV|销售额|同比|渗透|播放量|金额|人次/`）。页标题不含这些词、但要点塞了三组质押数字 ⇒ 判 `list` ⇒ 挤 20~70。
+  改法（P2）：`metricCue` 增加对**要点文本**的判定（要点里 ≥2 个「数字+单位」视为看数页），或在大纲侧给数据密集页显式标 `layout: metric`。
+
+### 40.5 纠偏：三条不要做
+
+1. **别只改计数让告警消失** —— 页面里的 `[文档13]` 还在（40.1）。
+2. **别把 70 放宽到 100** —— 除非先确认模板描述区容量；优先让数据点走 metric 版式（40.4）。
+3. **别再把字数抄一遍进提示词** —— `buildPptItemFormatPrompt` 的 list 分支（`:1243-1251`）**已经写了** `1. 概括标题（4～12字） - 具体描述（20～70字）`。用户判断④「校验没前移」的前提不成立；108 字是模型为塞三组数字**主动违反**已写明的约束。再抄一遍收益≈0，该做的是 40.3（一键精简）+ 40.4（给数据点正确出口）。
+
+### 40.6 执行序与验收
+
+**40.1（引用三件套）→ 40.2（计数口径 + 软限）→ 40.3（一键精简）→ 40.4（metricCue 扩到要点，P2 可延后）**。
+jest：并入既有 PPT 套件（勿新建文件）；用例三条 —— ① 含 `[文档13]` 的 108 字描述，剥离后 ≤70 ⇒ 校验通过且返回文本无 `[文档`；② 剥离后仍 >70 ⇒ 仍报错且**报的数字是剥离后的长度**；③ 去掉 `maxLength` 后粘贴 108 字不被截断（软限标红）。
+
+验收（UI）：KB 页 PPT 重新生成同一页 → 橙叹号消失、描述里无 `[文档N]`；在编辑器粘 108 字 → 标红不截断 → 点「AI 精简」→ 保存通过。
+
+
+## 四十一、反馈闭环 P0（新模块，需求已由用户拍板）
+
+> 需求文档：`docs/2026-10-21-feedback-loop-requirements.md`（**先看这份**，本单以它为准）
+> 背景：产品同事给了 LTC 的反馈闭环方案（录屏 + TRAE 规则包），要求毕方先加上，他好加入测试提缺陷。
+> 用户已拍板三个决策（文档第十节）：① 复用现有 RBAC、加指派字段、不做角色管理界面；② 内部测试起步但将来给客户，做 `visibility`/`env` 预埋；③ 产品内角标为主，邮件为辅（仅 fixed/resolved 两事件，异步可失败）。
+
+### 41.0 先纠一个我上一轮写错的前提（必读）
+
+上一章我写「后端无鉴权中间件、需新建角色体系」——**错的**。毕方已有完整 RBAC：
+
+| 已有 | 位置 |
+|---|---|
+| `users.access`（admin / user） | `backend/app/db.py:54` |
+| `roles` 表（admin / user 初始数据） | `db.py:216-223` |
+| `menus` 表（20 条，`p_id=12` = 系统管理） | `db.py:227-259` |
+| `role_res` 表（角色→菜单授权，admin 全量） | `db.py:262-273` |
+| `orgs` 表 | `db.py:276` |
+
+⇒ **不要新建 users/roles/权限界面**。本单权限工作只有三件：加 1 条菜单、加 1 条授权、接口里读 `access` 判定。
+
+### 41.1 数据库（`backend/app/db.py`）
+
+1. 在 `user_logs` 建表附近（约 `:112` 之后）加 `feedbacks` / `feedback_comments` 两张表 + 4 个索引，**DDL 照抄需求文档第四节**（含 `assignee` / `visibility` / `env` / `notify_status` 四个新字段，别漏）。
+2. 菜单种子数据：`db.py:227-259` 的 `menus` 数组末尾加一条：
+   ```python
+   (21, "反馈管理", "feedbackMgt", "feedbackMgt", "MessageOutlined", "/admin/feedback", 9, 12),
+   ```
+   ⚠️ `menus` 种子只在 `menu_count == 0` 时写入，**已存在的库不会补这条**。必须同时写一个幂等补丁：启动时 `INSERT OR IGNORE INTO menus (id, ...) VALUES (21, ...)`，并对 `role_res` 同样 `INSERT OR IGNORE ... ('feedbackMgt','menu','1','admin')`。否则用户现有库里看不到菜单。
+3. 不要动 `user_logs`（P2 才接）。
+
+### 41.2 后端（`backend/app/routers/feedback.py` 新建）
+
+- 6 个接口，路径与权限矩阵见需求文档第五节 / 第四节权限矩阵。
+- `main.py:53-56` 加一行 `app.include_router(feedback.router)`，与现有四个同风格。
+- 风格照 `db.py` 手写 `sqlite3`，**不引 SQLAlchemy**；成功失败用现有 `ok()` 封装（见 `mock_api.py`）。
+- 权限判定：`PUT` 必须校验。从请求头 token 反查 `_TOKENS`（`mock_api.py:37`）拿 username → 查 `users.access`。**不要写中间件**，与现有 router 无鉴权风格一致，但 `PUT` 这一处必须有。
+- 幂等：`POST /api/feedback` 前端会带预生成 `id`，用 `INSERT OR REPLACE` 或先查重。
+- 图片上传复用 `knowledge_base.py:243-258` 的 `FileResponse` 风格（无鉴权），存 `DATA_DIR/feedback_imgs/`。
+
+### 41.3 前端
+
+| 件 | 位置 / 参照 |
+|---|---|
+| 浮动入口 `FeedbackFloatEntry` | 照抄 `src/components/UploadTask/UploadTaskPanel.tsx:340` 的 `UploadTaskFloatEntry`；挂到 `src/app.tsx:119`（与 `<UploadTaskFloatEntry />` 并列） |
+| 右上角未读角标 | `app.tsx:61` `actionsRender` 数组里加一项 |
+| 提交弹窗 `FeedbackModal` | 类型 + 描述 + 截图粘贴/拖拽 + 「自动附加上下文」可勾选可预览（**默认勾，但必须能看见具体内容**）。底部隐私灰字占位照需求文档 6.1 |
+| 管理页 `FeedbackAdmin` | 挂在 `/admin/feedback`，参照 `src/pages/Admin.tsx` 现有子页面写法；列表支持 `?mine=1` / `?status=` / `?assignee=` |
+| **详情用右侧抽屉，不要跳新页面** | 产品同事熟悉的形态就是 LTC 那套「列表 + 右侧详情抽屉」（截图 / 指派 / 内部记录 / 评论）。抽屉里额外放一块 `context_json` 的可折叠查看区 |
+| 服务层 | `src/services/` 下新建 `feedback.ts`，照 `services/chatchat/kb.ts` 的请求风格 |
+
+上下文快照字段（`gen_id` / `gen_type` / `target_key` / `asset_ref` / `allowed_refs` / `console_tail` …）照需求文档第二节表格。`console_tail` 上限 50 条、单条 ≤500 字，`context_json` 整体 ≤32KB（超了截断，别静默丢整包）。
+
+### 41.4 邮件通知（**P0 必做**，配置已就位且已实测）
+
+**凭据已写入 `backend/.env`，直接读即可**（`**/.env` 已被 `.gitignore` 忽略，不会入库）。可用键：`SMTP_HOST` / `SMTP_PORT` / `SMTP_SSL` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `FEEDBACK_SITE_BASE`。占位键已同步进 `backend/.env.example`（那里只放假值，别写真值）。
+
+⚠️ **硬约束：密码只存在于 `.env`。禁止写进任何源码、文档、交接、测试用例或提交信息。** 读取用 `os.getenv`，不要打印到日志。
+
+**已实测通过**（2026-10-22 00:30，`ab/smtp_probe.py`，只握手未发信）：
+```
+host=smtp.exmail.qq.com port=465 ssl=True
+CONNECT ok / EHLO 250 / LOGIN OK
+```
+
+实现要求：
+- 465 → `smtplib.SMTP_SSL(host, port, timeout=15)`；若 `.env` 是 587 且 `SMTP_SSL=false` → `SMTP()` + `starttls()`。`timeout` 必须设，避免卡死请求线程。
+- 只在两个事件发：`fixed`（请提交人确认）与 `resolved`（已关闭）。收件人 = 提交人 `users.email`；为空或格式非法 → `notify_status='skipped'`。
+- 异步发（`asyncio.create_task` 或线程），失败写 `notify_status='failed'` 并记录简短原因，**不得阻断状态变更接口**（这是本条最容易写错的地方：别在 `PUT` 里 await 发信）。
+- 纯文本即可，正文含：反馈编号、标题/首 40 字、新状态、处理人回复摘要、`FEEDBACK_SITE_BASE` 拼的直达链接。`From` 显示名「毕方反馈」。
+- 主题行统一前缀 `[毕方反馈]`。
+
+### 41.5 执行序
+
+**41.1 → 41.2 → 41.3 → 41.4（41.4 已是必做，不要再跳过）**。测试：
+- 后端：至少覆盖「user 改状态 403」「admin 改状态 200」「提交人无 email 时 `notify_status='skipped'` 且不报错」「SMTP 异常时状态变更仍返回 200、`notify_status='failed'`」四条；
+- 邮件自测：用 `ab/smtp_probe.py` 先验证连接，再真发一封到 `hezeling@zptxtech.cn` 自收，确认主题前缀与正文链接正确；
+- 前端：jest 至少覆盖「context 快照截断 ≤32KB」「提交幂等（同 id 两次只入库一条）」两条纯函数。
+
+### 41.6 不在本单（勿顺手）
+
+- 用户管理 / 角色管理 / 组织架构界面（已存在，本单只加菜单与授权记录）；
+- `user_logs` 埋点、AI 洞察、反馈聚类（P2）；
+- 段/页级「就地反馈」按钮（P1）；
+- 富文本、@提及、企微通知、Gitee 同步；
+- 邮件模板美化（纯文本即可：反馈编号 + 状态 + 直达链接）。

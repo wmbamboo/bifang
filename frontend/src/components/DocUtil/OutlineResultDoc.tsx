@@ -3,9 +3,9 @@ import {
   Chapter,
   Paragraph,
   Doc,
-  absorbBlocksFromParagraphContent,
   countChapterMedia,
   countParagraphMedia,
+  countResidualFenceMedia,
 } from "@/components/DocUtil/ViewItem4Doc";
 import {CheckCircleTwoTone, CheckSquareTwoTone} from "@ant-design/icons";
 import React from "react";
@@ -84,9 +84,9 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
     </p>
   );
   const contentShow = (paragraph: Paragraph, chapterKey: string) => {
-    // 列表展示自愈：生成后若围栏仍在正文，当场吸收进 blocks（与 setContent 同口径）
-    absorbBlocksFromParagraphContent(paragraph);
+    // 三十九·5：列表只检测/提示，不在 render 里吸收（吸收留在生成收尾）
     const {tables, figures} = countParagraphMedia(paragraph);
+    const residual = countResidualFenceMedia(paragraph.content || "");
     return (
       <div>
         <p>
@@ -94,7 +94,7 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
             生成内容
             <br />
           </Tag>
-          {(tables > 0 || figures > 0) && (
+          {(tables > 0 || figures > 0 || residual.figures > 0 || residual.tables > 0) && (
             <span style={{marginLeft: 8}}>
               {tables > 0 ? (
                 <Tag color="orange" style={{marginInlineEnd: 4}}>
@@ -104,6 +104,11 @@ const OutlineResultDoc: React.FC<OutlineResultProps> = ({
               {figures > 0 ? (
                 <Tag color="magenta" style={{marginInlineEnd: 4}}>
                   含图{figures}
+                </Tag>
+              ) : null}
+              {residual.figures > 0 || residual.tables > 0 ? (
+                <Tag color="default" style={{marginInlineEnd: 4}}>
+                  围栏未解析
                 </Tag>
               ) : null}
             </span>

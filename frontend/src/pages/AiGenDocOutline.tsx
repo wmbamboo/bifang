@@ -4,6 +4,7 @@ import { useTheme } from 'antd-style';
 import { useState } from 'react';
 import * as React from "react";
 import {OpenAI} from "openai";
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 import {outlineTypeAiDOC} from "@/components/DocUtil/OutlineStore";
 import OutlineRec from "@/components/DocUtil/OutlineStore";
@@ -36,7 +37,7 @@ export const AiGenDocOutline: React.FC = () => {
   const buttonMessages_init:ButtonMessage[] = DOC_OUTLINE_WELCOME_SAMPLES;
   const openai = new OpenAI({
     apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-    baseURL: process.env.bf_baseUrl+'/chat',
+    baseURL: getBfBaseUrl()+'/chat',
     dangerouslyAllowBrowser: true,
   });
   function onOutlineRecDelete(id:string) {

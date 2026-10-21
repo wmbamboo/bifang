@@ -25,6 +25,7 @@ import {
   inferImageGridCategory,
   selectImageGridByCaptions,
 } from "@/components/DocUtil/kbImageAssetsCore";
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 const {Text} = Typography;
 
@@ -38,7 +39,7 @@ type Props = {
 };
 
 function thumbUrl(a: KbAssetItem): string {
-  const base = (process.env.bf_baseUrl || "").replace(/\/$/, "");
+  const base = (getBfBaseUrl() || "").replace(/\/$/, "");
   return `${base}${a.url.startsWith("/") ? a.url : `/${a.url}`}`;
 }
 

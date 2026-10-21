@@ -5,6 +5,7 @@ import {
   DocPromptSavePatch,
   formatWordBudgetZh,
   paragraphPointLabels,
+  simpleDocParagraphPrompt,
   wordBudgetFor,
 } from "./ViewItem4Doc";
 import {useState} from "react";
@@ -90,7 +91,7 @@ const OutlinePromptDoc: React.FC <DocOutlinePromptProps>
       if (Array.isArray(chapter.paragraphs)) {
         const paragraphsNew: CollapseProps['items'] = [];
         for (let paragraph of chapter.paragraphs) {
-          // 三十七·2：摘要取字段，勿正则切 prompt
+          // chips：数字口径；simpleDocParagraphPrompt：语义（三十八·5 / 三十九·1）
           const b = wordBudgetFor(paragraph);
           const chips = [
             `约 ${formatWordBudgetZh(b)} 字`,
@@ -110,31 +111,9 @@ const OutlinePromptDoc: React.FC <DocOutlinePromptProps>
                       <Tag key={c}>{c}</Tag>
                     ))}
                   </Space>
-                  <Collapse
-                    ghost
-                    size="small"
-                    defaultActiveKey={
-                      paragraph.promptManual ? ["contract"] : []
-                    }
-                    items={[
-                      {
-                        key: "contract",
-                        label:
-                          "写作契约与完整提示词（系统统一注入，通常无需修改）",
-                        children: (
-                          <div
-                            style={{
-                              whiteSpace: "pre-wrap",
-                              fontSize: 12,
-                              color: "var(--color-text-secondary, #8c8c8c)",
-                            }}
-                          >
-                            {paragraph.prompt}
-                          </div>
-                        ),
-                      },
-                    ]}
-                  />
+                  <div style={{whiteSpace: "pre-wrap", lineHeight: 1.6}}>
+                    {simpleDocParagraphPrompt(paragraph)}
+                  </div>
                 </div>
               ),
               style: panelStyle

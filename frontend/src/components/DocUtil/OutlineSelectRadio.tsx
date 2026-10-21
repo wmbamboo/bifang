@@ -66,19 +66,6 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
     props.outlineSelectFn(e.target.value);
   };
 
-  // 三十七·1：单行省略，勿固定高度 / 勿按字数截断
-  const radioStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    fontSize: '1.1em',
-    lineHeight: 1.6,
-    whiteSpace: 'nowrap',
-    minWidth: 0,
-    width: '100%',
-    marginTop: '0.2em',
-  };
-
   /** 与右侧树/解析器同一条链路：去掉 H1 后按 ## 计章 */
   const outlineBody = (content: string) => {
     const raw = (content || "").trim();
@@ -150,8 +137,31 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
                   />
                 </Space.Compact>
               ) : (
-                <Radio key={item.outlineId} style={radioStyle} value={item.outlineId}>
-                  <Tag color="blue" style={{flex: '0 0 auto', marginInlineEnd: 0}}>{i + 1}</Tag>
+                // 三十九·2 A：Radio 只留圆点，标题/Tag 在外层 flex，否则 antd 包一层 span 导致省略号失效
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    minWidth: 0,
+                    width: '100%',
+                    fontSize: '1.1em',
+                    lineHeight: 1.6,
+                    marginTop: '0.2em',
+                  }}
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('.ant-radio-wrapper')) return;
+                    setValue(item.outlineId!);
+                    props.outlineSelectFn(item.outlineId!);
+                  }}
+                >
+                  <Radio
+                    value={item.outlineId}
+                    style={{flex: '0 0 auto', marginInlineEnd: 0}}
+                  />
+                  <Tag color="blue" style={{flex: '0 0 auto', marginInlineEnd: 0}}>
+                    {i + 1}
+                  </Tag>
                   <Tooltip
                     title={
                       <div>
@@ -173,10 +183,10 @@ const  OutlineSelectRadio:React.FC<OutlineRadioProps> =(props:OutlineRadioProps)
                       {item.outlineName}
                     </span>
                   </Tooltip>
-                  <Tag style={{marginLeft: 4, flex: '0 0 auto', marginInlineEnd: 0}}>
+                  <Tag style={{flex: '0 0 auto', marginInlineEnd: 0}}>
                     {chapterCount(item.outlineContent)} 章
                   </Tag>
-                </Radio>
+                </div>
               )}
             </div>
             {(value===item.outlineId)&&

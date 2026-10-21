@@ -88,11 +88,17 @@ export const errorConfig: RequestConfig = {
   requestInterceptors: [
     (config: RequestOptions) => {
       const token = localStorage.getItem('token');
+      const loginUser = localStorage.getItem('loginUser');
+      config.headers = {
+        ...config.headers,
+      };
       if (token) {
-        config.headers = {
-          ...config.headers,
-          token: `${token}`,
-        };
+        config.headers.token = `${token}`;
+      }
+      // 反馈等接口：token 因后端重启失效时，仍可用 loginUser 识别当前用户
+      if (loginUser) {
+        config.headers.username = loginUser;
+        config.headers.loginUser = loginUser;
       }
       return { ...config, url: config?.url };
     },

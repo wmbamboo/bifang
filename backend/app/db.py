@@ -125,6 +125,48 @@ def init_db() -> None:
                 record_time TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS feedbacks (
+                id TEXT PRIMARY KEY,
+                feedback_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                page TEXT DEFAULT '',
+                status TEXT DEFAULT 'pending',
+                assignee TEXT DEFAULT '',
+                assignee_name TEXT DEFAULT '',
+                resolved_by TEXT DEFAULT '',
+                resolved_at TEXT DEFAULT '',
+                visibility TEXT DEFAULT 'internal',
+                env TEXT DEFAULT '',
+                notify_status TEXT DEFAULT '',
+                notify_at TEXT DEFAULT '',
+                gen_id TEXT DEFAULT '',
+                gen_type TEXT DEFAULT '',
+                outline_id TEXT DEFAULT '',
+                target_key TEXT DEFAULT '',
+                context_json TEXT DEFAULT '',
+                images TEXT DEFAULT '',
+                contact TEXT DEFAULT '',
+                user TEXT DEFAULT '',
+                user_name TEXT DEFAULT '',
+                reply TEXT DEFAULT '',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_fb_status ON feedbacks(status);
+            CREATE INDEX IF NOT EXISTS idx_fb_gen ON feedbacks(gen_id);
+            CREATE INDEX IF NOT EXISTS idx_fb_created ON feedbacks(created_at);
+            CREATE INDEX IF NOT EXISTS idx_fb_assignee ON feedbacks(assignee);
+
+            CREATE TABLE IF NOT EXISTS feedback_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feedback_id TEXT NOT NULL,
+                user TEXT DEFAULT '',
+                user_name TEXT DEFAULT '',
+                content TEXT NOT NULL,
+                created_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_fbc_fb ON feedback_comments(feedback_id);
+
             CREATE TABLE IF NOT EXISTS chat_convs (
                 id TEXT PRIMARY KEY,
                 user TEXT,
@@ -246,6 +288,7 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
             (18, "菜单管理", "menu", "menu", "FolderOpenOutlined", "/admin/menu", 6, 12),
             (19, "角色管理", "role", "role", "ProfileOutlined", "/admin/role", 7, 12),
             (20, "机构管理", "org", "org", "ProfileOutlined", "/admin/org", 8, 12),
+            (21, "反馈管理", "feedbackMgt", "feedbackMgt", "MessageOutlined", "/admin/feedback", 9, 12),
         ]
         for mid, zh, name, access, icon, path, order, pid in menus:
             conn.execute(
@@ -255,6 +298,25 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
                 """,
                 (mid, zh, name, access, icon, path, order, pid, "1" if pid == 0 else "0"),
             )
+
+    # 幂等补丁：已有库不会走 menu_count==0 分支，须补反馈管理菜单与 admin 授权
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO menus
+        (id, zh_name, name, access, icon, path, "order", p_id, module_menu_flag)
+        VALUES (21, '反馈管理', 'feedbackMgt', 'feedbackMgt', 'MessageOutlined', '/admin/feedback', 9, 12, '0')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO role_res (auth_res, res_type, res_status, role_code)
+        SELECT 'feedbackMgt', 'menu', '1', 'admin'
+        WHERE NOT EXISTS (
+            SELECT 1 FROM role_res
+            WHERE auth_res='feedbackMgt' AND res_type='menu' AND role_code='admin'
+        )
+        """
+    )
 
     res_count = conn.execute("SELECT COUNT(*) FROM role_res").fetchone()[0]
     if res_count == 0:

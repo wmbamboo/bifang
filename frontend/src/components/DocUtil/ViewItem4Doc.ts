@@ -404,8 +404,14 @@ export function labelsFromPointGuide(guide: string): string[] {
   let g = String(guide || "").trim();
   if (!g) return [];
   const m = g.match(/【本段要点】([^】\n]*)/);
-  if (m) g = m[1];
-  else g = g.replace(/^【本段要点】/, "");
+  if (m) {
+    g = m[1];
+  } else if (/^【本段要点】/.test(g)) {
+    g = g.replace(/^【本段要点】/, "");
+  } else if (/【输出格式|文章标题是\s*</.test(g)) {
+    // 整串写作契约误传入（无要点标记）→ 拒绝，避免按顿号拆成「要点」
+    return [];
+  }
   g = g.replace(/[。．]\s*$/, "").trim();
   if (!g) return [];
   return g
@@ -417,7 +423,7 @@ export function labelsFromPointGuide(guide: string): string[] {
 /**
  * 简单层「要点」回显源：points 优先；
  * maxLevel≤3 时 normalizeDocDepth 会把 #### 折进 pointGuide 并清空 points，须回读 guide；
- * 再不行从已拼 prompt 里抠【本段要点】。
+ * 再不行仅当 prompt 含【本段要点】标记才抠（勿把整串系统契约按顿号拆成「要点」）。
  */
 export function paragraphPointLabels(p: {
   points?: Array<{ label: string }>;
@@ -428,7 +434,39 @@ export function paragraphPointLabels(p: {
   if (fromPts.length) return fromPts;
   const fromGuide = labelsFromPointGuide(p.pointGuide || "");
   if (fromGuide.length) return fromGuide;
-  return labelsFromPointGuide(p.prompt || "");
+  const prompt = p.prompt || "";
+  // 无标记时 labelsFromPointGuide 会把整段 assemble 串按顿号切开 → 写作大纲「要点」泄漏契约
+  if (!/【本段要点】/.test(prompt)) return [];
+  return labelsFromPointGuide(prompt);
+}
+
+/** 三十八·5 / 三十九·1：写作大纲展示用简单提示词（不含系统契约） */
+export function simpleDocParagraphPrompt(p: Paragraph): string {
+  const zh = formatWordBudgetZh(wordBudgetFor(p));
+  const lines: string[] = [
+    `【${(p.title || "").trim() || "本段"}】约 ${zh} 字`,
+  ];
+  const role = (p.role || "").trim();
+  const question = (p.question || "").trim();
+  if (role) lines.push(`岗位视角：${role}`);
+  if (question) lines.push(`本章要回答的问题：${question}`);
+  const labels = paragraphPointLabels(p);
+  if (labels.length) {
+    lines.push(
+      `本段要点：${labels.map((t, i) => `${i + 1}) ${t}`).join("；")}`,
+    );
+  } else if ((p.pointGuide || "").trim()) {
+    lines.push(`本段要点：${p.pointGuide!.trim()}`);
+  }
+  if (p.promptManual && (p.prompt || "").trim()) {
+    const s = p.prompt.trim().replace(/\s+/g, " ");
+    lines.push(
+      `已手改高级模板：${s.slice(0, 160)}${
+        s.length > 160 ? "…（完整见编辑态高级抽屉）" : ""
+      }`,
+    );
+  }
+  return lines.join("\n");
 }
 
 /** 写作提示用的要点串（与 normalizeDocDepth 的 pointLine 同形） */
@@ -721,7 +759,7 @@ function isTableSepLine(line: string): boolean {
   return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c) || c === "");
 }
 
-/** 段内表/图块计数（blocks + 正文残留围栏取较大值） */
+/** 段内表/图块计数：只认真实 blocks（三十九·4；残留围栏另走 countResidualFenceMedia） */
 export function countParagraphMedia(paragraph: Paragraph): {
   tables: number;
   figures: number;
@@ -732,14 +770,18 @@ export function countParagraphMedia(paragraph: Paragraph): {
     if (b.kind === "table") tables += 1;
     else if (b.kind === "figure") figures += 1;
   }
-  const c = String(paragraph.content || "");
-  if (/```/.test(c)) {
-    const tm = c.match(/```\s*table\b/gi);
-    const fm = c.match(/```\s*figure\b/gi);
-    if (tm) tables = Math.max(tables, tm.length);
-    if (fm) figures = Math.max(figures, fm.length);
-  }
   return {tables, figures};
+}
+
+/** 三十九·4：正文残留 ```table/figure 围栏计数（未吸收） */
+export function countResidualFenceMedia(content: string): {
+  tables: number;
+  figures: number;
+} {
+  const c = String(content || "");
+  const tm = c.match(/```\s*table\b/gi);
+  const fm = c.match(/```\s*figure\b/gi);
+  return {tables: tm ? tm.length : 0, figures: fm ? fm.length : 0};
 }
 
 /** 章内表/图合计 */

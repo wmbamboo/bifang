@@ -3,6 +3,8 @@
  */
 import {readFileSync} from "fs";
 import {join} from "path";
+import {pptOutlineFailAdvice} from "@/components/ChatUtil/pptOutlineFailAdvice";
+import {ALL_KB_NAME} from "@/components/DocUtil/kbCache";
 
 const samplesSrc = () =>
   readFileSync(
@@ -51,5 +53,26 @@ describe("outline welcome samples 知识库/智能对齐", () => {
     expect(doc).toMatch(/openPreviewSignal=\{previewSignal\}/);
     expect(ppt).toMatch(/setPreviewSignal/);
     expect(ppt).toMatch(/openPreviewSignal=\{previewSignal\}/);
+  });
+});
+
+describe("PPT 大纲失败建议分流", () => {
+  it("Connection error + 具体库 → 不催「全部」", () => {
+    const tip = pptOutlineFailAdvice("Connection error.", "服饰");
+    expect(tip).toMatch(/网络|稍后/);
+    expect(tip).not.toMatch(/全部/);
+  });
+
+  it("全库 → 才提示换具体库", () => {
+    expect(pptOutlineFailAdvice("结构不合格", ALL_KB_NAME)).toMatch(/全部/);
+  });
+
+  it("ChatWithSpeech4Ppt 使用 pptOutlineFailAdvice", () => {
+    const src = readFileSync(
+      join(__dirname, "../src/components/ChatUtil/ChatWithSpeech4Ppt.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/pptOutlineFailAdvice\(/);
+    expect(src).not.toMatch(/请换具体知识库（不要用「全部」）后重试，或简化主题。`/);
   });
 });

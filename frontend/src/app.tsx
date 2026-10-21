@@ -8,8 +8,11 @@ import defaultSettings from '../config/defaultSettings';
 import { errorConfig } from './requestErrorConfig';
 import { currentUser as queryCurrentUser } from '@/services/ant-design-pro/api';
 import React from 'react';
+import { Space } from 'antd';
 import { UploadTaskProvider } from '@/components/UploadTask/UploadTaskContext';
 import { UploadTaskPanel, UploadTaskFloatEntry } from '@/components/UploadTask/UploadTaskPanel';
+import FeedbackFloatEntry from '@/components/Feedback/FeedbackFloatEntry';
+import FeedbackBadge from '@/components/Feedback/FeedbackBadge';
 const isDev = process.env.NODE_ENV === 'development';
 const loginPath = '/user/login';
 
@@ -58,7 +61,11 @@ export async function getInitialState(): Promise<{
 // ProLayout 支持的api https://procomponents.ant.design/components/layout
 export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) => {
   return {
-    actionsRender: () => [<Question key="doc" />, <SelectLang key="SelectLang" />],
+    actionsRender: () => [
+      <FeedbackBadge key="feedback" />,
+      <Question key="doc" />,
+      <SelectLang key="SelectLang" />,
+    ],
     avatarProps: {
       src: initialState?.currentUser?.avatar,
       title: <AvatarName />,
@@ -116,7 +123,10 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
           {children}
           <UploadTaskPanel />
           <div style={{ position: 'fixed', right: 24, bottom: 88, zIndex: 1090 }}>
-            <UploadTaskFloatEntry />
+            <Space direction="vertical" size={12}>
+              <FeedbackFloatEntry />
+              <UploadTaskFloatEntry />
+            </Space>
           </div>
           {isDev && (
             <SettingDrawer

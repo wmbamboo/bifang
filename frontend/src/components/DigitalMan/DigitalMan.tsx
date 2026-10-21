@@ -7,6 +7,7 @@ import React, {useEffect, useCallback, useState, useRef, CSSProperties} from 're
 import { DHIframeV2 } from '@bddh/starling-dhiframe';
 import './DigitalMan.css';
 import {Button, Switch} from "antd";
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 const dhIframe = new DHIframeV2('demo');
 
@@ -147,7 +148,7 @@ const DigitalMan = (props:DigitalManProps) => {
         if (data.content.status === 'INIT') {
           dhIframe.load({
             backgroundImageUrl: '',
-            modelUrl: process.env.bf_baseUrl+'/webgl_case1025.zip',   //'自行填写人像包zip地址',
+            modelUrl: getBfBaseUrl()+'/webgl_case1025.zip',   //'自行填写人像包zip地址',
             cameraId: 'h_half_cam'   //'自行填写初始相机位'
           });
         }

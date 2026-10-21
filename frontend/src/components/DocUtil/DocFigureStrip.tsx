@@ -4,7 +4,7 @@
 import React, {useEffect, useMemo, useState} from "react";
 import {Button, Modal, Space, Tag, Typography, Upload, message} from "antd";
 import type {Paragraph} from "@/components/DocUtil/ViewItem4Doc";
-import {countParagraphMedia} from "@/components/DocUtil/ViewItem4Doc";
+import {countResidualFenceMedia} from "@/components/DocUtil/ViewItem4Doc";
 import {
   formatUploadAssetRef,
   isUploadAssetRef,
@@ -113,8 +113,9 @@ const DocFigureStrip: React.FC<DocFigureStripProps> = ({
       .filter(({b}) => b.kind === "figure");
   }, [paragraph.blocks]);
 
-  const {figures: fenceFigures} = countParagraphMedia(paragraph);
-  const unparsed = figures.length === 0 && fenceFigures > 0;
+  // 三十九·4：未解析只看正文残留围栏，勿用含图 Tag 掩盖
+  const residual = countResidualFenceMedia(paragraph.content || "");
+  const unparsed = figures.length === 0 && residual.figures > 0;
 
   // 本地上传预览 URL
   useEffect(() => {

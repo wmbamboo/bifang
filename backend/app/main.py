@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import init_db
-from app.routers import chat, knowledge_base, kb_chat, mock_api
+from app.routers import chat, knowledge_base, kb_chat, mock_api, feedback
 from app.services import kb_service
 from app.services import upload_task_service
 
@@ -54,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(kb_chat.router)
     app.include_router(mock_api.router)
+    app.include_router(feedback.router)
 
     @app.get("/")
     async def root():

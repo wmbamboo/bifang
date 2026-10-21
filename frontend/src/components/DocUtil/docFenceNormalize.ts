@@ -113,7 +113,9 @@ export function contentMayHaveDocBlockFences(raw: string): boolean {
   return (
     /```\s*(?:table|figure|figureref|tablecaption|figurecaption)/i.test(s) ||
     /```\s*(?:ref|kb:|caption)\s*[:：]/i.test(s) ||
-    // 宽松：围栏内出现 kb:文件/图.png（模型偶发漏写 figure 标签）
-    /```[\s\S]{0,80}?\bkb:\S+\/\S+\.(?:png|jpe?g|gif|webp)/i.test(s)
+    // 三十九·3：仅认 ```figure 开栏后的 kb:…png；```json 内嵌路径不命中（防吞代码块）
+    /```[ \t]*(?:figure|figureref)?[ \t]*\r?\n[\s\S]{0,80}?\bkb:\S+\/\S+\.(?:png|jpe?g|gif|webp)/i.test(
+      s,
+    )
   );
 }

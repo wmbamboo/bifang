@@ -11,6 +11,7 @@ import KbListSnlComp from '@/components/KbMgt/KbListCompSnl';
 import {getCachedKbName, setCachedKbName} from '@/components/DocUtil/kbSelectorModal';
 import SpeechToTextButton from '@/components/DocUtil/SpeechToTextButton';
 import styles from './KbAnswer.less';
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 export interface RelatedDoc {
   docNumber: string;
@@ -174,7 +175,7 @@ const KbAnswerPage: React.FC = () => {
     () =>
       new OpenAI({
         apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-        baseURL: `${process.env.bf_baseUrl}/knowledge_base/local_kb/${selectKbName}`,
+        baseURL: `${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}`,
         dangerouslyAllowBrowser: true,
         timeout: 60000,
       }),

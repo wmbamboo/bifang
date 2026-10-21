@@ -2,7 +2,7 @@ import {PageContainer, ProCard} from '@ant-design/pro-components';
 import {useModel} from '@umijs/max';
 import {useTheme} from 'antd-style';
 import {Button, Flex, message, Progress, Spin} from 'antd';
-import React, {useCallback, useState} from "react";
+import React, {useCallback, useEffect, useMemo, useState} from "react";
 import axios from "axios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT} from "@/components/DocUtil/parseChatCompletion";
 import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets} from "@/components/DocUtil/ViewItem4Ppt";
@@ -23,6 +23,7 @@ import {CompassTwoTone, FilePptTwoTone, FolderOpenTwoTone, RocketTwoTone} from "
 import SlideTemplateDrawer from "@/components/DocUtil/SlideTemplateDrawer";
 import {opStackStyle, opBtnStyle} from "@/components/DocUtil/kbSelectorModal";
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 interface Dictionary {
   [key: string]: string;
 }
@@ -154,7 +155,20 @@ const AiOutlineGenPpt: React.FC = () => {
   const [editSlide, setEditSlide] = useState<Slide>(new Slide(-1,""));
   const [slideDrawerOpen, setSlideDrawerOpen] = useState(false);
   const [slideTemplateDrawerOpen, setSlideTemplateDrawerOpen] = useState(false);
+  const [selectedTemplateName, setSelectedTemplateName] = useState<string>('标准模板');
   const [olRecs, setOlRecs] = useState<OutlineRec[]>(outlineRecs);
+
+  const downloadEval = useMemo(
+    () => Ppt.evaluatePptDownloadReady(chapters),
+    [chapters],
+  );
+  useEffect(() => {
+    if (loading) {
+      setDownloadable(false);
+      return;
+    }
+    setDownloadable(downloadEval.ok);
+  }, [downloadEval, loading]);
 
   const onOutlineRecSelect=useCallback( (id:string)=>{
     const [newTitle,_,newKbName,newChapters]=Ppt.get_chapters_from_outlineRecs(olRecs,outlineTypeAiPPT,id,formatPrompt)
@@ -229,10 +243,7 @@ const AiOutlineGenPpt: React.FC = () => {
       for (const ch of chapters) {
         for (const sl of ch.slides || []) {
           if (i === idx) {
-            if (sl.layout === 'columns' || sl.layout === 'metric_columns') {
-              return !(sl.subTitle || '').trim();
-            }
-            return true;
+            return !Ppt.slideAllowsEmptyVItem(sl.layout, sl.subTitle);
           }
           i++;
         }
@@ -453,7 +464,7 @@ const AiOutlineGenPpt: React.FC = () => {
   const genDoc = useCallback(async (genKey:string="") => {
     message.info(`genPPT:ID:${title},${chapters.length}`);
     setLoading(true);
-    const url=process.env.bf_baseUrl+'/chat'+"/chat/completions";
+    const url=getBfBaseUrl()+'/chat'+"/chat/completions";
     // 指定header
     const headers = {
       'Content-Type': 'application/json',
@@ -572,24 +583,16 @@ const AiOutlineGenPpt: React.FC = () => {
           setLoading(false);
           setProgressHidden(true);
           Ppt.reparseAllSlideContents(chapters);
-          const badFormat = Ppt.getSlidesWithBadFormat(chapters);
           setChapters(chapters.slice());
-          if (badFormat.length > 0) {
-            const names = badFormat.slice(0, 3).map((s) => s.title).join('、');
-            message.error(
-              `有 ${badFormat.length} 张幻灯片内容生成了，但格式不正确，需要点击右侧【内容修改】按钮或点击大纲对应项目的【重新生成】（如：${names}${badFormat.length > 3 ? '…' : ''}）。`,
-            );
-            setDownloadable(false);
-          } else if (chapters.some((ch) => ch.slides?.some((s) => !!s.genError))) {
-            setDownloadable(false);
-          } else {
-            setDownloadable(true);
-          }
+          const ev = Ppt.evaluatePptDownloadReady(chapters);
+          setDownloadable(ev.ok);
         }else{
           message.warning("发生了一些错，完成个数："+completeCount+";少于请求幻灯片个数："+promiseArr.length)
           setChapters(chapters.slice());
           setLoading(false);
           setProgressHidden(true);
+          const ev = Ppt.evaluatePptDownloadReady(chapters);
+          setDownloadable(ev.ok);
         }
       });
     }catch(error){
@@ -726,15 +729,18 @@ const AiOutlineGenPpt: React.FC = () => {
       return false;
     }
     message.success('小项已更新，小节状态已刷新。');
-    if (Ppt.getSlidesWithBadFormat(chapters).length === 0) {
-      setDownloadable(true);
-    }
+    const ev = Ppt.evaluatePptDownloadReady(chapters);
+    setDownloadable(ev.ok);
     return true;
   }
   const selectTemplate=(id:number)=>{
     const slideTemplate=slideTemplates.find((t)=>t.id===id);
     if(slideTemplate) {
-      message.info(`已选择模板：${slideTemplate.name}`)
+      setSelectedTemplateName(slideTemplate.name);
+      setSlideTemplateDrawerOpen(false);
+      message.info(
+        `已选「${slideTemplate.name}」。文档下载使用标准灌模模板（皮肤包待接入）。`,
+      );
     }
   }
 
@@ -824,6 +830,11 @@ const AiOutlineGenPpt: React.FC = () => {
             </div>
             <div style={{marginBottom: 16}}>
               <Button type="dashed" block icon={<FilePptTwoTone style={{fontSize:"large"}}/>} disabled={!downloadable}
+                      title={
+                        downloadable
+                          ? `下载 PPT（${selectedTemplateName} / 标准灌模）`
+                          : '须全部幻灯片生成成功且格式正确（问题见右侧各段）'
+                      }
                       onClick={() =>saveDoc()}  style={opBtnStyle}>
                 文档下载
               </Button>

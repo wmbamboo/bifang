@@ -53,6 +53,7 @@ import {
   buildCoverageChecklist,
   checkStructureCoverage,
 } from "@/components/DocUtil/outlineCoverage";
+import {pptOutlineFailAdvice} from "@/components/ChatUtil/pptOutlineFailAdvice";
 
 interface ChatWithSpeechProps{
   openai:OpenAI;
@@ -531,7 +532,7 @@ const Chat=(props:ChatProps)=> {
           logTimingSummary('structure-failed');
           const errText =
             `未能生成合格标题树（${structureErr || '未知错误'}）。` +
-            `请换具体知识库（不要用「全部」）后重试，或简化主题。` +
+            pptOutlineFailAdvice(structureErr, kb_name) +
             (lastRaw ? `\n\n（模型原文摘录）${String(lastRaw).slice(0, 180).replace(/\s+/g, ' ')}` : '');
           return new Response(
             new ReadableStream({
@@ -704,7 +705,8 @@ const Chat=(props:ChatProps)=> {
             const errText =
               `大纲填充失败：章「${ch.title}」版式选型不合格` +
               (layoutErr ? `（${layoutErr}）` : '') +
-              `。请换具体知识库后重试。`;
+              `。` +
+              pptOutlineFailAdvice(layoutErr, kb_name);
             console.warn('ppt-outline-layout-failed', ch.title, layoutErr);
             return new Response(
               new ReadableStream({

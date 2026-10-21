@@ -9,11 +9,12 @@ import DigitalMan from "@/components/DigitalMan/DigitalMan";
 import {useState} from "react";
 import ChatControlBar, {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 //使用毕方后台提供的接口，
 const openai = new OpenAI({
   apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-  baseURL: process.env.bf_baseUrl+'/chat',
+  baseURL: getBfBaseUrl()+'/chat',
   dangerouslyAllowBrowser: true,
 });
 

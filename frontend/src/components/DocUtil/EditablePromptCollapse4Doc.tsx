@@ -27,6 +27,7 @@ import {
   assembleDocParagraphPrompt,
   paragraphHasStructuredPrompt,
   paragraphPointLabels,
+  simpleDocParagraphPrompt,
   wordBudgetFor,
   clampWordBudget,
   formatWordBudgetZh,
@@ -205,7 +206,7 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
       return (
         <>
           <p>
-            <Tag color={"volcano"}>提示词（存量整串）</Tag>
+            <Tag color={"volcano"}>提示词</Tag>
           </p>
           <pre
             style={{
@@ -217,23 +218,11 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
               lineHeight: 1.6,
             }}
           >
-            {paragraph.prompt}
+            {simpleDocParagraphPrompt(paragraph)}
           </pre>
         </>
       );
     }
-    const points = paragraphPointLabels(paragraph);
-    const fieldStyle: React.CSSProperties = {
-      margin: "6px 0 0",
-      lineHeight: 1.6,
-      whiteSpace: "pre-wrap",
-      wordBreak: "break-word",
-    };
-    const labelStyle: React.CSSProperties = {
-      color: "rgba(0,0,0,0.45)",
-      fontSize: 12,
-      marginTop: 10,
-    };
     return (
       <>
         <p style={{ marginBottom: 4 }}>
@@ -250,13 +239,16 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
             <Tag color="orange">已手改高级模板</Tag>
           ) : null}
         </p>
-        <div style={labelStyle}>岗位视角</div>
-        <div style={fieldStyle}>{paragraph.role || "—"}</div>
-        <div style={labelStyle}>本章要回答的问题</div>
-        <div style={fieldStyle}>{paragraph.question || "—"}</div>
-        <div style={labelStyle}>本段要点</div>
-        <div style={fieldStyle}>
-          {points.length ? points.map((t, i) => `${i + 1}. ${t}`).join("\n") : "（无）"}
+        {/* 三十八·5：展示面只用简单提示词；整串契约仅在高级抽屉 */}
+        <div
+          style={{
+            margin: 0,
+            lineHeight: 1.6,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {simpleDocParagraphPrompt(paragraph)}
         </div>
       </>
     );
@@ -271,7 +263,7 @@ const EditablePromptCollapse4Doc: React.FC<EditablePromptCollapse4DocProps> = (
       return (
         <div>
           <p>
-            <Tag color={"volcano"}>提示词（存量整串）</Tag>
+            <Tag color={"volcano"}>提示词</Tag>
             <Space style={{ float: "right", marginRight: 8 }}>
               <Tooltip title="取消编辑">
                 <CloseOutlined

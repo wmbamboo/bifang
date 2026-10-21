@@ -13,6 +13,7 @@ import ChatWithSpeech4Doc from "@/components/ChatUtil/ChatWithSpeech4Doc";
 import {DOC_OUTLINE_WELCOME_SAMPLES} from "@/components/ChatUtil/outlineWelcomeSamples";
 import {message, Tag, Button} from "antd";
 import {ALL_KB_NAME, kbLabel, opKbTagStyle, getCachedKbName, setCachedKbName} from "@/components/DocUtil/kbSelectorModal";
+import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 export const KbGenDocOutline: React.FC = () => {
   const theme = useTheme();
@@ -43,7 +44,7 @@ export const KbGenDocOutline: React.FC = () => {
   const buttonMessages_init:ButtonMessage[] = DOC_OUTLINE_WELCOME_SAMPLES;
   const openai = new OpenAI({
     apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-    baseURL: `${process.env.bf_baseUrl}/knowledge_base/local_kb/${selectKbName}/`,
+    baseURL: `${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}/`,
     dangerouslyAllowBrowser: true,
   });
   function onOutlineRecDelete(id:string) {

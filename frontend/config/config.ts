@@ -160,8 +160,14 @@ export default defineConfig({
     cert: './config/ssl/zelinghe.crt',
   },*/
   define: {
-    'process.env.bf_baseUrl': process.env.bf_baseUrl || 'http://127.0.0.1:7861',
+    /**
+     * API 基址。默认空串 = 走当前页面同源（localhost:8000 或向日葵 HTTPS），
+     * 由 config/proxy.ts 把 /chat、/knowledge_base 转到 7861 —— 内网与穿透共用。
+     * 若要直连后端（无代理），启动前 export bf_baseUrl=http://127.0.0.1:7861
+     */
+    'process.env.bf_baseUrl': process.env.bf_baseUrl ?? '',
   },
 });
+
 
 

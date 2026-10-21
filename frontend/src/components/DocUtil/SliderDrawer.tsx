@@ -1,7 +1,7 @@
 import React, {useEffect} from 'react';
 import { Button, Col, Drawer, Flex, Input, Row, Space, Typography, Alert, Card, message } from 'antd';
 import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
-import { Slide, ViewItem4Ppt, PPT_ITEM_TITLE_MAX, PPT_ITEM_TITLE_MIN, PPT_ITEM_DESC_MAX, PPT_ITEM_DESC_MIN, PPT_METRIC_TITLE_MIN, PPT_METRIC_TITLE_MAX, PPT_METRIC_DESC_MIN, PPT_METRIC_DESC_MAX, validateSlideViewItems, splitMetricListTips, parseColumnBlocks, alignItemsToColumnSlots } from "@/components/DocUtil/ViewItem4Ppt";
+import { Slide, ViewItem4Ppt, PPT_ITEM_TITLE_MAX, PPT_ITEM_TITLE_MIN, PPT_ITEM_DESC_MAX, PPT_ITEM_DESC_MIN, PPT_METRIC_TITLE_MIN, PPT_METRIC_TITLE_MAX, PPT_METRIC_DESC_MIN, PPT_METRIC_DESC_MAX, validateSlideViewItems, splitMetricListTips, parseColumnBlocks, alignItemsToColumnSlots, pptItemLength } from "@/components/DocUtil/ViewItem4Ppt";
 
 const { Title, Text } = Typography;
 
@@ -14,6 +14,12 @@ interface SliderDrawerProps {
   closeFn:()=>void,
   /** 返回 false 表示校验未通过，抽屉不关闭 */
   fn:(items: SlideEditItem[]) => boolean | void
+  /** 单条描述 AI 精简（仅超长时展示）；返回新描述文本 */
+  onShortenItem?: (
+    index: number,
+    item: SlideEditItem,
+    dMax: number,
+  ) => Promise<string | null>;
 }
 
 const MAX_ITEMS = 5;
@@ -24,6 +30,7 @@ const emptyItem = (): SlideEditItem => ({ title: '', content: '' });
 const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
   const [items, setItems] = React.useState<SlideEditItem[]>([emptyItem()]);
   const [rawDraft, setRawDraft] = React.useState('');
+  const [shortening, setShortening] = React.useState<number | null>(null);
   const itemsRef = React.useRef(items);
   itemsRef.current = items;
 
@@ -109,6 +116,27 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
     }
   };
 
+  const handleShorten = async (index: number, dMax: number) => {
+    if (!props.onShortenItem) return;
+    const item = itemsRef.current[index];
+    if (!item) return;
+    setShortening(index);
+    try {
+      const next = await props.onShortenItem(index, item, dMax);
+      if (next == null) {
+        message.warning('精简未返回有效内容');
+        return;
+      }
+      updateItem(index, { content: next });
+      message.success('已精简描述');
+    } catch (e) {
+      console.error(e);
+      message.error('AI 精简失败');
+    } finally {
+      setShortening(null);
+    }
+  };
+
   const layout = props.slide?.layout === 'metric'
     ? 'metric'
     : props.slide?.layout === 'metric_list'
@@ -187,6 +215,10 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
               const tMax = asMetric ? PPT_METRIC_TITLE_MAX : asColumn ? 16 : PPT_ITEM_TITLE_MAX;
               const dMin = asMetric ? PPT_METRIC_DESC_MIN : asColumn ? 0 : PPT_ITEM_DESC_MIN;
               const dMax = asMetric ? PPT_METRIC_DESC_MAX : asColumn ? 28 : PPT_ITEM_DESC_MAX;
+              const tLen = pptItemLength(item.title);
+              const dLen = pptItemLength(item.content);
+              const tOver = tLen > tMax;
+              const dOver = dLen > dMax;
               const cardTitle = asColumn && itemColMeta[index]
                 ? itemColMeta[index].label
                 : `第 ${index + 1} 点${layout === 'metric_list' ? (asMetric ? '（数据卡）' : '（要点）') : ''}`;
@@ -206,24 +238,39 @@ const SlideDrawer: React.FC<SliderDrawerProps>= (props:SliderDrawerProps)=>{
               >
                 <Space direction="vertical" style={{width: '100%'}} size={8}>
                   <div>
-                    <Text type="secondary">{asMetric ? '原数字' : asColumn ? '短条目' : '概括标题'}（{item.title.trim().length}/{tMax}{asColumn ? '' : `，须 ${tMin}～${tMax} 字`}）</Text>
+                    <Text type={tOver ? 'danger' : 'secondary'}>
+                      {asMetric ? '原数字' : asColumn ? '短条目' : '概括标题'}（{tLen}/{tMax}
+                      {asColumn ? '' : `，须 ${tMin}～${tMax} 字`}）
+                    </Text>
                     <Input
                       value={item.title}
-                      maxLength={tMax}
                       placeholder={asColumn ? '4～16 字短词/短句' : `${tMin}～${tMax} 字`}
                       onChange={(e) => updateItem(index, { title: e.target.value })}
                     />
                   </div>
                   {!asColumn || item.content ? (
                   <div>
-                    <Text type="secondary">{asMetric ? '数字解读' : asColumn ? '补充说明（可选）' : '具体描述'}（{item.content.trim().length}/{dMax}{asColumn ? '' : `，须 ${dMin}～${dMax} 字`}）</Text>
+                    <Text type={dOver ? 'danger' : 'secondary'}>
+                      {asMetric ? '数字解读' : asColumn ? '补充说明（可选）' : '具体描述'}（{dLen}/{dMax}
+                      {asColumn ? '' : `，须 ${dMin}～${dMax} 字`}）
+                    </Text>
                     <Input.TextArea
                       value={item.content}
-                      maxLength={dMax}
-                      autoSize={{ minRows: asColumn ? 1 : 2, maxRows: 5 }}
+                      autoSize={{ minRows: asColumn ? 1 : 2, maxRows: 8 }}
                       placeholder={asColumn ? '可留空' : `${dMin}～${dMax} 字`}
                       onChange={(e) => updateItem(index, { content: e.target.value })}
                     />
+                    {dOver && props.onShortenItem && !asColumn && !asMetric ? (
+                      <Button
+                        size="small"
+                        type="link"
+                        loading={shortening === index}
+                        onClick={() => handleShorten(index, dMax)}
+                        style={{ paddingLeft: 0 }}
+                      >
+                        AI 精简至 {dMax} 字
+                      </Button>
+                    ) : null}
                   </div>
                   ) : null}
                 </Space>

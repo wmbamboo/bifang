@@ -4,8 +4,8 @@ import {useTheme} from 'antd-style';
 import {Button, Flex, message, Progress, Spin} from 'antd';
 import React, {useCallback, useEffect, useMemo, useState} from "react";
 import axios from "axios";
-import {parseChatCompletionData, WRITING_SYSTEM_PROMPT} from "@/components/DocUtil/parseChatCompletion";
-import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets} from "@/components/DocUtil/ViewItem4Ppt";
+import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, stripHallucinatedDocCitations} from "@/components/DocUtil/parseChatCompletion";
+import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets, scrubPptItemText} from "@/components/DocUtil/ViewItem4Ppt";
 import OutlineRec, {outlineTypeAiPPT, outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {PptOutlinePrompt} from "@/components/DocUtil/OutlinePromptPpt";
@@ -707,6 +707,43 @@ const AiOutlineGenPpt: React.FC = () => {
     }
   }
 
+  /** 单条描述 AI 精简（不重跑整页） */
+  const shortenSlideItem = async (
+    _index: number,
+    item: { title: string; content: string },
+    dMax: number,
+  ): Promise<string | null> => {
+    const url = getBfBaseUrl() + '/chat' + '/chat/completions';
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    const prompt =
+      `把下面这句压缩到 ≤${dMax} 字，保留全部数字与出处，只删连接词与重复限定，不要新增内容。` +
+      `不要用 [文档N]，不要输出任何来源标注。只输出压缩后的描述正文，不要标题、编号或前言。\n` +
+      `标题：${item.title}\n描述：${item.content}`;
+    const msg = {
+      messages: [
+        { content: WRITING_SYSTEM_PROMPT, role: 'system', name: 'string' },
+        { content: prompt, role: 'user', name: 'string' },
+      ],
+      model: DEFAULT_LLM_MODEL,
+      frequency_penalty: 0,
+      stream: false,
+      temperature: 0.3,
+      top_logprobs: 0,
+      top_p: 0,
+    };
+    const res = await axios.post(url, JSON.stringify(msg), { headers });
+    const parsed = parseChatCompletionData(res.data);
+    if (!parsed.ok) return null;
+    let text = scrubPptItemText(parsed.content || '');
+    const m = text.match(/^\d+[.．、]\s*.+?\s*[-—–]\s*(.+)$/s);
+    if (m) text = scrubPptItemText(m[1]);
+    text = stripHallucinatedDocCitations(text).text.trim();
+    return text || null;
+  };
+
   /**
    * 用于slidedrawer中resultSlide的保存按钮操作的消息传递。
    */
@@ -857,7 +894,7 @@ const AiOutlineGenPpt: React.FC = () => {
                            kbName={kbName}
                            selFn={onOutlineRecSelect} delFn={onOutlineRecDelete}
                            closeFn={drawerClose} cb4ImportOutline={cb4ImportOutline}/>
-      <SlideDrawer key={editSlideKey} slide={editSlide} open={slideDrawerOpen} closeFn={slideDrawerClose} fn={resultSlideEditDrawerSave} />
+      <SlideDrawer key={editSlideKey} slide={editSlide} open={slideDrawerOpen} closeFn={slideDrawerClose} fn={resultSlideEditDrawerSave} onShortenItem={shortenSlideItem} />
       <SlideTemplateDrawer slideTemplates={slideTemplates} open={slideTemplateDrawerOpen} closeFn={slideTemplateDrawerClose} fn={selectTemplate} />
 
     </PageContainer>

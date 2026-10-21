@@ -8,12 +8,20 @@ import {
 import {
   alignItemsToColumnSlots,
   Ppt,
+  Slide,
+  validateSlideViewItems,
+  scrubPptItemText,
+  pptItemLength,
+  PPT_ITEM_DESC_MAX,
+  buildPptItemFormatPrompt,
 } from "@/components/DocUtil/ViewItem4Ppt";
 import {
   assertImageGridSameSource,
 } from "@/components/DocUtil/kbImageAssetsCore";
 import {aspectDeviation, coverSrcRect} from "@/components/DocUtil/imageBufferMeta";
 import {shopMetricMismatchInEvidence} from "@/components/DocUtil/outlineEvidenceValidate";
+import { readFileSync } from "fs";
+import * as path from "path";
 
 describe("五·4 结构断言金标", () => {
   it("列内标签必须与列头同轴（面料列禁图案）", () => {
@@ -133,5 +141,62 @@ describe("五·3 内容闸金标", () => {
     expect(
       shopMetricMismatchInEvidence("罗蒙店铺 5.3万件", ev),
     ).toBeNull();
+  });
+});
+
+describe("四十二 PPT 小项描述长度 / 引用剥离", () => {
+  it("含 [文档13] 的超长描述剥离后 ≤70 ⇒ 校验通过且无 [文档", () => {
+    // 裸长 74，去掉 [文档13]（6 字）后 68 ≤70
+    const withCite = `${"甲".repeat(68)}[文档13]`;
+    expect(withCite.length).toBeGreaterThan(PPT_ITEM_DESC_MAX);
+    const scrubbed = scrubPptItemText(withCite);
+    expect(scrubbed).not.toContain("[文档");
+    expect(pptItemLength(withCite)).toBe(68);
+    expect(pptItemLength(withCite)).toBeLessThanOrEqual(PPT_ITEM_DESC_MAX);
+
+    expect(
+      validateSlideViewItems([{ title: "增速超大盘", content: withCite }], "list"),
+    ).toBeNull();
+    const slide = new Slide(1, "增速超大盘", "");
+    slide.layout = "list";
+    // 结构化写入路径会 scrub；避免正则把超长正文拆坏
+    expect(
+      slide.setViewItemsStructured([{ title: "增速超大盘", content: withCite }]),
+    ).toBe(true);
+    expect(slide.viewItems?.[0]?.content || "").not.toContain("[文档");
+    expect(pptItemLength(slide.viewItems?.[0]?.content || "")).toBeLessThanOrEqual(
+      PPT_ITEM_DESC_MAX,
+    );
+  });
+
+  it("剥离后仍 >70 ⇒ 报错数字是剥离后长度", () => {
+    const long =
+      "这是一段远超七十个汉字的具体描述内容用于验证剥离引用标记之后如果仍然超过上限则报错信息里的当前字数必须等于剥离后的长度而不是带标记的原始长度一二三四五六七八九十";
+    const withCite = `${long}[文档13]`;
+    const scrubbedLen = pptItemLength(withCite);
+    expect(scrubbedLen).toBeGreaterThan(PPT_ITEM_DESC_MAX);
+    expect(withCite.length).toBeGreaterThan(scrubbedLen);
+    const err = validateSlideViewItems(
+      [{ title: "测试标题够长", content: withCite }],
+      "list",
+    );
+    expect(err || "").toContain(`当前 ${scrubbedLen} 字`);
+    expect(err || "").not.toContain(`当前 ${withCite.length} 字`);
+  });
+
+  it("软限：去掉 maxLength 后 108 字不被硬截，超限可 AI 精简", () => {
+    const pasted = "甲".repeat(108);
+    expect(scrubPptItemText(pasted).length).toBe(108);
+    const src = readFileSync(
+      path.join(__dirname, "../src/components/DocUtil/SliderDrawer.tsx"),
+      "utf-8",
+    );
+    expect(src).not.toMatch(/maxLength=\{dMax\}/);
+    expect(src).not.toMatch(/maxLength=\{tMax\}/);
+    expect(src).toContain("AI 精简至");
+  });
+
+  it("format prompt 禁止 [文档N]", () => {
+    expect(buildPptItemFormatPrompt(3, "list")).toContain("不要用 [文档N]");
   });
 });

@@ -1,6 +1,20 @@
 import OutlineRec,{outlineType} from "@/components/DocUtil/OutlineStore";
 import { resolveTableGrid } from "@/components/DocUtil/templateManifest";
 import { splitTitleDescProtectingPriceBands } from "@/components/DocUtil/priceBandAtom";
+import { stripHallucinatedDocCitations } from "@/components/DocUtil/parseChatCompletion";
+
+/** PPT 侧剥离 `[文档N]`（复用文档侧同一套正则，勿复制第二份）。 */
+export function scrubPptItemText(s: string): string {
+  return stripHallucinatedDocCitations(String(s || "")).text.trim();
+}
+
+/** 字数口径：剥离引用后再 trim 计长（与校验/编辑器同源）。 */
+export function pptItemLength(s: string): number {
+  return scrubPptItemText(s).length;
+}
+
+const PPT_NO_DOC_CITE =
+  "不要用 [文档N]，不要输出任何来源标注。\n";
 
 export class PptKeys{
   chapterKey:string;
@@ -1151,6 +1165,7 @@ export function buildPptItemFormatPrompt(
     return (
       '\n\n【输出格式】\n' +
       countLine +
+      PPT_NO_DOC_CITE +
       '必须逐行输出，每行一条；不要用方括号，不要前言后语，不要整页拒绝。\n' +
       `数据卡行（前 ${m || '若干'} 行）：每行只写【一个】原数字（${PPT_METRIC_TITLE_MIN}～${PPT_METRIC_TITLE_MAX}字，须含百分号、亿或万），横线后短口径（${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX}字）。禁止「586亿、42.3%」写在同一行；禁止类目名当数据卡。\n` +
       `列表要点行（后 ${l || '若干'} 行）：一句短判断（4～22字）；横线后可写互补补充（≤22字），不得与标题重复，禁止把同一句从中间砍成「标题+描述」。\n` +
@@ -1170,6 +1185,7 @@ export function buildPptItemFormatPrompt(
       '\n\n【输出格式】\n' +
       '本页是数据卡。\n' +
       countLine +
+      PPT_NO_DOC_CITE +
       '必须逐行输出，每行一条；不要用方括号，不要前言后语，不要整页拒绝。\n' +
       `每行以检索结果中的原数字开头（${PPT_METRIC_TITLE_MIN}～${PPT_METRIC_TITLE_MAX}字，须含百分号、亿或万），横线后只用该数字旁边的名称说明它指什么（${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX}字）。\n` +
       '【当前章节】和【本页标题】里已经出现的话不要再写进解读。解读只留数字旁边的名称，例如「某某的占比」，不要再写标题里已有的年份、品类和「增长趋势」。\n' +
@@ -1187,6 +1203,7 @@ export function buildPptItemFormatPrompt(
       '\n\n【输出格式】\n' +
       '本页是分栏页。栏标题与副标只是分组标签，禁止写成编号行。\n' +
       countLine +
+      PPT_NO_DOC_CITE +
       '每行只写一条短词/短句（宜 4～16 字）；横线后可写极短补充（≤16 字）或留空。\n' +
       '错误示例：把「学生党」「预算敏感追潮流」也编成 1. 2. 行。\n' +
       '错误示例：把检索诊断元话语写成条目（见禁令词表）。\n' +
@@ -1205,6 +1222,7 @@ export function buildPptItemFormatPrompt(
       '\n\n【输出格式】\n' +
       '本页是「上数据卡 + 下分栏」。\n' +
       countLine +
+      PPT_NO_DOC_CITE +
       '数据卡行：原数字 - 短口径（4～16 字）。\n' +
       '分栏行：短词/短句（4～16 字） - 可选极短补充。\n' +
       '1. 原数字 - 这个数字指什么\n'
@@ -1219,6 +1237,7 @@ export function buildPptItemFormatPrompt(
       '\n\n【输出格式】\n' +
       '本页是表格页（最多 8 行 × 5 列）。\n' +
       countLine +
+      PPT_NO_DOC_CITE +
       '每行输出完整管道行（可与大纲列一致），例如：\n' +
       '1. 男士衬衫|¥50-100|129.4万(43.69%)|+15.67%|1.0亿(31.15%)\n' +
       '禁止写成「概括标题 - 具体描述」；禁止把 ¥50-100 / ¥100-200 从中间的连字符拆成两行。\n' +
@@ -1232,6 +1251,7 @@ export function buildPptItemFormatPrompt(
     return (
       '\n\n【输出格式】\n' +
       `本页是图鉴（${gridHint}），必须且只能输出 ${n} 行图注（编号 1 到 ${n}）。\n` +
+      PPT_NO_DOC_CITE +
       '每行一句短图注（4～16 字），对应一格图片说明；禁止长段落。\n' +
       '1. 短图注\n'
     );
@@ -1243,6 +1263,7 @@ export function buildPptItemFormatPrompt(
   return (
     '\n\n【输出格式】\n' +
     countLine +
+    PPT_NO_DOC_CITE +
     '必须逐行输出，每行一条；不要用方括号，不要前言后语。下面只示范一行写法，不要照抄成多条：\n' +
     `1. 概括标题（${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX}字） - 具体描述（${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX}字）\n` +
     '各点描述必须互不雷同：每条描述只服务该行标题（对应一条大纲要点），禁止把同一段品牌背景/案例故事粘到多个小点后面。\n'
@@ -1257,8 +1278,8 @@ export function validateSlideViewItems(
   opts?: { metricCount?: number },
 ): string | null {
   const rows = (items || []).map((it) => ({
-    title: (it.title || '').trim(),
-    content: (it.content || '').trim(),
+    title: scrubPptItemText(it.title || ''),
+    content: scrubPptItemText(it.content || ''),
   })).filter((it) => it.title || it.content);
   if (rows.length === 0) {
     return '请至少填写 1 条完整小项（概括标题 + 具体描述）。';
@@ -1270,8 +1291,8 @@ export function validateSlideViewItems(
     for (let i = 0; i < rows.length; i++) {
       const { title, content } = rows[i];
       if (!title) return `第 ${i + 1} 条需要短条目文字。`;
-      if (title.length > 28) return `第 ${i + 1} 条过长（宜 ≤16 字，当前 ${title.length} 字）。`;
-      if (content && content.length > 28) {
+      if (pptItemLength(title) > 28) return `第 ${i + 1} 条过长（宜 ≤16 字，当前 ${pptItemLength(title)} 字）。`;
+      if (content && pptItemLength(content) > 28) {
         return `第 ${i + 1} 条补充过长（宜省略或 ≤16 字）。`;
       }
       const blob = `${title} ${content}`;
@@ -1294,10 +1315,10 @@ export function validateSlideViewItems(
         if (!metricTitleOk(title)) {
           return `第 ${i + 1} 点须是原数字（含百分号、亿或万）。`;
         }
-        if (content.length < PPT_METRIC_DESC_MIN || content.length > PPT_METRIC_DESC_MAX) {
-          return `第 ${i + 1} 点短口径须为 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字。`;
+        if (pptItemLength(content) < PPT_METRIC_DESC_MIN || pptItemLength(content) > PPT_METRIC_DESC_MAX) {
+          return `第 ${i + 1} 点短口径须为 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字（当前 ${pptItemLength(content)} 字）。`;
         }
-      } else if (title.length > 28) {
+      } else if (pptItemLength(title) > 28) {
         return `第 ${i + 1} 条分栏条目过长。`;
       }
     }
@@ -1324,14 +1345,14 @@ export function validateSlideViewItems(
         if (!metricTitleOk(title)) {
           return `第 ${i + 1} 点须是原数字（含百分号、亿或万），不要写类目名。`;
         }
-        if (content.length < PPT_METRIC_DESC_MIN || content.length > PPT_METRIC_DESC_MAX) {
-          return `第 ${i + 1} 点短口径须为 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字。`;
+        if (pptItemLength(content) < PPT_METRIC_DESC_MIN || pptItemLength(content) > PPT_METRIC_DESC_MAX) {
+          return `第 ${i + 1} 点短口径须为 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字（当前 ${pptItemLength(content)} 字）。`;
         }
       } else {
-        if (title.length < 2 || title.length > 22) {
-          return `第 ${i + 1} 点判断标题宜 2～22 字（当前 ${title.length}）。`;
+        if (pptItemLength(title) < 2 || pptItemLength(title) > 22) {
+          return `第 ${i + 1} 点判断标题宜 2～22 字（当前 ${pptItemLength(title)}）。`;
         }
-        if (content && content.length > 22) {
+        if (content && pptItemLength(content) > 22) {
           return `第 ${i + 1} 点补充宜 ≤22 字，且勿与标题重复。`;
         }
         if (content && (title.includes(content) || content.includes(title))) {
@@ -1347,8 +1368,8 @@ export function validateSlideViewItems(
       if (!title) return `第 ${i + 1} 条需要填写。`;
       // 表格管道行可较长（品类|价带|销量|同比|销售额）
       const maxLen = layout === 'table' ? 120 : 40;
-      if (title.length > maxLen) {
-        return `第 ${i + 1} 条过长（宜 ≤${layout === 'table' ? 80 : 28} 字，当前 ${title.length} 字）。`;
+      if (pptItemLength(title) > maxLen) {
+        return `第 ${i + 1} 条过长（宜 ≤${layout === 'table' ? 80 : 28} 字，当前 ${pptItemLength(title)} 字）。`;
       }
     }
     return null;
@@ -1364,16 +1385,16 @@ export function validateSlideViewItems(
       if (!metricTitleOk(title)) {
         return `第 ${n} 点须是检索中的原数字（${PPT_METRIC_TITLE_MIN}～${PPT_METRIC_TITLE_MAX} 字，含百分号、亿或万，当前「${title}」）。`;
       }
-      if (content.length < PPT_METRIC_DESC_MIN || content.length > PPT_METRIC_DESC_MAX) {
-        return `第 ${n} 点解读须为 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字（当前 ${content.length} 字）。`;
+      if (pptItemLength(content) < PPT_METRIC_DESC_MIN || pptItemLength(content) > PPT_METRIC_DESC_MAX) {
+        return `第 ${n} 点解读须为 ${PPT_METRIC_DESC_MIN}～${PPT_METRIC_DESC_MAX} 字（当前 ${pptItemLength(content)} 字）。`;
       }
       continue;
     }
-    if (title.length < PPT_ITEM_TITLE_MIN || title.length > PPT_ITEM_TITLE_MAX) {
-      return `第 ${n} 点标题须为 ${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX} 字（当前 ${title.length} 字）。`;
+    if (pptItemLength(title) < PPT_ITEM_TITLE_MIN || pptItemLength(title) > PPT_ITEM_TITLE_MAX) {
+      return `第 ${n} 点标题须为 ${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX} 字（当前 ${pptItemLength(title)} 字）。`;
     }
-    if (content.length < PPT_ITEM_DESC_MIN || content.length > PPT_ITEM_DESC_MAX) {
-      return `第 ${n} 点描述须为 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字（当前 ${content.length} 字）。`;
+    if (pptItemLength(content) < PPT_ITEM_DESC_MIN || pptItemLength(content) > PPT_ITEM_DESC_MAX) {
+      return `第 ${n} 点描述须为 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字（当前 ${pptItemLength(content)} 字）。`;
     }
   }
   // list / metric*：禁止多点粘贴同一段正文（P17 高弹加宽卡整段复制）
@@ -1617,8 +1638,8 @@ export class Slide{
   setViewItemsStructured(items: Array<{ title: string; content: string }>) {
     const cleaned = (items || [])
       .map((it) => ({
-        title: (it.title || '').trim(),
-        content: (it.content || '').trim(),
+        title: scrubPptItemText(it.title || ''),
+        content: scrubPptItemText(it.content || ''),
       }))
       .filter((it) => {
         if (this.layout === 'columns' || this.layout === 'metric_columns') return !!it.title;
@@ -1672,6 +1693,18 @@ export class Slide{
     if(!viewItems||viewItems.length===0){
       return false
     }
+    // 校验前剥离 [文档N]，写入也用清洗后文本（42.1）
+    viewItems = viewItems.map(
+      (vi, i) =>
+        new ViewItem4Ppt(
+          i + 1,
+          scrubPptItemText(vi.title),
+          scrubPptItemText(vi.content),
+        ),
+    );
+    this.content = Slide.itemsToContentText(
+      viewItems.map((vi) => ({ title: vi.title, content: vi.content })),
+    );
     const rows = viewItems.map((vi) => ({
       title: vi.title,
       content: vi.content,

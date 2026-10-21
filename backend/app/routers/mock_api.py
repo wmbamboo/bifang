@@ -6,6 +6,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Query, Request
 
 from app.db import get_conn, ok, fail, rows_to_list, _now, new_id
+from app.security.passwords import hash_password, needs_rehash, verify_password
 
 router = APIRouter(prefix="/mock_api", tags=["mock_api"])
 
@@ -33,7 +34,26 @@ async def login_account(request: Request):
     password = body.get("password") or ""
     login_type = body.get("type") or "account"
     user = _user_by_username(username)
-    if user and user.get("password") == password:
+    stored = (user or {}).get("password") or ""
+    if user and verify_password(password, stored):
+        if not int(user.get("user_status") or 0):
+            return ok(
+                {
+                    "status": "error",
+                    "type": login_type,
+                    "currentAuthority": "guest",
+                    "token": "",
+                },
+                msg="账号已停用",
+                code=200,
+            )
+        # 明文或旧算法：登录成功后升级为 bcrypt
+        if needs_rehash(stored):
+            with get_conn() as conn:
+                conn.execute(
+                    "UPDATE users SET password=? WHERE userid=?",
+                    (hash_password(password), user["userid"]),
+                )
         token = secrets.token_hex(16)
         _TOKENS[token] = username
         return ok(
@@ -90,6 +110,7 @@ async def users():
 async def user_add(request: Request):
     body = await request.json()
     userid = body.get("userid") or new_id()[:8]
+    plain = body.get("password") or "bifang.intronlink"
     with get_conn() as conn:
         conn.execute(
             """
@@ -99,7 +120,7 @@ async def user_add(request: Request):
             (
                 userid,
                 body.get("username"),
-                body.get("password") or "bifang.intronlink",
+                hash_password(plain),
                 body.get("name") or body.get("username"),
                 body.get("access") or "user",
                 body.get("email") or "",
@@ -146,7 +167,7 @@ async def user_update(request: Request):
         if body.get("password"):
             conn.execute(
                 "UPDATE users SET password=? WHERE username=?",
-                (body.get("password"), body.get("username")),
+                (hash_password(body.get("password")), body.get("username")),
             )
     return ok(msg="更新成功")
 
@@ -173,9 +194,12 @@ async def change_password(request: Request):
             row = conn.execute("SELECT * FROM users WHERE username=?", (user_id,)).fetchone()
         if not row:
             return fail("用户不存在", 404)
-        if row["password"] != old_pwd:
+        if not verify_password(old_pwd or "", row["password"] or ""):
             return fail("原密码错误", 400)
-        conn.execute("UPDATE users SET password=? WHERE userid=?", (new_pwd, row["userid"]))
+        conn.execute(
+            "UPDATE users SET password=? WHERE userid=?",
+            (hash_password(new_pwd or ""), row["userid"]),
+        )
     return ok(msg="密码修改成功")
 
 

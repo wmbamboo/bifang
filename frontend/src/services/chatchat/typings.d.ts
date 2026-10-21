@@ -92,6 +92,7 @@ declare namespace API {
     address?:string,
     signature?:string,
     avatar?:string,
+    user_status?: boolean,
   }
 
   type LoginUser = {

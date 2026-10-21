@@ -1,91 +1,103 @@
-import {useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import { Button, message} from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import {addUser, deleteUser, getUserList,  updateUser} from '@/services/chatchat/kb';
 import UserForm from "@/pages/User/components/UserForm";
 import {ActionType, PageContainer, ProFormInstance, ProTable} from "@ant-design/pro-components";
+
 const UserList: React.FC = () => {
   const actionRef = useRef<ActionType>();
   const formRef = useRef<ProFormInstance>();
   const [users, setUsers] = useState<API.UserType[]>([]);
+  const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);
   const [currentUser, setCurrentUser] = useState<API.UserType | undefined>();
   const userRoleList = [{ label: '管理员', value: 'admin' },{ label: '用户', value: 'user' },];
   const beInUsers=new Set(['admin','user']);
 
-   const fetchUsers = async () => {
-    let userList = localStorage.getItem('userList');
-    // console.log(userList)
-    if(userList === null || userList.length === 0){
-     try {
-       const resData = await getUserList();
-       console.log("fetchUsers:",resData)
-       setUsers(resData.data);
-       localStorage.setItem('userList',JSON.stringify(resData.data));
-     }catch (error) {
-       console.error("获取用户列表失败，错误信息如下：")
-       console.error(error)
-     }
-    }else{
-       setUsers(JSON.parse(userList));
-   }
-  };
-  useEffect(() => {
-    fetchUsers();
+  /** 始终从数据库接口拉列表，不用 localStorage.userList */
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      // 顺手清掉历史脏缓存，避免别处误读
+      localStorage.removeItem('userList');
+      const resData = await getUserList();
+      const list = Array.isArray(resData?.data) ? resData.data : [];
+      setUsers(list);
+    } catch (error) {
+      console.error('获取用户列表失败', error);
+      message.error('获取用户列表失败');
+      setUsers([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
- const handleAddUser = () => {
-   console.log("handleAddUser")
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
+  const handleAddUser = () => {
     setVisible(true);
-    // setCurrentUser({userid: undefined,username:'',name: '',  signature: '',avatar: '', unit:'', dept: '', email: '', phone: '', address: '', password:'',access:''});
-   setCurrentUser({userid: undefined,username:'',name: '',  signature: '',avatar: '', dept: '', email: '', password:'',access:''});
+    setCurrentUser({
+      userid: undefined,
+      username: '',
+      name: '',
+      signature: '',
+      avatar: '',
+      dept: '',
+      email: '',
+      password: '',
+      access: '',
+      user_status: true,
+    } as API.UserType);
   };
- const handleEditUser = (user) => {
+  const handleEditUser = (user: API.UserType) => {
     setVisible(true);
-    setCurrentUser(user);
+    setCurrentUser({ ...user, password: '', user_status: user.user_status !== false });
   };
-  const handleDeleteUser = (user) => {
+  const handleDeleteUser = async (user: API.UserType) => {
      const beInUserFlag=beInUsers.has(user.username)
-     if(!beInUserFlag){
-       //删除用户
-      deleteUser(user.userid);
-      message.success('删除用户成功');
-      let userList=JSON.parse(localStorage.getItem('userList'));
-      let userListNew = userList.filter(item => item.userid !== user.userid);
-      localStorage.setItem('userList',JSON.stringify(userListNew));
-      fetchUsers();
-     }else{
+     if(beInUserFlag){
       message.warning('内置预设账号，不可删除！');
+      return;
+     }
+     try {
+       await deleteUser(user.userid as string);
+       message.success('删除用户成功');
+       await fetchUsers();
+     } catch (e) {
+       console.error(e);
+       message.error('删除用户失败');
      }
   };
-  const handleSubmit = async (user) => {
-    console.log("handleSubmit:{}",currentUser)
-    // if (typeof currentUser === 'undefined') {
-    if (currentUser?.userid === undefined){
-       // 生成一个随机的用户字符串，例如 "User_12345"
-      const randomId = Math.floor(Math.random() * 90000) + 10000; // 生成一个 5 位数的随机数
-      user['userid']='user_'+randomId;
-      await addUser(user);
-      message.success('用户添加成功');
-      let userList=JSON.parse(localStorage.getItem('userList'));
-      userList.push(user)
-      localStorage.setItem('userList',JSON.stringify(userList));
-    } else {
-      user['userid']=currentUser.userid
-      await updateUser(user);
-      message.success('用户信息修改成功');
-      let userList=JSON.parse(localStorage.getItem('userList'));
-      let updateUserIndex = userList.findIndex(function(item) {
-       return item.userid ===currentUser.userid ;
-      });
-      console.log("updateUserIndex",updateUserIndex)
-      userList[updateUserIndex]=user
-      localStorage.setItem('userList',JSON.stringify(userList));
+  const handleSubmit = async (user: API.UserType) => {
+    try {
+      const payload: API.UserType = {
+        ...user,
+        user_status: user.user_status !== false,
+      };
+      if (!payload.password) {
+        delete (payload as { password?: string }).password;
+      }
+      if (currentUser?.userid === undefined){
+        const randomId = Math.floor(Math.random() * 90000) + 10000;
+        payload.userid = 'user_' + randomId;
+        await addUser(payload);
+        message.success('用户添加成功');
+      } else {
+        payload.userid = currentUser.userid;
+        await updateUser(payload);
+        message.success('用户信息修改成功');
+      }
+      setVisible(false);
+      await fetchUsers();
+    } catch (e) {
+      console.error(e);
+      message.error('保存用户失败');
     }
-    setVisible(false);
-    fetchUsers();
   };
-  // ... 省略其他代码 ...
+
   const columns = [
     {
       title: '用户ID',
@@ -117,18 +129,6 @@ const UserList: React.FC = () => {
       title: '邮箱',
       dataIndex: 'email',
     },
-   // {
-   //    title: '单位',
-   //    dataIndex: 'unit',
-   //  },
-   //  {
-   //    title: '电话',
-   //    dataIndex: 'phone',
-   //  },
-   //  {
-   //    title: '地址',
-   //    dataIndex: 'address',
-   // },
     {
       title: '密码',
       dataIndex: 'password',
@@ -137,13 +137,19 @@ const UserList: React.FC = () => {
     {
       title: '角色',
       dataIndex: 'access',
-      render: (text) => {
+      render: (text: string) => {
         return userRoleList.find(item=>item.value===text)?.label;
       }
     },
     {
+      title: '状态',
+      dataIndex: 'user_status',
+      render: (v: boolean | number | undefined) =>
+        v === false || v === 0 ? '停用' : '启用',
+    },
+    {
       title: '操作',
-      render: (_, record) => [
+      render: (_: unknown, record: API.UserType) => [
           <a key="edit" onClick={() => handleEditUser(record)}> 编辑</a>,
           <a key="delete" onClick={() => handleDeleteUser(record)}> 删除</a>
       ],
@@ -159,6 +165,7 @@ const UserList: React.FC = () => {
         columns={columns}
         rowKey="userid"
         search={false}
+        loading={loading}
         toolBarRender={() => [
           <Button
             type="primary"
@@ -169,6 +176,11 @@ const UserList: React.FC = () => {
           </Button>,
         ]}
         dataSource={users}
+        options={{
+          reload: () => {
+            fetchUsers();
+          },
+        }}
       />
       <UserForm
         visible={visible}

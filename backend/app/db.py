@@ -221,9 +221,13 @@ def init_db() -> None:
             """
         )
         _seed_defaults(conn)
+        _seed_rbac_and_samples(conn)
+        _migrate_plaintext_passwords(conn)
 
 
 def _seed_defaults(conn: sqlite3.Connection) -> None:
+    from app.security.passwords import hash_password
+
     user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if user_count == 0:
         default_users = [
@@ -241,11 +245,11 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
                 (
                     userid,
                     username,
-                    password,
+                    hash_password(password),
                     name,
                     access,
                     "英创互联",
-                    "英创互联－AI技术部",
+                    "AI技术部",
                     "antdesign@alipay.com",
                     "010-15021502",
                     "财智大厦A-1502",
@@ -254,6 +258,26 @@ def _seed_defaults(conn: sqlite3.Connection) -> None:
                 ),
             )
 
+
+def _migrate_plaintext_passwords(conn: sqlite3.Connection) -> None:
+    """把仍是明文的 password 升级为 bcrypt（启动时幂等）。"""
+    from app.security.passwords import hash_password, is_hashed
+
+    rows = conn.execute("SELECT userid, password FROM users").fetchall()
+    for row in rows:
+        pwd = row["password"] or ""
+        if is_hashed(pwd):
+            continue
+        if not pwd:
+            continue
+        conn.execute(
+            "UPDATE users SET password=? WHERE userid=?",
+            (hash_password(pwd), row["userid"]),
+        )
+
+
+def _seed_rbac_and_samples(conn: sqlite3.Connection) -> None:
+    """原 _seed_defaults 后半：角色/菜单/机构/示例库（保持幂等）。"""
     role_count = conn.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
     if role_count == 0:
         conn.execute(
@@ -406,7 +430,7 @@ def ok(data: Any = None, msg: str = "success", code: int = 200) -> dict:
 
 
 def fail(msg: str = "error", code: int = 500, data: Any = None) -> dict:
-    return {"code": code, "msg": msg, "data": data, "success": False}
+    return {"code": code, "msg": msg, "errorMessage": msg, "data": data, "success": False}
 
 
 def new_id() -> str:

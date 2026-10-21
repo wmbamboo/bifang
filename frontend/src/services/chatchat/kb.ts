@@ -396,9 +396,10 @@ export async function deleteUser(data: string) {
 }
 
 export async function changePassword(userId: string, oldPwd: string, newPwd: string) {
-  return request<{ success: boolean }>('/mock_api/user/password', {
+  return request<{ success: boolean; msg?: string }>('/mock_api/user/password', {
     method: 'PUT',
     data: { userId, oldPwd, newPwd },
+    skipErrorHandler: true,
   });
 }
 

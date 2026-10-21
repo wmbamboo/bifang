@@ -1,4 +1,4 @@
-import { Form, Input, Modal, Select } from 'antd';
+import { Form, Input, Modal, Select, Switch } from 'antd';
 import {LockOutlined, UserOutlined} from "@ant-design/icons";
 import React, {useEffect} from "react";
 interface UserFormProps {
@@ -16,18 +16,21 @@ const UserForm: React.FC<UserFormProps> = ({
   initialValues,
 }) => {
   const [form] = Form.useForm();
+  const isEdit = initialValues?.userid !== undefined;
 
   useEffect(() => {
-     //每次重置表单
      form.resetFields();
-     // 在新数据变化时更新表单
-     form.setFieldsValue(initialValues);
+     form.setFieldsValue({
+       ...initialValues,
+       password: '',
+       user_status: initialValues?.user_status !== false,
+     });
   }, [initialValues, form]);
 
   return (
     <Modal
       visible={visible}
-      title={initialValues ? '编辑用户' : '新增用户'}
+      title={isEdit ? '编辑用户' : '新增用户'}
       onCancel={onCancel}
       onOk={() => form.submit()}
     >
@@ -40,10 +43,19 @@ const UserForm: React.FC<UserFormProps> = ({
           <Input  placeholder={"请输入姓名"}/>
         </Form.Item>
         <Form.Item name="username" label="用户名" rules={[{ required: true }]}>
-          <Input disabled={initialValues?.userid!==undefined} placeholder={"请输入登录用户名"} />
+          <Input disabled={isEdit} placeholder={"请输入登录用户名"} />
         </Form.Item>
-        <Form.Item name="password" label="密码" rules={[{ required: true }]}>
-          <Input.Password  iconRender={visible => (visible ? <LockOutlined /> : <UserOutlined />)} placeholder={"请输入登录密码"} />
+        <Form.Item
+          name="password"
+          label="密码"
+          rules={isEdit ? [] : [{ required: true, message: '请输入登录密码' }]}
+          extra={isEdit ? '留空则不修改密码' : undefined}
+        >
+          <Input.Password
+            iconRender={visible => (visible ? <LockOutlined /> : <UserOutlined />)}
+            placeholder={isEdit ? '留空则不修改' : '请输入登录密码'}
+            autoComplete="new-password"
+          />
         </Form.Item>
         <Form.Item name="signature" label="签名" rules={[{ required: false }]}>
           <Input placeholder={"请输入用户签名"} />
@@ -57,17 +69,15 @@ const UserForm: React.FC<UserFormProps> = ({
          <Form.Item name="email" label="邮箱" rules={[{ required: false }]}>
           <Input placeholder={"请输入用户邮箱"} />
         </Form.Item>
-        {/* <Form.Item name="unit" label="单位" rules={[{ required: false }]}>*/}
-        {/*  <Input placeholder={"请输入用户单位"}  />*/}
-        {/*</Form.Item>*/}
-        {/*<Form.Item name="phone" label="电话" rules={[{ required: false }]}>*/}
-        {/*  <Input placeholder={"请输入用户电话"} />*/}
-        {/*</Form.Item>*/}
-        {/*<Form.Item name="address" label="地址" rules={[{ required: false }]}>*/}
-        {/*  <Input placeholder={"请输入用户地址"} />*/}
-        {/*</Form.Item>*/}
         <Form.Item name="access" label="角色" rules={[{ required: true }]}>
           <Select options={userRoles} placeholder={"请选择用户角色"} />
+        </Form.Item>
+        <Form.Item
+          name="user_status"
+          label="状态"
+          valuePropName="checked"
+        >
+          <Switch checkedChildren="启用" unCheckedChildren="停用" />
         </Form.Item>
       </Form>
     </Modal>

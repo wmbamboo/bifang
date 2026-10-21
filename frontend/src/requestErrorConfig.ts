@@ -95,9 +95,8 @@ export const errorConfig: RequestConfig = {
       if (token) {
         config.headers.token = `${token}`;
       }
-      // 反馈等接口：token 因后端重启失效时，仍可用 loginUser 识别当前用户
+      // 仅附带 loginUser 供前端展示；鉴权只认 token（后端已去掉弱鉴权回退）
       if (loginUser) {
-        config.headers.username = loginUser;
         config.headers.loginUser = loginUser;
       }
       return { ...config, url: config?.url };

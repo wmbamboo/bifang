@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-import secrets
+import time
+from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
 
 from app.db import get_conn, ok, fail, rows_to_list, _now, new_id
+from app.security import auth as auth_mod
 from app.security.passwords import hash_password, needs_rehash, verify_password
+from app.services import audit
 
 router = APIRouter(prefix="/mock_api", tags=["mock_api"])
 
-# 简易 token 存储
-_TOKENS: dict[str, str] = {}
+# 兼容旧引用：指向 auth 模块会话表
+_TOKENS = auth_mod._TOKENS
 
 
 def _user_by_username(username: str) -> Optional[dict]:
@@ -23,6 +26,9 @@ def _user_by_username(username: str) -> Optional[dict]:
 def _public_user(u: dict) -> dict:
     data = dict(u)
     data.pop("password", None)
+    data.pop("_token", None)
+    data.pop("_session_id", None)
+    data.pop("_login_at", None)
     data["user_status"] = bool(data.get("user_status", 1))
     return data
 
@@ -33,10 +39,19 @@ async def login_account(request: Request):
     username = body.get("username") or ""
     password = body.get("password") or ""
     login_type = body.get("type") or "account"
+    ip, ua = auth_mod.client_meta(request)
     user = _user_by_username(username)
     stored = (user or {}).get("password") or ""
     if user and verify_password(password, stored):
         if not int(user.get("user_status") or 0):
+            audit.write_login_log(
+                username=username,
+                name=user.get("name") or "",
+                client_ip=ip,
+                user_agent=ua,
+                event="login_fail",
+                reason="账号已停用",
+            )
             return ok(
                 {
                     "status": "error",
@@ -54,8 +69,16 @@ async def login_account(request: Request):
                     "UPDATE users SET password=? WHERE userid=?",
                     (hash_password(password), user["userid"]),
                 )
-        token = secrets.token_hex(16)
-        _TOKENS[token] = username
+        token = auth_mod.issue_token(username)
+        audit.write_login_log(
+            username=username,
+            name=user.get("name") or "",
+            client_ip=ip,
+            user_agent=ua,
+            event="login_ok",
+            session_id=auth_mod.session_id_of(token),
+            login_at=_now(),
+        )
         return ok(
             {
                 "status": "ok",
@@ -65,6 +88,14 @@ async def login_account(request: Request):
             },
             msg="登录成功",
         )
+    audit.write_login_log(
+        username=username or "",
+        name=(user or {}).get("name") or "",
+        client_ip=ip,
+        user_agent=ua,
+        event="login_fail",
+        reason="密码错误" if user else "用户不存在",
+    )
     return ok(
         {"status": "error", "type": login_type, "currentAuthority": "guest", "token": ""},
         msg="用户名或密码错误",
@@ -73,18 +104,34 @@ async def login_account(request: Request):
 
 
 @router.post("/login/outLogin")
-async def out_login():
+async def out_login(request: Request):
+    token = auth_mod.extract_token(request)
+    sess = auth_mod.revoke_token(token) if token else None
+    if sess:
+        login_at = float(sess.get("login_at") or 0)
+        now = time.time()
+        audit.write_login_log(
+            username=str(sess.get("username") or ""),
+            event="logout",
+            session_id=auth_mod.session_id_of(token),
+            login_at=datetime.fromtimestamp(login_at).isoformat(timespec="seconds")
+            if login_at
+            else None,
+            logout_at=_now(),
+            duration_s=max(0, int(now - login_at)) if login_at else 0,
+            client_ip=auth_mod.client_meta(request)[0],
+            user_agent=auth_mod.client_meta(request)[1],
+        )
     return ok({}, msg="已退出")
 
 
 @router.get("/CurrentUser")
 @router.get("/currentUser")
-async def current_user(username: str = Query("")):
+async def current_user_api(request: Request):
     from fastapi.responses import JSONResponse
 
-    user = _user_by_username(username or "")
+    user = auth_mod.current_user(request, on_timeout=audit.on_token_timeout)
     if not user:
-        # 与 Ant Design Pro 约定一致：success=true，避免前端拦截器弹「请求失败」
         return JSONResponse(
             status_code=401,
             content={
@@ -93,7 +140,7 @@ async def current_user(username: str = Query("")):
                 "data": {"isLogin": False},
                 "success": True,
                 "errorCode": "401",
-                "errorMessage": "请先登录！",
+                "errorMessage": "登录已过期或未登录，请重新登录！",
             },
         )
     return ok(_public_user(user))
@@ -204,19 +251,122 @@ async def change_password(request: Request):
 
 
 @router.get("/user/logs")
-async def user_logs(user: str = Query(""), query: str = Query("")):
-    sql = "SELECT * FROM user_logs WHERE 1=1"
+async def user_logs(
+    request: Request,
+    user: str = Query(""),
+    action: str = Query(""),
+    event: str = Query(""),
+    result: str = Query(""),
+    query: str = Query(""),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    start: str = Query(""),
+    end: str = Query(""),
+):
+    actor = auth_mod.require_user(request, on_timeout=audit.on_token_timeout)
+    if (actor.get("access") or "") != "admin":
+        return fail("无权限", 403)
+    clauses: list[str] = ["1=1"]
     params: list[Any] = []
     if user:
-        sql += " AND user=?"
+        clauses.append("user=?")
         params.append(user)
+    if action:
+        clauses.append("action=?")
+        params.append(action)
+    if event:
+        clauses.append("event=?")
+        params.append(event)
+    if result:
+        clauses.append("result=?")
+        params.append(result)
     if query:
-        sql += " AND (url LIKE ? OR fcn LIKE ? OR menu LIKE ?)"
-        params.extend([f"%{query}%"] * 3)
-    sql += " ORDER BY id DESC LIMIT 200"
+        clauses.append("(url LIKE ? OR fcn LIKE ? OR menu LIKE ? OR target LIKE ?)")
+        params.extend([f"%{query}%"] * 4)
+    if start:
+        clauses.append("record_time>=?")
+        params.append(start)
+    if end:
+        clauses.append("record_time<=?")
+        params.append(end)
+    where = " AND ".join(clauses)
+    offset = (page - 1) * size
     with get_conn() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return ok(rows_to_list(rows))
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM user_logs WHERE {where}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT * FROM user_logs WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            [*params, size, offset],
+        ).fetchall()
+    return ok({"list": rows_to_list(list(rows)), "total": int(total), "page": page, "size": size})
+
+
+@router.get("/login/logs")
+async def login_logs(
+    request: Request,
+    user: str = Query(""),
+    event: str = Query(""),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    start: str = Query(""),
+    end: str = Query(""),
+):
+    actor = auth_mod.require_user(request, on_timeout=audit.on_token_timeout)
+    if (actor.get("access") or "") != "admin":
+        return fail("无权限", 403)
+    clauses: list[str] = ["1=1"]
+    params: list[Any] = []
+    if user:
+        clauses.append("username=?")
+        params.append(user)
+    if event:
+        clauses.append("event=?")
+        params.append(event)
+    if start:
+        clauses.append("COALESCE(login_at, logout_at, '')>=?")
+        params.append(start)
+    if end:
+        clauses.append("COALESCE(login_at, logout_at, '')<=?")
+        params.append(end)
+    where = " AND ".join(clauses)
+    offset = (page - 1) * size
+    with get_conn() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM login_logs WHERE {where}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT * FROM login_logs WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            [*params, size, offset],
+        ).fetchall()
+    return ok({"list": rows_to_list(list(rows)), "total": int(total), "page": page, "size": size})
+
+
+@router.post("/user-log")
+async def post_user_log(request: Request):
+    """前端上报 page_view / gen_* / export_* 等白名单动作。"""
+    actor = auth_mod.require_user(request, on_timeout=audit.on_token_timeout)
+    body = await request.json()
+    action = str(body.get("action") or "").strip()
+    if action not in audit.FRONTEND_ACTIONS:
+        return fail("action 不在白名单", 400)
+    ip, _ua = auth_mod.client_meta(request)
+    audit.write_user_log(
+        user=actor.get("username") or "",
+        name=actor.get("name") or "",
+        client_ip=ip,
+        url=str(body.get("url") or "")[:500],
+        module=str(body.get("module") or ""),
+        menu=str(body.get("menu") or ""),
+        event=str(body.get("event") or ("view" if action == "page_view" else "action")),
+        action=action,
+        target=str(body.get("target") or "")[:200],
+        result=str(body.get("result") or "ok")[:32],
+        detail=str(body.get("detail") or "")[:500],
+        session_id=actor.get("_session_id") or "",
+        duration_ms=int(body.get("duration_ms") or 0),
+    )
+    return ok(msg="logged")
 
 
 # ---- 菜单 ----

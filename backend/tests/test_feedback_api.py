@@ -109,10 +109,11 @@ def test_admin_can_change_status(client: TestClient):
 
 
 def test_no_email_skipped_notify(client: TestClient, monkeypatch):
-    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
-    monkeypatch.setenv("SMTP_USER", "u@example.com")
-    monkeypatch.setenv("SMTP_PASS", "x")
-    monkeypatch.setenv("SMTP_SSL", "true")
+    from app.config import get_settings
+    from app.services import feedback_mail
+
+    monkeypatch.setattr(feedback_mail, "smtp_configured", lambda: True)
+    get_settings.cache_clear()
     tok = _login(client, "alice", "alice")  # alice email empty
     fid = uuid.uuid4().hex
     client.post(
@@ -128,15 +129,17 @@ def test_no_email_skipped_notify(client: TestClient, monkeypatch):
     )
     assert r.status_code == 200
     assert r.json()["code"] == 200
-    assert r.json()["data"]["notify_status"] == "skipped"
+    assert r.json()["data"]["notify_status"] == "no_email"
 
 
 def test_smtp_fail_still_200(client: TestClient, monkeypatch):
-    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
-    monkeypatch.setenv("SMTP_PORT", "1")
-    monkeypatch.setenv("SMTP_USER", "u@example.com")
-    monkeypatch.setenv("SMTP_PASS", "x")
-    monkeypatch.setenv("SMTP_SSL", "true")
+    from app.services import feedback_mail
+
+    def _boom(*_a, **_k):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(feedback_mail, "smtp_configured", lambda: True)
+    monkeypatch.setattr(feedback_mail, "_send_sync", _boom)
     tok = _login(client, "bob", "bob")
     fid = uuid.uuid4().hex
     client.post(
@@ -153,4 +156,9 @@ def test_smtp_fail_still_200(client: TestClient, monkeypatch):
     assert r.status_code == 200
     assert r.json()["code"] == 200
     # pending 或 failed（异步可能已跑完）
-    assert r.json()["data"]["notify_status"] in {"pending", "failed", "skipped", "sent"}
+    assert r.json()["data"]["notify_status"] in {"pending", "failed", "skipped", "sent", "no_email"}
+    import time
+
+    time.sleep(0.3)
+    r2 = client.get(f"/api/feedback/{fid}", headers={"token": admin})
+    assert r2.json()["data"]["notify_status"] in {"pending", "failed"}

@@ -13,12 +13,15 @@ import {
   message,
   Image,
   Collapse,
+  Tooltip,
 } from 'antd';
 import { useLocation, useModel } from '@umijs/max';
 import {
   addFeedbackComment,
   getFeedback,
   listFeedback,
+  notifyStatusLabel,
+  resendFeedbackNotify,
   updateFeedback,
   type FeedbackItem,
   type FeedbackStatus,
@@ -187,6 +190,16 @@ const FeedbackAdmin: React.FC = () => {
       render: (_: any, r: FeedbackItem) => r.assignee_name || r.assignee || '—',
     },
     {
+      title: '通知',
+      dataIndex: 'notify_status',
+      width: 160,
+      render: (v: string) => {
+        const n = notifyStatusLabel(v);
+        const tag = <Tag color={n.color}>{n.text}</Tag>;
+        return n.tip ? <Tooltip title={n.tip}>{tag}</Tooltip> : tag;
+      },
+    },
+    {
       title: '时间',
       dataIndex: 'created_at',
       width: 170,
@@ -258,9 +271,15 @@ const FeedbackAdmin: React.FC = () => {
             <div>
               <Tag>{detail.feedback_type}</Tag>
               <Tag color="blue">{detail.status}</Tag>
-              {detail.notify_status ? (
-                <Tag>通知:{detail.notify_status}</Tag>
-              ) : null}
+              {(() => {
+                const n = notifyStatusLabel(detail.notify_status);
+                const tag = <Tag color={n.color}>通知:{n.text}</Tag>;
+                return n.tip ? (
+                  <Tooltip title={n.tip}>{tag}</Tooltip>
+                ) : (
+                  tag
+                );
+              })()}
             </div>
             <Paragraph>{detail.content}</Paragraph>
             <Text type="secondary">
@@ -335,6 +354,27 @@ const FeedbackAdmin: React.FC = () => {
                 </Space>
               </>
             )}
+
+            {(isOwner || isAdmin) &&
+              ['fixed', 'resolved'].includes(detail.status) &&
+              ['no_email', 'failed', 'skipped'].includes(
+                detail.notify_status || '',
+              ) && (
+                <Button
+                  onClick={async () => {
+                    const res = await resendFeedbackNotify(detail.id);
+                    if (res?.success !== false) {
+                      message.success(res?.msg || '已触发重发');
+                      openDetail(detail.id);
+                      load();
+                    } else {
+                      message.error(res?.msg || '重发失败');
+                    }
+                  }}
+                >
+                  重发通知
+                </Button>
+              )}
 
             {(isOwner || isAdmin) && detail.status === 'fixed' && (
               <Space direction="vertical" style={{ width: '100%' }}>

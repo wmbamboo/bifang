@@ -102,6 +102,39 @@ export async function fetchUnreadFeedbackCount() {
   });
 }
 
+export async function resendFeedbackNotify(id: string) {
+  return request<ApiResp<{ notify_status?: string }>>(
+    `/api/feedback/${id}/resend-notify`,
+    { method: 'POST' },
+  );
+}
+
+/** 通知状态展示文案 */
+export function notifyStatusLabel(status?: string): {
+  text: string;
+  color?: string;
+  tip?: string;
+} {
+  switch (status) {
+    case 'sent':
+      return { text: '已发送', color: 'green' };
+    case 'pending':
+      return { text: '发送中', color: 'blue' };
+    case 'no_email':
+      return {
+        text: '未发送·提交人未填邮箱',
+        color: 'orange',
+        tip: '在个人中心补充邮箱后可重发',
+      };
+    case 'failed':
+      return { text: '发送失败', color: 'red', tip: '可尝试重发' };
+    case 'skipped':
+      return { text: '未发送·已跳过', color: 'default' };
+    default:
+      return { text: status || '—', color: 'default' };
+  }
+}
+
 const QUEUE_KEY = 'bf_feedback_offline_queue';
 
 export function loadFeedbackOfflineQueue(): any[] {

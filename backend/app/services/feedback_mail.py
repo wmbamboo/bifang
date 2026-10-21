@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import smtplib
 import threading
@@ -11,13 +10,16 @@ from email.mime.text import MIMEText
 from email.utils import formataddr
 from typing import Optional
 
+from app.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def smtp_configured() -> bool:
-    return bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASS"))
+    s = get_settings()
+    return bool(s.smtp_host and s.smtp_user and s.smtp_pass)
 
 
 def valid_email(addr: str) -> bool:
@@ -25,12 +27,13 @@ def valid_email(addr: str) -> bool:
 
 
 def _send_sync(to_addr: str, subject: str, body: str) -> None:
-    host = os.getenv("SMTP_HOST", "").strip()
-    port = int(os.getenv("SMTP_PORT") or "465")
-    use_ssl = str(os.getenv("SMTP_SSL", "true")).lower() in {"1", "true", "yes"}
-    user = os.getenv("SMTP_USER", "").strip()
-    password = os.getenv("SMTP_PASS", "")
-    from_addr = (os.getenv("SMTP_FROM") or user).strip()
+    s = get_settings()
+    host = (s.smtp_host or "").strip()
+    port = int(s.smtp_port or 465)
+    use_ssl = bool(s.smtp_ssl)
+    user = (s.smtp_user or "").strip()
+    password = s.smtp_pass or ""
+    from_addr = (s.smtp_from or user).strip()
 
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
@@ -54,7 +57,8 @@ def build_mail(
     new_status: str,
     reply_summary: str,
 ) -> tuple[str, str]:
-    base = (os.getenv("FEEDBACK_SITE_BASE") or "http://localhost:8000").rstrip("/")
+    s = get_settings()
+    base = (s.feedback_site_base or "http://localhost:8000").rstrip("/")
     link = f"{base}/admin/feedback?id={feedback_id}"
     status_label = {
         "fixed": "待你确认是否已修复",
@@ -67,6 +71,7 @@ def build_mail(
         f"新状态：{new_status}（{status_label}）\n"
         f"处理人回复：{(reply_summary or '')[:200] or '（无）'}\n"
         f"直达链接：{link}\n"
+        f"（若为 localhost 链接，需在内网访问）\n"
     )
     return subject, body
 
@@ -88,7 +93,7 @@ def schedule_notify(
         on_done("skipped", "未配置 SMTP")
         return
     if not valid_email(to_email):
-        on_done("skipped", "提交人无有效邮箱")
+        on_done("no_email", "提交人未填邮箱")
         return
 
     subject, body = build_mail(feedback_id, title, new_status, reply_summary)

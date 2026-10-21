@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     ocr_whole_format: str = "jpeg"
     ocr_whole_jpeg_quality: int = 85
 
+    # 反馈邮件（.env：SMTP_* / FEEDBACK_SITE_BASE）
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_ssl: bool = True
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_from: str = ""
+    feedback_site_base: str = "http://localhost:8000"
+
     @property
     def data_path(self) -> Path:
         return Path(self.data_dir).resolve()

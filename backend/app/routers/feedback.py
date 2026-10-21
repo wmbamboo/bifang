@@ -10,10 +10,12 @@ from typing import Any, Optional
 from fastapi import APIRouter, File, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
+from fastapi import HTTPException
+
 from app.config import get_settings
 from app.db import _now, fail, get_conn, ok, rows_to_list
-from app.routers import mock_api
-from app.services import feedback_mail
+from app.security import auth as auth_mod
+from app.services import audit, feedback_mail
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -28,42 +30,17 @@ def _imgs_dir() -> Path:
     return d
 
 
-def _actor(request: Request) -> tuple[str, str, str]:
-    """返回 (username, name, access)。未登录 → ('', '', 'guest')。
-
-    鉴权顺序：
-    1) header token → 内存 _TOKENS（登录签发）
-    2) 回退 header username / loginUser（与 CurrentUser?username= 同级弱鉴权；
-       后端重启后 token 会丢，但 localStorage 里仍有 loginUser，否则管理页列表恒空）
-    """
-    token = (
-        request.headers.get("token")
-        or request.headers.get("Token")
-        or ""
-    ).strip()
-    username = ""
-    if token:
-        username = mock_api._TOKENS.get(token) or ""
-    if not username:
-        username = (
-            request.headers.get("username")
-            or request.headers.get("loginUser")
-            or request.headers.get("LoginUser")
-            or ""
-        ).strip()
-    if not username:
+def _actor(request: Request, *, required: bool = False) -> tuple[str, str, str]:
+    """返回 (username, name, access)。仅认 token，无 username/loginUser 回退。"""
+    user = auth_mod.current_user(request, on_timeout=audit.on_token_timeout)
+    if not user:
+        if required:
+            raise HTTPException(status_code=401, detail="登录已过期或未登录")
         return "", "", "guest"
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT username, name, access, email FROM users WHERE username=?",
-            (username,),
-        ).fetchone()
-    if not row:
-        return username, "", "user"
     return (
-        row["username"] or "",
-        row["name"] or row["username"] or "",
-        row["access"] or "user",
+        user.get("username") or "",
+        user.get("name") or user.get("username") or "",
+        user.get("access") or "user",
     )
 
 
@@ -122,7 +99,7 @@ async def create_feedback(request: Request):
     if not content:
         return fail("content 必填", 400)
 
-    username, user_name, _access = _actor(request)
+    username, user_name, _access = _actor(request, required=True)
     # 允许未登录；body 可覆盖展示名
     user = str(body.get("user") or username or "")
     user_name = str(body.get("user_name") or user_name or user or "")
@@ -195,19 +172,14 @@ async def list_feedback(
     status: str = Query(""),
     assignee: str = Query(""),
 ):
-    username, _name, access = _actor(request)
+    username, _name, access = _actor(request, required=True)
     clauses: list[str] = []
     params: list[Any] = []
 
     if access != "admin":
-        # 非 admin / 未登录：只能看自己的；未登录勿匹配 user=''（会误扫到匿名脏数据）
-        if not username:
-            return ok([])
         clauses.append("user=?")
         params.append(username)
     elif mine:
-        if not username:
-            return ok([])
         clauses.append("user=?")
         params.append(username)
 
@@ -234,7 +206,7 @@ async def unread_count(request: Request):
     """提交人侧：fixed 待确认；被指派且 pending/resolving。"""
     username, _n, access = _actor(request)
     if not username:
-        return ok({"count": 0})
+        return ok({"count": 0})  # 角标未登录显示 0，不强制 401
     with get_conn() as conn:
         n1 = conn.execute(
             "SELECT COUNT(*) FROM feedbacks WHERE user=? AND status='fixed'",
@@ -281,7 +253,7 @@ async def get_image(file_name: str):
 
 @router.get("/{fb_id}")
 async def get_feedback(fb_id: str, request: Request):
-    username, _n, access = _actor(request)
+    username, _n, access = _actor(request, required=True)
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM feedbacks WHERE id=?", (fb_id,)
@@ -301,7 +273,7 @@ async def get_feedback(fb_id: str, request: Request):
 
 @router.post("/{fb_id}/comments")
 async def add_comment(fb_id: str, request: Request):
-    username, user_name, access = _actor(request)
+    username, user_name, access = _actor(request, required=True)
     body = await request.json()
     content = str(body.get("content") or "").strip()
     if not content:
@@ -335,7 +307,7 @@ async def add_comment(fb_id: str, request: Request):
 
 @router.put("/{fb_id}")
 async def update_feedback(fb_id: str, request: Request):
-    username, user_name, access = _actor(request)
+    username, user_name, access = _actor(request, required=True)
     body = await request.json()
     with get_conn() as conn:
         row = conn.execute(
@@ -446,9 +418,9 @@ async def update_feedback(fb_id: str, request: Request):
             with get_conn() as c3:
                 c3.execute(
                     "UPDATE feedbacks SET notify_status=?, notify_at=? WHERE id=?",
-                    ("skipped", _now(), fb_id),
+                    ("no_email", _now(), fb_id),
                 )
-                updated["notify_status"] = "skipped"
+                updated["notify_status"] = "no_email"
         else:
             with get_conn() as c3:
                 c3.execute(
@@ -458,3 +430,50 @@ async def update_feedback(fb_id: str, request: Request):
                 updated["notify_status"] = "skipped"
 
     return ok(_row_public(updated), msg="已更新")
+
+
+@router.post("/{fb_id}/resend-notify")
+async def resend_notify(fb_id: str, request: Request):
+    """补邮箱后重发 fixed/resolved 通知（admin 或提交人）。"""
+    username, _n, access = _actor(request, required=True)
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM feedbacks WHERE id=?", (fb_id,)).fetchone()
+        if not row:
+            return fail("不存在", 404)
+        fb = dict(row)
+        if access != "admin" and fb.get("user") != username:
+            return fail("无权限", 403)
+        status = fb.get("status") or ""
+        if status not in {"fixed", "resolved"}:
+            return fail("仅 fixed/resolved 可重发", 400)
+        to_email = _user_email(fb.get("user") or "")
+        if not feedback_mail.smtp_configured():
+            return fail("未配置 SMTP", 400)
+        if not feedback_mail.valid_email(to_email):
+            conn.execute(
+                "UPDATE feedbacks SET notify_status=?, notify_at=? WHERE id=?",
+                ("no_email", _now(), fb_id),
+            )
+            return fail("提交人未填邮箱", 400)
+
+    def _on_done(notify_status: str, err: Optional[str]):
+        with get_conn() as c2:
+            c2.execute(
+                "UPDATE feedbacks SET notify_status=?, notify_at=? WHERE id=?",
+                (notify_status, _now(), fb_id),
+            )
+
+    feedback_mail.schedule_notify(
+        feedback_id=fb_id,
+        to_email=to_email,
+        title=(fb.get("content") or "")[:40],
+        new_status=status,
+        reply_summary=str(fb.get("reply") or ""),
+        on_done=_on_done,
+    )
+    with get_conn() as c3:
+        c3.execute(
+            "UPDATE feedbacks SET notify_status=? WHERE id=?",
+            ("pending", fb_id),
+        )
+    return ok({"notify_status": "pending"}, msg="已触发重发")

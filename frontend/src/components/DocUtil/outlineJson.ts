@@ -66,7 +66,8 @@ export type OutlineFilledJson = {
   }>;
 };
 
-const LAYOUTS = [
+/** PPT 版式枚举（写作大纲编辑 Select 与 coerce 共用） */
+export const LAYOUTS = [
   "list",
   "progress",
   "metric",

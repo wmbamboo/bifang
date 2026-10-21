@@ -5,7 +5,7 @@ import {Button, Empty, Flex, message, Progress, Spin, Tag} from 'antd';
 import React, {useCallback, useEffect, useMemo, useState} from "react";
 import axios from "axios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
-import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets} from "@/components/DocUtil/ViewItem4Ppt";
+import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets, applyPptPromptSavePatch, PptPromptSavePatch} from "@/components/DocUtil/ViewItem4Ppt";
 import {
   autoShortenOverlongItems,
   metricCountFromSubTitle,
@@ -772,12 +772,12 @@ const KbOutlineGenPpt: React.FC = () => {
     genDoc(key)
     // message.info("独立生成:"+key)
   }
-  const cbSavePromptResult =(key:string,newPrompt :string)=>{
+  const cbSavePromptResult =(key:string, patch: PptPromptSavePatch | string)=>{
     console.log(`outlineGenPpt.tsx#cb4Save,prompt:${key}`);
     const slide =Ppt.getSlide(chapters,key);
     if(slide){
-      Ppt.setPrompt(chapters,key,newPrompt)
-      setChapters(chapters)
+      applyPptPromptSavePatch(slide, patch);
+      setChapters(chapters.slice())
     }else{
       message.warning(`保存出错，要保存提示词的幻灯片key为${key}。`)
     }

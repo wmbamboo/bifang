@@ -14,6 +14,12 @@ import {
   pptItemLength,
   PPT_ITEM_DESC_MAX,
   buildPptItemFormatPrompt,
+  simplePptSlidePrompt,
+  slideHasStructuredPrompt,
+  applyPptPromptSavePatch,
+  countOutlineTips,
+  countPromptOutlineTipLines,
+  pptLayoutLabelZh,
 } from "@/components/DocUtil/ViewItem4Ppt";
 import {
   coerceLayoutBySlideTitle,
@@ -285,5 +291,83 @@ describe("四十六 PPT 超长治理 / table 双源", () => {
     const prompt = buildPptItemFormatPrompt(5, "list");
     expect(prompt).toContain("简称");
     expect(prompt).toContain("3 个以上数字");
+  });
+});
+
+describe("四十七 PPT 写作大纲简单层", () => {
+  it("simplePptSlidePrompt 含标题/版式/编号要点，不含契约词", () => {
+    const slide = new Slide(1, "宝能系统持股路径", "list: 华润信托持股\nmetric: 12.3%");
+    slide.layout = "list";
+    slide.prompt =
+      "【本页标题】\n宝能系统持股路径\n【大纲要点】\n（请优先采信）\n1) [要点] 华润信托持股\n【写作任务】\n禁止编造";
+    const simple = simplePptSlidePrompt(slide);
+    expect(simple).toContain("宝能系统持股路径");
+    expect(simple).toContain(pptLayoutLabelZh("list"));
+    expect(simple).toMatch(/1\)/);
+    expect(simple).toContain("华润信托持股");
+    expect(simple).not.toContain("请优先采信");
+    expect(simple).not.toContain("禁止");
+    expect(simple).not.toContain("【输出格式】");
+    expect(simple).not.toContain("【本页标题】");
+  });
+
+  it("subTitle 为空 ⇒ 退化文案，不抛错、不回退整串 prompt", () => {
+    const slide = new Slide(2, "空要点页", "");
+    slide.layout = "metric";
+    slide.prompt = "【本页标题】\n空要点页\n【写作任务】请优先采信材料禁止编造【输出格式】";
+    const simple = simplePptSlidePrompt(slide);
+    expect(simple).toContain("未解析到要点");
+    expect(simple).toContain("完整提示词见编辑态");
+    expect(simple).not.toContain("请优先采信");
+    expect(simple).not.toContain("【输出格式】");
+    expect(simple).not.toBe(slide.prompt);
+  });
+
+  it("一致性：改要点后 subTitle 条数与 prompt 要点段行数相等", () => {
+    const slide = new Slide(3, "要点同步页", "list: 原要点甲\nlist: 原要点乙");
+    slide.layout = "list";
+    slide.prompt = [
+      "【本页标题】",
+      "要点同步页",
+      "",
+      "【大纲要点】",
+      "（请优先采信其中的事实与数据，据此展开，勿编造冲突数字）",
+      "1) [要点] 原要点甲",
+      "2) [要点] 原要点乙",
+      "",
+      "【写作任务】",
+      "写列表",
+    ].join("\n");
+    applyPptPromptSavePatch(slide, {
+      subTitle: "list: 新要点一\nlist: 新要点二\nlist: 新要点三",
+      prompt: slide.prompt,
+    });
+    expect(countOutlineTips(slide.subTitle)).toBe(3);
+    expect(countPromptOutlineTipLines(slide.prompt)).toBe(3);
+    expect(countOutlineTips(slide.subTitle)).toBe(
+      countPromptOutlineTipLines(slide.prompt),
+    );
+  });
+
+  it("slideHasStructuredPrompt 为 false 时编辑态走整串 TextArea 分支", () => {
+    const slide = new Slide(4, "存量整串页", "");
+    slide.prompt = "【本页标题】\n存量整串页\n【写作任务】随便写";
+    expect(slideHasStructuredPrompt(slide)).toBe(false);
+    // 无 jsdom：静态断言编辑态双分支 + 整串保存路径不抛
+    const src = readFileSync(
+      path.join(
+        __dirname,
+        "../src/components/DocUtil/EditablePromptCollapse4Ppt.tsx",
+      ),
+      "utf-8",
+    );
+    expect(src).toContain("slideHasStructuredPrompt");
+    expect(src).toMatch(/const useDual = slideHasStructuredPrompt/);
+    expect(src).toContain("提示词·简单层");
+    expect(() => {
+      applyPptPromptSavePatch(slide, "仅整串编辑后的新 prompt");
+    }).not.toThrow();
+    expect(slide.prompt).toBe("仅整串编辑后的新 prompt");
+    expect(slide.subTitle).toBe("");
   });
 });

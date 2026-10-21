@@ -1071,6 +1071,149 @@ export function countOutlineTips(subTitle: string): number {
     .length;
 }
 
+/** 版式中文名（与 outlineSerialize.layoutLabel 同口径，避免循环依赖） */
+export function pptLayoutLabelZh(layout: SlideLayout | string | undefined): string {
+  if (layout === 'metric') return '数据卡';
+  if (layout === 'metric_list') return '数据卡+要点';
+  if (layout === 'columns') return '分栏';
+  if (layout === 'metric_columns') return '数据卡+分栏';
+  if (layout === 'table') return '表格';
+  if (layout === 'image_grid') return '图鉴';
+  if (layout === 'progress') return '进度';
+  return '列表';
+}
+
+/** 写作大纲 chips：条数上限提示（四十七·3） */
+export function pptTipCapacityHint(layout: SlideLayout | string | undefined): string {
+  if (layout === 'metric') return '上限 2～9';
+  if (layout === 'metric_list') return '上限 8';
+  if (layout === 'columns' || layout === 'metric_columns') return '上限 20';
+  if (layout === 'table') return '上限 ≤5';
+  if (layout === 'image_grid') return '上限 2～9';
+  if (layout === 'progress') return '上限 ≤5';
+  return '上限 ≤5';
+}
+
+/** 是否已有结构化要点（有则编辑态双层；否则整串 TextArea） */
+export function slideHasStructuredPrompt(slide: {
+  subTitle?: string;
+}): boolean {
+  return parseSlideTips(slide?.subTitle || '').length > 0;
+}
+
+/**
+ * 四十七·2：写作大纲展示用简单提示词（不含系统契约）。
+ * 无 role/question 字段；要点真源 = subTitle。
+ */
+export function simplePptSlidePrompt(slide: {
+  title?: string;
+  layout?: SlideLayout | string;
+  subTitle?: string;
+  prompt?: string;
+}): string {
+  const title = (slide?.title || '').trim() || '本页';
+  const lay = pptLayoutLabelZh(slide?.layout);
+  const tips = parseSlideTips(slide?.subTitle || '');
+  if (!tips.length) {
+    return `【${title}】版式：${lay}\n（本页未解析到要点，完整提示词见编辑态）`;
+  }
+  const tipLine = tips
+    .map(
+      (t, i) =>
+        `${i + 1}) [${t.role === 'metric' ? '数据卡' : '要点'}] ${t.text}`,
+    )
+    .join('；');
+  return `【${title}】版式：${lay}\n本页要点：${tipLine}`;
+}
+
+/** 组装写入 prompt 的【大纲要点】段（与 setAllPrompt_ppt 同形） */
+export function formatOutlineTipsPromptBlock(tips: OutlineTip[]): string {
+  const list = (tips || []).filter((t) => (t.text || '').trim());
+  if (!list.length) return '';
+  return [
+    '【大纲要点】',
+    '（请优先采信其中的事实与数据，据此展开，勿编造冲突数字）',
+    ...list.map(
+      (t, i) =>
+        `${i + 1}) [${t.role === 'metric' ? '数据卡' : '要点'}] ${t.text.trim()}`,
+    ),
+    '',
+  ].join('\n');
+}
+
+/**
+ * 四十七·6：把要点同步进 prompt 的【大纲要点】/【页面其他功能块】段；
+ * 找不到标记则在【写作任务】前追加，再不行追加到末尾。
+ */
+export function syncOutlineTipsIntoPrompt(
+  prompt: string,
+  tips: OutlineTip[],
+): string {
+  const block = formatOutlineTipsPromptBlock(tips);
+  const src = String(prompt || '');
+  const outlineRe =
+    /【大纲要点(?:·[^】]*)?】[\s\S]*?(?=\n【(?!大纲要点)[^】]+】|$)/;
+  if (outlineRe.test(src)) {
+    if (!block) return src.replace(outlineRe, '').replace(/\n{3,}/g, '\n\n');
+    return src.replace(outlineRe, block.trimEnd() + '\n');
+  }
+  const legacyRe =
+    /【页面其他功能块】[\s\S]*?(?=\n【(?!页面其他功能块)[^】]+】|$)/;
+  if (legacyRe.test(src)) {
+    if (!block) return src.replace(legacyRe, '').replace(/\n{3,}/g, '\n\n');
+    return src.replace(legacyRe, block.trimEnd() + '\n');
+  }
+  if (!block) return src;
+  if (/【写作任务】/.test(src)) {
+    return src.replace(/【写作任务】/, `${block}\n【写作任务】`);
+  }
+  return `${src.trimEnd()}\n\n${block}`.replace(/\n{3,}/g, '\n\n');
+}
+
+/** 统计 prompt 里【大纲要点】编号行数（与 countOutlineTips 对齐用） */
+export function countPromptOutlineTipLines(prompt: string): number {
+  const m = String(prompt || '').match(
+    /【大纲要点(?:·[^】]*)?】([\s\S]*?)(?=\n【(?!大纲要点)[^】]+】|$)/,
+  );
+  if (!m) return 0;
+  return (m[1].match(/^\s*\d+\)\s*\[(?:数据卡|要点)\]/gm) || []).length;
+}
+
+/** 四十七·5：提示词保存补丁 */
+export type PptPromptSavePatch = {
+  subTitle?: string;
+  layout?: SlideLayout;
+  prompt?: string;
+};
+
+export function applyPptPromptSavePatch(
+  slide: Slide,
+  patch: PptPromptSavePatch | string,
+): void {
+  if (typeof patch === 'string') {
+    slide.setPrompt(patch);
+    return;
+  }
+  if (patch.layout !== undefined) {
+    slide.layout = patch.layout;
+  }
+  let tips: OutlineTip[] | undefined;
+  if (patch.subTitle !== undefined) {
+    slide.subTitle = patch.subTitle;
+    tips = parseSlideTips(patch.subTitle);
+  }
+  if (patch.prompt !== undefined) {
+    let next = patch.prompt;
+    // 简单层改了要点时，必须同步 prompt 内要点段（47.6）
+    if (tips !== undefined) {
+      next = syncOutlineTipsIntoPrompt(next, tips);
+    }
+    slide.setPrompt(next);
+  } else if (tips !== undefined) {
+    slide.setPrompt(syncOutlineTipsIntoPrompt(slide.prompt || '', tips));
+  }
+}
+
 /**
  * 把生成小项对齐到分栏槽位：丢掉「栏标题/副标」伪条目，按大纲条目匹配。
  * 槽位无匹配 → 留空（禁止抢 pool[0]，否则面料栏会吞图案首项、像「复制填充」）。

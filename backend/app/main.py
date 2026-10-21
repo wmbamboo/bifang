@@ -10,6 +10,7 @@ from app.db import init_db
 from app.routers import chat, knowledge_base, kb_chat, mock_api, feedback
 from app.services import kb_service
 from app.services import upload_task_service
+from app.services.audit import AuditMiddleware
 
 
 @asynccontextmanager
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(AuditMiddleware)
 
     app.include_router(knowledge_base.router)
     app.include_router(chat.router)

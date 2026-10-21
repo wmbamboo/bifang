@@ -13,8 +13,33 @@ import { UploadTaskProvider } from '@/components/UploadTask/UploadTaskContext';
 import { UploadTaskPanel, UploadTaskFloatEntry } from '@/components/UploadTask/UploadTaskPanel';
 import FeedbackFloatEntry from '@/components/Feedback/FeedbackFloatEntry';
 import FeedbackBadge from '@/components/Feedback/FeedbackBadge';
+import { reportUserLog } from '@/services/audit';
 const isDev = process.env.NODE_ENV === 'development';
 const loginPath = '/user/login';
+
+/** 路由停留：上一页 path + 进入时刻 */
+let _pvPath = '';
+let _pvAt = 0;
+
+function trackPageView(pathname: string) {
+  if (!localStorage.getItem('token') || pathname === loginPath) {
+    _pvPath = pathname;
+    _pvAt = performance.now();
+    return;
+  }
+  const now = performance.now();
+  if (_pvPath && _pvAt) {
+    const duration_ms = Math.max(0, Math.round(now - _pvAt));
+    void reportUserLog({
+      action: 'page_view',
+      url: _pvPath,
+      duration_ms,
+      event: 'view',
+    }).catch(() => undefined);
+  }
+  _pvPath = pathname;
+  _pvAt = now;
+}
 
 /**
  * @see  https://umijs.org/zh-CN/plugins/plugin-initial-state
@@ -82,7 +107,9 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
       // 如果没有登录，重定向到 login
       if (!initialState?.currentUser && location.pathname !== loginPath) {
         history.push(loginPath);
+        return;
       }
+      trackPageView(location.pathname);
     },
     bgLayoutImgList: [
       {

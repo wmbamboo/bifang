@@ -122,7 +122,28 @@ def init_db() -> None:
                 fcn TEXT DEFAULT '',
                 client_ip TEXT DEFAULT '',
                 request_id TEXT DEFAULT '',
-                record_time TEXT
+                record_time TEXT,
+                event TEXT DEFAULT '',
+                action TEXT DEFAULT '',
+                target TEXT DEFAULT '',
+                result TEXT DEFAULT 'ok',
+                detail TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                duration_ms INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS login_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL DEFAULT '',
+                name TEXT DEFAULT '',
+                client_ip TEXT DEFAULT '',
+                user_agent TEXT DEFAULT '',
+                event TEXT NOT NULL,
+                reason TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                login_at TEXT,
+                logout_at TEXT,
+                duration_s INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS feedbacks (
@@ -223,6 +244,102 @@ def init_db() -> None:
         _seed_defaults(conn)
         _seed_rbac_and_samples(conn)
         _migrate_plaintext_passwords(conn)
+        _migrate_user_logs_columns(conn)
+        _ensure_login_logs(conn)
+        _patch_audit_menu_and_kb_user(conn)
+        _patch_user_emails_and_lizy(conn)
+
+    # 启动清理旧日志（短事务）
+    try:
+        from app.services.audit import purge_old_logs
+
+        purge_old_logs()
+    except Exception:
+        pass
+
+
+def _migrate_user_logs_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(user_logs)").fetchall()}
+    alters = [
+        ("event", "TEXT DEFAULT ''"),
+        ("action", "TEXT DEFAULT ''"),
+        ("target", "TEXT DEFAULT ''"),
+        ("result", "TEXT DEFAULT 'ok'"),
+        ("detail", "TEXT DEFAULT ''"),
+        ("session_id", "TEXT DEFAULT ''"),
+        ("duration_ms", "INTEGER DEFAULT 0"),
+    ]
+    for name, typ in alters:
+        if name in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE user_logs ADD COLUMN {name} {typ}")
+        except sqlite3.OperationalError:
+            pass
+
+
+def _ensure_login_logs(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL DEFAULT '',
+            name TEXT DEFAULT '',
+            client_ip TEXT DEFAULT '',
+            user_agent TEXT DEFAULT '',
+            event TEXT NOT NULL,
+            reason TEXT DEFAULT '',
+            session_id TEXT DEFAULT '',
+            login_at TEXT,
+            logout_at TEXT,
+            duration_s INTEGER DEFAULT 0
+        )
+        """
+    )
+
+
+def _patch_audit_menu_and_kb_user(conn: sqlite3.Connection) -> None:
+    """审计菜单 + user 角色补授知识库管理（43.5 / 43.10A）。"""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO menus
+        (id, zh_name, name, access, icon, path, "order", p_id, module_menu_flag)
+        VALUES (22, '日志审计', 'auditLogs', 'auditLogs', 'ProfileOutlined', '/admin/audit', 10, 12, '0')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO role_res (auth_res, res_type, res_status, role_code)
+        SELECT 'auditLogs', 'menu', '1', 'admin'
+        WHERE NOT EXISTS (
+            SELECT 1 FROM role_res
+            WHERE auth_res='auditLogs' AND res_type='menu' AND role_code='admin'
+        )
+        """
+    )
+    for access in ("kbMgt", "kbFileMgt"):
+        conn.execute(
+            """
+            INSERT INTO role_res (auth_res, res_type, res_status, role_code)
+            SELECT ?, 'menu', '1', 'user'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM role_res
+                WHERE auth_res=? AND res_type='menu' AND role_code='user'
+            )
+            """,
+            (access, access),
+        )
+
+
+def _patch_user_emails_and_lizy(conn: sqlite3.Connection) -> None:
+    """hezl 补邮箱；lizy 降为 user（43.1 / 43.10A）。"""
+    conn.execute(
+        "UPDATE users SET email=? WHERE username=? AND (email IS NULL OR email='')",
+        ("hezeling@zptxtech.cn", "hezl"),
+    )
+    conn.execute(
+        "UPDATE users SET access='user' WHERE username='lizy' AND access!='user'",
+    )
 
 
 def _seed_defaults(conn: sqlite3.Connection) -> None:

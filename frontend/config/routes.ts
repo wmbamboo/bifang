@@ -226,6 +226,12 @@ export default [
         icon: 'MessageOutlined',
         component: './FeedbackAdmin',
       },
+      {
+        path: '/admin/audit',
+        name: 'audit-logs',
+        icon: 'ProfileOutlined',
+        component: './AuditLogs',
+      },
     ],
   },
   {

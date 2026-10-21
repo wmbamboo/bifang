@@ -48,6 +48,7 @@ const AuditLogs: React.FC = () => {
   }, [load]);
 
   const loginCols = [
+    { title: '时间', dataIndex: 'record_time', width: 170 },
     { title: '账号', dataIndex: 'username', width: 100 },
     { title: '姓名', dataIndex: 'name', width: 100 },
     { title: '事件', dataIndex: 'event', width: 110 },

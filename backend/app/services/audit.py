@@ -65,8 +65,8 @@ def write_login_log(
             """
             INSERT INTO login_logs
             (username, name, client_ip, user_agent, event, reason, session_id,
-             login_at, logout_at, duration_s)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             login_at, logout_at, duration_s, record_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 username or "",
@@ -79,6 +79,7 @@ def write_login_log(
                 login_at,
                 logout_at,
                 int(duration_s or 0),
+                _now(),
             ),
         )
 
@@ -167,7 +168,7 @@ def purge_old_logs() -> None:
             (cut_all,),
         )
         conn.execute(
-            "DELETE FROM login_logs WHERE COALESCE(login_at, logout_at, '') < ?",
+            "DELETE FROM login_logs WHERE COALESCE(record_time, login_at, logout_at, '') < ?",
             (cut_all,),
         )
 

@@ -324,10 +324,10 @@ async def login_logs(
         clauses.append("event=?")
         params.append(event)
     if start:
-        clauses.append("COALESCE(login_at, logout_at, '')>=?")
+        clauses.append("COALESCE(record_time, login_at, logout_at, '')>=?")
         params.append(start)
     if end:
-        clauses.append("COALESCE(login_at, logout_at, '')<=?")
+        clauses.append("COALESCE(record_time, login_at, logout_at, '')<=?")
         params.append(end)
     where = " AND ".join(clauses)
     offset = (page - 1) * size
@@ -336,7 +336,7 @@ async def login_logs(
             f"SELECT COUNT(*) FROM login_logs WHERE {where}", params
         ).fetchone()[0]
         rows = conn.execute(
-            f"SELECT * FROM login_logs WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM login_logs WHERE {where} ORDER BY COALESCE(record_time, login_at, logout_at, '') DESC, id DESC LIMIT ? OFFSET ?",
             [*params, size, offset],
         ).fetchall()
     return ok({"list": rows_to_list(list(rows)), "total": int(total), "page": page, "size": size})

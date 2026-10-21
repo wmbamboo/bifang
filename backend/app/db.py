@@ -143,7 +143,8 @@ def init_db() -> None:
                 session_id TEXT DEFAULT '',
                 login_at TEXT,
                 logout_at TEXT,
-                duration_s INTEGER DEFAULT 0
+                duration_s INTEGER DEFAULT 0,
+                record_time TEXT
             );
 
             CREATE TABLE IF NOT EXISTS feedbacks (
@@ -292,10 +293,17 @@ def _ensure_login_logs(conn: sqlite3.Connection) -> None:
             session_id TEXT DEFAULT '',
             login_at TEXT,
             logout_at TEXT,
-            duration_s INTEGER DEFAULT 0
+            duration_s INTEGER DEFAULT 0,
+            record_time TEXT
         )
         """
     )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(login_logs)").fetchall()}
+    if "record_time" not in cols:
+        try:
+            conn.execute("ALTER TABLE login_logs ADD COLUMN record_time TEXT")
+        except sqlite3.OperationalError:
+            pass
 
 
 def _patch_audit_menu_and_kb_user(conn: sqlite3.Connection) -> None:

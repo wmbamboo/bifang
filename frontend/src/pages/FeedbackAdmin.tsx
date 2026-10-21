@@ -42,12 +42,16 @@ const STATUS_OPTS: { value: FeedbackStatus | ''; label: string }[] = [
 const FeedbackAdmin: React.FC = () => {
   const { initialState } = useModel('@@initialState');
   const me = initialState?.currentUser as any;
-  const isAdmin = (me?.access || '') === 'admin';
+  const roles: string[] =
+    me?.roles?.length ? me.roles : me?.access ? [me.access] : [];
+  /** 仅 admin 可改状态/指派；普通用户只读自己的提交与处理结果 */
+  const isAdmin = roles.includes('admin');
   const loc = useLocation();
   const [rows, setRows] = useState<FeedbackItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string>('');
-  const [mine, setMine] = useState(0);
+  // 非 admin 默认「我的」；后端对非 admin 也会强制 user=?
+  const [mine, setMine] = useState(isAdmin ? 0 : 1);
   const [assignee, setAssignee] = useState('');
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<FeedbackItem | null>(null);
@@ -58,10 +62,11 @@ const FeedbackAdmin: React.FC = () => {
   useEffect(() => {
     const q = new URLSearchParams(loc.search || '');
     if (q.get('mine') === '1') setMine(1);
+    else if (!isAdmin) setMine(1);
     if (q.get('assignee') === 'me') setAssignee('me');
     const id = q.get('id');
     if (id) openDetail(id);
-  }, []);
+  }, [isAdmin]);
 
   const load = useCallback(async () => {
     setLoading(true);

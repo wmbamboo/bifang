@@ -27,7 +27,7 @@ const FeedbackBadge: React.FC = () => {
         <Button
           type="text"
           icon={<MessageOutlined />}
-          onClick={() => history.push('/admin/feedback')}
+          onClick={() => history.push('/admin/feedback?mine=1')}
         />
       </Badge>
     </Tooltip>

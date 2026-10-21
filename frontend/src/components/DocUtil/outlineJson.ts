@@ -120,6 +120,25 @@ export function tipsSuggestMetricLayout(tips: string[] | undefined): boolean {
 }
 
 /**
+ * 要点是否像「表格记录行」（保守，防误伤 metric 纯数字短语）：
+ * ≥3 条、每条含数字、非数字字符占比≥40%、平均长度≤24。
+ */
+export function tipsSuggestTableLayout(tips: string[] | undefined): boolean {
+  const list = (tips || []).map((s) => String(s || "").trim()).filter(Boolean);
+  if (list.length < 3) return false;
+  if (!list.every((t) => /\d/.test(t))) return false;
+  const avgLen =
+    list.reduce((n, t) => n + t.length, 0) / Math.max(1, list.length);
+  if (avgLen > 24) return false;
+  const blob = list.join("");
+  const compact = blob.replace(/\s+/g, "");
+  if (!compact.length) return false;
+  const digits = (compact.match(/\d/g) || []).length;
+  const nonDigitRatio = 1 - digits / compact.length;
+  return nonDigitRatio >= 0.4;
+}
+
+/**
  * 按页标题（+可选要点）做轻量结构纠偏（不写领域词表）：
  * - 问句式枚举、或以「类型/清单/话题」收尾的平铺页 → 不宜 columns
  * - 无明显「看数」线索时不宜硬上 metric*
@@ -160,8 +179,11 @@ export function coerceLayoutBySlideTitle(
   if (multiAxisHint && (layout === "list" || layout === "metric_list" || layout === "progress")) {
     return "columns";
   }
-  const tableCue = /价格带|对照表|矩阵表|排行表|分档表|表格/.test(t);
+  const titleTableCue = /价格带|对照表|矩阵表|排行表|分档表|表格/.test(t);
+  const tipTableCue = tipsSuggestTableLayout(tips);
+  const tableCue = titleTableCue || tipTableCue;
   const imageGridCue = /图鉴|款式墙|视觉榜|形象墙|商品墙|TOP图/.test(t);
+  // table 判定保持在 metric 之前（单格更宽松）
   if (tableCue && (layout === "list" || layout === "columns" || layout === "progress")) {
     return "table";
   }

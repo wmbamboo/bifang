@@ -2,6 +2,7 @@ import OutlineRec,{outlineType} from "@/components/DocUtil/OutlineStore";
 import { resolveTableGrid } from "@/components/DocUtil/templateManifest";
 import { splitTitleDescProtectingPriceBands } from "@/components/DocUtil/priceBandAtom";
 import { stripHallucinatedDocCitations } from "@/components/DocUtil/parseChatCompletion";
+import { countNumericUnitGroups } from "@/components/DocUtil/outlineJson";
 
 /** PPT 侧剥离 `[文档N]`（复用文档侧同一套正则，勿复制第二份）。 */
 export function scrubPptItemText(s: string): string {
@@ -1264,6 +1265,8 @@ export function buildPptItemFormatPrompt(
     '\n\n【输出格式】\n' +
     countLine +
     PPT_NO_DOC_CITE +
+    '公司/机构/品牌一律用简称（如「华润信托」不必写「华润信托股份有限公司」），禁止为凑字数堆砌全称。\n' +
+    `一条描述若含 3 个以上数字，必须砍掉铺垫，只留「主体 + 动作 + 数字」；超过 ${PPT_ITEM_DESC_MAX} 字即视为失败。\n` +
     '必须逐行输出，每行一条；不要用方括号，不要前言后语。下面只示范一行写法，不要照抄成多条：\n' +
     `1. 概括标题（${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX}字） - 具体描述（${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX}字）\n` +
     '各点描述必须互不雷同：每条描述只服务该行标题（对应一条大纲要点），禁止把同一段品牌背景/案例故事粘到多个小点后面。\n'
@@ -1394,7 +1397,23 @@ export function validateSlideViewItems(
       return `第 ${n} 点标题须为 ${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX} 字（当前 ${pptItemLength(title)} 字）。`;
     }
     if (pptItemLength(content) < PPT_ITEM_DESC_MIN || pptItemLength(content) > PPT_ITEM_DESC_MAX) {
-      return `第 ${n} 点描述须为 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字（当前 ${pptItemLength(content)} 字）。`;
+      let msg = `第 ${n} 点描述须为 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字（当前 ${pptItemLength(content)} 字）。`;
+      // 46.5：多条超长且含多组数字 → 建议切表格（只提示不自动切）
+      if (layout === 'list' || layout === 'progress') {
+        const overlong = rows.filter(
+          (r) => pptItemLength(r.content) > PPT_ITEM_DESC_MAX,
+        );
+        const heavy = overlong.filter(
+          (r) =>
+            pptItemLength(r.content) > 100 &&
+            countNumericUnitGroups(r.content) >= 2,
+        );
+        if (overlong.length >= 2 && heavy.length >= 2) {
+          msg +=
+            '本页多条描述超长且含多组数字，建议在幻灯片设置中切换为「表格」版式。';
+        }
+      }
+      return msg;
     }
   }
   // list / metric*：禁止多点粘贴同一段正文（P17 高弹加宽卡整段复制）

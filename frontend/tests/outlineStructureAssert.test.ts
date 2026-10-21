@@ -18,12 +18,15 @@ import {
 import {
   coerceLayoutBySlideTitle,
   tipsSuggestMetricLayout,
+  tipsSuggestTableLayout,
 } from "@/components/DocUtil/outlineJson";
 import {
   assertImageGridSameSource,
 } from "@/components/DocUtil/kbImageAssetsCore";
 import {aspectDeviation, coverSrcRect} from "@/components/DocUtil/imageBufferMeta";
 import {shopMetricMismatchInEvidence} from "@/components/DocUtil/outlineEvidenceValidate";
+import { shortenPptItemDesc } from "@/components/DocUtil/pptItemShorten";
+import axios from "axios";
 import { readFileSync } from "fs";
 import * as path from "path";
 
@@ -207,11 +210,12 @@ describe("四十二 PPT 小项描述长度 / 引用剥离", () => {
 
 describe("四十二·42.4 metricCue 扩到要点", () => {
   it("要点含 3 组数字+单位、页标题无关键词 ⇒ 判 metric", () => {
+    // 仅 2 条：不触发 tipsSuggestTableLayout（需 ≥3），仍够 tipMetricCue
     const tips = [
       "质押 6.7亿股 占流通盘 12%",
       "另有 22.1亿股 待解禁",
-      "本季新增 7.28亿股",
     ];
+    expect(tipsSuggestTableLayout(tips)).toBe(false);
     expect(tipsSuggestMetricLayout(tips)).toBe(true);
     expect(
       coerceLayoutBySlideTitle("质押与解禁安排一览", "list", tips),
@@ -228,5 +232,58 @@ describe("四十二·42.4 metricCue 扩到要点", () => {
     expect(
       coerceLayoutBySlideTitle("选品技巧与穿搭建议", "list", tips),
     ).toBe("list");
+  });
+});
+
+describe("四十六 PPT 超长治理 / table 双源", () => {
+  it("反验：纯数字短语 tips 不抬 table，仍判 metric", () => {
+    const tips = ["586亿", "42.3%", "1.2万"];
+    expect(tipsSuggestTableLayout(tips)).toBe(false);
+    expect(tipsSuggestMetricLayout(tips)).toBe(true);
+    expect(
+      coerceLayoutBySlideTitle("质押与解禁安排一览", "list", tips),
+    ).toBe("metric");
+  });
+
+  it("标签+数值 ≥3 条 ⇒ 判 table", () => {
+    const tips = ["欧莱雅 586亿", "雅诗兰黛 42.3%", "宝洁 1.2万"];
+    expect(tipsSuggestTableLayout(tips)).toBe(true);
+    // 标题避开「对照/路径」等会先抬 columns/progress 的词
+    expect(
+      coerceLayoutBySlideTitle("品牌规模一览", "list", tips),
+    ).toBe("table");
+  });
+
+  it("含 [文档13] 的超长描述经 shorten 后 ≤70 且无 [文档", async () => {
+    const long =
+      "截至华润信托股份有限公司、深圳市钜盛华股份有限公司通过多层持股路径合计控制宝能相关主体股权比例约百分之十二点三并另有待解禁股份规模较大需持续跟踪质押与表决权安排细节说明补充一二三四五六七八九十[文档13]";
+    expect(pptItemLength(long)).toBeGreaterThan(PPT_ITEM_DESC_MAX);
+    expect(long).toContain("[文档13]");
+
+    const compressed =
+      "华润信托与钜盛华经多层路径持股约12.3%，另有待解禁股份需跟踪[文档13]";
+    const post = jest.spyOn(axios, "post").mockResolvedValue({
+      data: {
+        choices: [{ message: { content: compressed } }],
+      },
+    } as any);
+
+    const out = await shortenPptItemDesc({
+      item: { title: "持股路径概览", content: long },
+      dMax: PPT_ITEM_DESC_MAX,
+      url: "http://localhost/mock-chat",
+      requireKbHits: false,
+    });
+    post.mockRestore();
+
+    expect(out).toBeTruthy();
+    expect(out || "").not.toContain("[文档");
+    expect(pptItemLength(out || "")).toBeLessThanOrEqual(PPT_ITEM_DESC_MAX);
+  });
+
+  it("format prompt 含简称与 3 个以上数字约束", () => {
+    const prompt = buildPptItemFormatPrompt(5, "list");
+    expect(prompt).toContain("简称");
+    expect(prompt).toContain("3 个以上数字");
   });
 });

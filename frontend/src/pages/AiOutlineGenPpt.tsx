@@ -4,8 +4,13 @@ import {useTheme} from 'antd-style';
 import {Button, Flex, message, Progress, Spin} from 'antd';
 import React, {useCallback, useEffect, useMemo, useState} from "react";
 import axios from "axios";
-import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, stripHallucinatedDocCitations} from "@/components/DocUtil/parseChatCompletion";
-import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets, scrubPptItemText} from "@/components/DocUtil/ViewItem4Ppt";
+import {parseChatCompletionData, WRITING_SYSTEM_PROMPT} from "@/components/DocUtil/parseChatCompletion";
+import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets} from "@/components/DocUtil/ViewItem4Ppt";
+import {
+  autoShortenOverlongItems,
+  metricCountFromSubTitle,
+  shortenPptItemDesc,
+} from "@/components/DocUtil/pptItemShorten";
 import OutlineRec, {outlineTypeAiPPT, outlineTypePPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {PptOutlinePrompt} from "@/components/DocUtil/OutlinePromptPpt";
@@ -530,16 +535,37 @@ const AiOutlineGenPpt: React.FC = () => {
     try{
       let completeCnts=0;
       let wordCnts=0;
+      let autoShortenedTotal=0;
       Promise.allSettled(promiseArr.map(
         (p,idx)=>
-          p.then(value=>{
+          p.then(async value=>{
             completeCnts++;
             setProgress(Math.min(100, parseFloat(((100 * completeCnts) / promiseArr.length).toFixed(1))));
             const parsed = parseChatCompletionData(value.data);
             if (parsed.ok) {
               const key = getKeyFromTArray(idx);
-              Ppt.setContent(chapters, key, parsed.content);
+              let ok = Ppt.setContent(chapters, key, parsed.content);
               wordCnts += parsed.content.length;
+              if (!ok) {
+                const theSlide = Ppt.getSlide(chapters, key);
+                if (theSlide?.viewItems?.length) {
+                  const items = theSlide.viewItems.map((vi) => ({
+                    title: vi.title || '',
+                    content: vi.content || '',
+                  }));
+                  const { items: next, shortened } = await autoShortenOverlongItems(
+                    items,
+                    theSlide.layout,
+                    async (_i, item, dMax) =>
+                      shortenPptItemDesc({ item, dMax, url, requireKbHits: false }),
+                    { metricCount: metricCountFromSubTitle(theSlide.subTitle) },
+                  );
+                  if (shortened > 0) {
+                    autoShortenedTotal += shortened;
+                    ok = theSlide.setViewItemsStructured(next);
+                  }
+                }
+              }
             } else {
               Ppt.markGenError(chapters, getKeyFromTArray(idx), parsed.error);
               console.warn("幻灯片生成失败:", parsed.error, value.data);
@@ -551,6 +577,9 @@ const AiOutlineGenPpt: React.FC = () => {
             message.warning(`Key为${key}的幻灯片文本生成请求失败了。`)
           })
       )).then(results=>{
+        if (autoShortenedTotal > 0) {
+          message.info(`已自动精简 ${autoShortenedTotal} 条超长描述`);
+        }
         const completeCount=results.filter(r=>r.status==='fulfilled').length;
         console.info("返回的所有结果："+results.length+"个;results："+JSON.stringify(results))
         const errMsgs=results
@@ -707,41 +736,14 @@ const AiOutlineGenPpt: React.FC = () => {
     }
   }
 
-  /** 单条描述 AI 精简（不重跑整页） */
+  /** 单条描述 AI 精简（不重跑整页；与生成后自动精简共用 prompt） */
   const shortenSlideItem = async (
     _index: number,
     item: { title: string; content: string },
     dMax: number,
   ): Promise<string | null> => {
     const url = getBfBaseUrl() + '/chat' + '/chat/completions';
-    const headers = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    };
-    const prompt =
-      `把下面这句压缩到 ≤${dMax} 字，保留全部数字与出处，只删连接词与重复限定，不要新增内容。` +
-      `不要用 [文档N]，不要输出任何来源标注。只输出压缩后的描述正文，不要标题、编号或前言。\n` +
-      `标题：${item.title}\n描述：${item.content}`;
-    const msg = {
-      messages: [
-        { content: WRITING_SYSTEM_PROMPT, role: 'system', name: 'string' },
-        { content: prompt, role: 'user', name: 'string' },
-      ],
-      model: DEFAULT_LLM_MODEL,
-      frequency_penalty: 0,
-      stream: false,
-      temperature: 0.3,
-      top_logprobs: 0,
-      top_p: 0,
-    };
-    const res = await axios.post(url, JSON.stringify(msg), { headers });
-    const parsed = parseChatCompletionData(res.data);
-    if (!parsed.ok) return null;
-    let text = scrubPptItemText(parsed.content || '');
-    const m = text.match(/^\d+[.．、]\s*.+?\s*[-—–]\s*(.+)$/s);
-    if (m) text = scrubPptItemText(m[1]);
-    text = stripHallucinatedDocCitations(text).text.trim();
-    return text || null;
+    return shortenPptItemDesc({ item, dMax, url, requireKbHits: false });
   };
 
   /**

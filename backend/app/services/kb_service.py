@@ -20,6 +20,19 @@ def tokenize(text: str) -> list[str]:
     return [t.strip() for t in jieba.lcut(text or "") if t.strip()]
 
 
+# 词面门槛：query 分词至少一半能在正文里找到（绝对值，不随本次查询最高分浮动）
+LEX_COVERAGE_MIN = 0.5
+
+
+def _term_coverage(query: str, text: str) -> float:
+    """query 分词后被文档覆盖的比例（与本次查询的最高分无关）。"""
+    q = {t for t in tokenize(query) if t}
+    if not q:
+        return 0.0
+    body = text or ""
+    return sum(1 for t in q if t in body) / len(q)
+
+
 class HybridStore:
     """向量检索（FAISS） + BM25 混合检索。"""
 
@@ -93,14 +106,16 @@ class HybridStore:
                 continue
             d = self.docs[int(idx)]
             cos = float(score)
+            content = d.get("page_content", "")
             results.append(
                 {
                     "id": f"{d.get('metadata', {}).get('source', '')}-{idx}",
-                    "page_content": d.get("page_content", ""),
+                    "page_content": content,
                     "metadata": dict(d.get("metadata") or {}),
                     "score": round(cos, 4),
                     "vector_score": round(cos, 4),
                     "bm25_score": 0.0,
+                    "term_coverage": round(_term_coverage(query, content), 4),
                     "retriever": "vector",
                 }
             )
@@ -115,15 +130,17 @@ class HybridStore:
         results = []
         for idx, score in ranked:
             d = self.docs[idx]
+            content = d.get("page_content", "")
             norm = float(score) / float(max_score) if max_score else 0.0
             results.append(
                 {
                     "id": f"{d.get('metadata', {}).get('source', '')}-{idx}",
-                    "page_content": d.get("page_content", ""),
+                    "page_content": content,
                     "metadata": dict(d.get("metadata") or {}),
                     "score": round(norm, 4),
                     "vector_score": 0.0,
                     "bm25_score": round(norm, 4),
+                    "term_coverage": round(_term_coverage(query, content), 4),
                     "retriever": "bm25",
                 }
             )
@@ -141,6 +158,7 @@ class HybridStore:
                         "rrf_score": 0.0,
                         "vector_score": float(item.get("vector_score") or 0.0),
                         "bm25_score": float(item.get("bm25_score") or 0.0),
+                        "term_coverage": float(item.get("term_coverage") or 0.0),
                     }
                 fused[key]["rrf_score"] += 1.0 / (k + rank + 1)
                 fused[key]["vector_score"] = max(
@@ -150,6 +168,10 @@ class HybridStore:
                 fused[key]["bm25_score"] = max(
                     float(fused[key].get("bm25_score") or 0.0),
                     float(item.get("bm25_score") or 0.0),
+                )
+                fused[key]["term_coverage"] = max(
+                    float(fused[key].get("term_coverage") or 0.0),
+                    float(item.get("term_coverage") or 0.0),
                 )
                 fused[key]["metadata"] = item.get("metadata") or fused[key].get("metadata")
                 fused[key]["page_content"] = item.get("page_content") or fused[key].get("page_content")
@@ -191,12 +213,31 @@ class HybridStore:
             results = self._rrf_fuse([v, b], top_k=top_k * 3)
 
         if score_threshold > 0:
-            # 用向量余弦做门槛。混合分里的 BM25 按本次最高分归一化，无关查询的第一名也会变成 1，不能用来判断「像不像」。
+            # bm25 归一化分恒可为 1，不能当门槛；改用绝对词面覆盖率。
+            # 覆盖率用「严格大于一半」：jieba 把「曹俊生zzz」切成 2 词时恰好 0.5，不能放过。
             if mode == "bm25":
-                results = [r for r in results if float(r.get("score") or 0) >= score_threshold]
+                results = [
+                    r
+                    for r in results
+                    if float(r.get("term_coverage") or 0) > LEX_COVERAGE_MIN
+                ]
+            elif mode == "hybrid":
+                # 语义够像 **或** 词面确实命中，任一达标即保留
+                results = [
+                    r
+                    for r in results
+                    if float(r.get("vector_score") or 0) >= score_threshold
+                    or float(r.get("term_coverage") or 0) > LEX_COVERAGE_MIN
+                ]
             else:
-                results = [r for r in results if float(r.get("vector_score") or 0) >= score_threshold]
+                # vector：仍只看余弦（人名低分可为 0；本单不承诺修语义模式）
+                results = [
+                    r
+                    for r in results
+                    if float(r.get("vector_score") or 0) >= score_threshold
+                ]
         return results[:top_k]
+
 
     def save(self, base_path: Path):
         base_path.parent.mkdir(parents=True, exist_ok=True)

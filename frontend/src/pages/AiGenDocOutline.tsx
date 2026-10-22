@@ -3,7 +3,7 @@ import { useModel } from '@umijs/max';
 import { useTheme } from 'antd-style';
 import { useState } from 'react';
 import * as React from "react";
-import {OpenAI} from "openai";
+import { bfOpenAI } from "@/utils/bfOpenAI";
 import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
 import {outlineTypeAiDOC} from "@/components/DocUtil/OutlineStore";
@@ -35,11 +35,7 @@ export const AiGenDocOutline: React.FC = () => {
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
   const buttonMessages_init:ButtonMessage[] = DOC_OUTLINE_WELCOME_SAMPLES;
-  const openai = new OpenAI({
-    apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-    baseURL: getBfBaseUrl()+'/chat',
-    dangerouslyAllowBrowser: true,
-  });
+  const openai = bfOpenAI(getBfBaseUrl() + "/chat");
   function onOutlineRecDelete(id:string) {
     OutlineRec.deleteRecById(id,outlineTypeAiDOC);
     let newRecs=OutlineRec.listRecs(outlineTypeAiDOC);

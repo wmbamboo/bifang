@@ -8,16 +8,11 @@ import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 // import { Tree } from 'antd';
 import * as React from "react";
 import {FieldDataNode, Key} from "rc-tree/lib/interface";
-import {OpenAI} from "openai";
 import KbListSnlComp from "@/components/KbMgt/KbListCompSnl";
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
+import { bfOpenAI } from "@/utils/bfOpenAI";
 
-const openai = new OpenAI({
-  apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-  // baseURL: 'http://localhost:8000/chat/knowledge_base/local_kb/SEMIR/',
-  baseURL: getBfBaseUrl()+'/knowledge_base/local_kb'+'/SEMIR/',
-  dangerouslyAllowBrowser: true,
-});
+const openai = bfOpenAI(getBfBaseUrl() + "/knowledge_base/local_kb/SEMIR/");
 
 export type DataNode = FieldDataNode<{
   key: Key;

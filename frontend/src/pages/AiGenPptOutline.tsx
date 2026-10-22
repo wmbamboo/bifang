@@ -3,7 +3,7 @@ import { useModel } from '@umijs/max';
 import { useTheme } from 'antd-style';
 import { useState } from 'react';
 import * as React from "react";
-import {OpenAI} from "openai";
+import { bfOpenAI } from "@/utils/bfOpenAI";
 import OutlineRec, {outlineTypeAiPPT} from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
 import {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
@@ -34,11 +34,7 @@ const AiGenPptOutline: React.FC = () => {
   //----------------------------------------------------------------------------------------------
   /** 样例与知识库侧共用；点选后走定框 */
   const buttonMessages_init:ButtonMessage[] = PPT_OUTLINE_WELCOME_SAMPLES;
-  const openai = new OpenAI({
-    apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-    baseURL: getBfBaseUrl()+'/chat',
-    dangerouslyAllowBrowser: true,
-  });
+  const openai = bfOpenAI(getBfBaseUrl() + "/chat");
 
   function onOutlineRecDelete(id:string) {
     const idx=tempOutlineRecs.findIndex((item:any) => item.id === id);

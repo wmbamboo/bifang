@@ -2,7 +2,6 @@ import { PageContainer, ProCard } from '@ant-design/pro-components';
 import { useModel } from '@umijs/max';
 import {ProChat, ProChatProvider, useProChat} from '@ant-design/pro-chat';
 import { useTheme } from 'antd-style';
-import { OpenAI } from 'openai';
 import * as React from "react";
 import SpeechToTextButton from "@/components/DocUtil/SpeechToTextButton";
 import DigitalMan from "@/components/DigitalMan/DigitalMan";
@@ -10,13 +9,10 @@ import {useState} from "react";
 import ChatControlBar, {ButtonMessage} from "@/components/ChatUtil/ChatControlBar";
 import {DEFAULT_LLM_MODEL} from '@/constants/llm';
 import {getBfBaseUrl} from "@/utils/bfBaseUrl";
+import { bfOpenAI } from "@/utils/bfOpenAI";
 
-//使用毕方后台提供的接口，
-const openai = new OpenAI({
-  apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-  baseURL: getBfBaseUrl()+'/chat',
-  dangerouslyAllowBrowser: true,
-});
+//使用毕方后台提供的接口（token 由 bfAuthFetch 每次注入）
+const openai = bfOpenAI(getBfBaseUrl() + "/chat");
 
 const Welcome: React.FC = () => {
   // const { token } = theme.useToken();

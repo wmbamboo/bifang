@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { Button, Space } from 'antd';
 import * as React from 'react';
 import { CloseOutlined, FileTextOutlined, LinkOutlined } from '@ant-design/icons';
-import { OpenAI } from 'openai';
+import { bfOpenAI } from '@/utils/bfOpenAI';
 import KbListSnlComp from '@/components/KbMgt/KbListCompSnl';
 import {getCachedKbName, setCachedKbName} from '@/components/DocUtil/kbSelectorModal';
 import SpeechToTextButton from '@/components/DocUtil/SpeechToTextButton';
@@ -173,10 +173,7 @@ const KbAnswerPage: React.FC = () => {
 
   const openai = useMemo(
     () =>
-      new OpenAI({
-        apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-        baseURL: `${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}`,
-        dangerouslyAllowBrowser: true,
+      bfOpenAI(`${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}`, {
         timeout: 60000,
       }),
     [selectKbName],

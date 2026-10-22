@@ -142,3 +142,52 @@ def test_x_real_ip_honored_from_trusted_peer(client: TestClient):
         ).fetchone()
     assert row is not None
     assert row["client_ip"] == "192.168.1.77"
+
+
+def test_openai_path_401_body_shape(client: TestClient):
+    """无 token 打 chat/completions ⇒ OpenAI 错误体（人话），非毕方 {code,msg}。"""
+    r = client.post(
+        "/chat/chat/completions",
+        json={
+            "model": "x",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+        },
+    )
+    assert r.status_code == 401
+    body = r.json()
+    assert "error" in body
+    assert body["error"].get("message") == "登录已过期，请重新登录"
+    assert body.get("code") is None
+
+
+def test_openai_path_with_token_passes_guard(client: TestClient, monkeypatch):
+    """带合法 token 时守卫放行（下游 mock，不真调模型）。"""
+    from app.routers import chat as chat_mod
+
+    async def _fake(_body, kb_name=None):
+        return {
+            "id": "fake",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(chat_mod, "_handle_completions", _fake)
+    token = _login(client, "admin", "admin-pass")
+    r = client.post(
+        "/chat/chat/completions",
+        headers={"token": token},
+        json={
+            "model": "x",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+        },
+    )
+    assert r.status_code != 401, r.text
+    assert r.status_code == 200, r.text

@@ -50,6 +50,20 @@ def _unauthorized_body(msg: str = "请先登录") -> dict:
     }
 
 
+def _is_openai_path(path: str) -> bool:
+    return path.endswith("/chat/completions") or path.endswith("/completions")
+
+
+def _openai_unauthorized_body() -> dict:
+    return {
+        "error": {
+            "message": "登录已过期，请重新登录",
+            "type": "invalid_request_error",
+            "code": "401",
+        }
+    }
+
+
 class AuthGuardMiddleware(BaseHTTPMiddleware):
     """除白名单外要求有效 token。mode=off|log|enforce。"""
 
@@ -97,7 +111,12 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
                 pass
             return await call_next(request)
 
-        # enforce
+        # enforce：OpenAI SDK 路径返回 OpenAI 错误体，便于 AuthenticationError 带人话
+        path = request.url.path or "/"
+        if _is_openai_path(path):
+            return JSONResponse(
+                status_code=401, content=_openai_unauthorized_body()
+            )
         return JSONResponse(status_code=401, content=_unauthorized_body())
 
 

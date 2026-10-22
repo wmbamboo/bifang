@@ -3,7 +3,7 @@ import { useModel } from '@umijs/max';
 import { useTheme } from 'antd-style';
 import { useState } from 'react';
 import * as React from "react";
-import {OpenAI} from "openai";
+import { bfOpenAI } from "@/utils/bfOpenAI";
 import {outlineTypeDOC} from "@/components/DocUtil/OutlineStore";
 import OutlineRec from "@/components/DocUtil/OutlineStore";
 import OutlineSelectDrawer from "@/components/DocUtil/OutlineSelectDrawer";
@@ -42,11 +42,9 @@ export const KbGenDocOutline: React.FC = () => {
   //  用于大模型生成文档
   //----------------------------------------------------------------------------------------------
   const buttonMessages_init:ButtonMessage[] = DOC_OUTLINE_WELCOME_SAMPLES;
-  const openai = new OpenAI({
-    apiKey: 'sk-f46769dda93743ba8266506c28500d32',
-    baseURL: `${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}/`,
-    dangerouslyAllowBrowser: true,
-  });
+  const openai = bfOpenAI(
+    `${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}/`,
+  );
   function onOutlineRecDelete(id:string) {
     OutlineRec.deleteRecById(id,outlineTypeDOC);
     let newRecs=OutlineRec.listRecs(outlineTypeDOC, selectKbName);

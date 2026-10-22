@@ -6391,3 +6391,610 @@ const STATUS_OPTS = [
 3. **截图越权隔离**（50.8 第 2 条）。
 
 ⚠️ 后续任何人再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。
+
+## 五十一、检索模式语义错误：混合模式恒等于向量结果集（P0 功能 bug）
+
+### 51.0 结论
+
+用户实测：「曹俊生」在**关键字**模式搜到 1 个文档，**语义**搜不到，**混合**也搜不到。
+
+这**不是偶发漏召回，是必然**。当前实现里：
+
+> **混合模式的结果集恒为向量结果集的子集（hybrid ⊆ vector）**，混合永远不可能比语义多出任何一条"只被 bm25 命中"的结果。
+
+而 UI 文案写着「混合=语义+关键字」（`DocSearch/index.tsx:282`），两者直接矛盾。所以这是**功能 bug**，不是参数没调好。
+
+### 51.1 根因链（`kb_service.py:176-199`）
+
+```python
+mode = (mode or "hybrid").lower()
+if mode == "bm25":
+    results = self._bm25_search(query, top_k * 3)
+elif mode == "vector":
+    results = self._vector_search(query, top_k * 3)
+else:
+    v = self._vector_search(query, top_k * 3)
+    b = self._bm25_search(query, top_k * 3)
+    results = self._rrf_fuse([v, b], top_k=top_k * 3)
+
+if score_threshold > 0:
+    if mode == "bm25":
+        results = [r for r in results if float(r.get("score") or 0) >= score_threshold]
+    else:
+        results = [r for r in results if float(r.get("vector_score") or 0) >= score_threshold]   # ← 混合也走这里
+```
+
+三处叠加：
+
+| # | 事实 | 位置 |
+|---|---|---|
+| 1 | 默认阈值 `default_score_threshold = 0.5`，且 `DocSearch/index.tsx:137` **不传** `score_threshold` ⇒ 恒用 0.5 | `config.py:37` |
+| 2 | 过滤分支的 `else` **同时覆盖 vector 和 hybrid**，混合模式下 **bm25 通道的命中完全不参与门槛判定** | `kb_service.py:197-198` |
+| 3 | 「曹俊生」是人名，`bge-large-zh-v1.5` 对人名几乎没有语义信号 ⇒ 该条 `vector_score` 落在 0.35~0.45 | 模型特性 |
+
+**逻辑证明（用用户三次搜索本身即可闭合，不需要再实测）**：
+
+- 语义模式返回 0 ⇒ 全库对「曹俊生」的 `vector_score` 都 < 0.5（语义模式用的就是同一个门槛）
+- 混合模式的过滤条件 = `vector_score >= 0.5` ⇒ 结果集**必然为空**，无论 bm25 命中多强
+- 所以：`hybrid ⊆ vector` 恒成立 ⇒「关键字能搜到、混合搜不到」是**结构性必然后果**
+
+**附带第三个 bug：关键字模式的阈值形同虚设。**
+
+`_bm25_search`（`:114-118`）里 `score = score / max_score`，即**按本次查询的最高分归一化** ⇒ 第一名恒为 1.0 ≥ 0.5 ⇒ 门槛永远拦不住任何东西。`HybridStore.search:194` 的注释自己写着「混合分里的 BM25 按本次最高分归一化，无关查询的第一名也会变成 1，不能用来判断『像不像』」——**但 `mode == "bm25"` 分支正是拿它当门槛用的**。结果是：查库里根本不存在的词，「关键字」也会返回 top_k 条。
+
+### 51.2 修法：混合改"任一通道达标"，词面通道必须用**绝对**指标
+
+`bm25_score` 是归一化值，不能做门槛（见上）。必须引入一个**不随本次查询归一化浮动**的词面指标：
+
+```python
+def _term_coverage(query: str, text: str) -> float:
+    '''query 分词后被文档覆盖的比例（绝对值，与本次查询的最高分无关）。'''
+    q = {t for t in tokenize(query) if t}
+    if not q:
+        return 0.0
+    body = text or ""
+    return sum(1 for t in q if t in body) / len(q)
+```
+
+改动四处：
+
+**a) `_bm25_search` 每条结果附上 `term_coverage`**（用同一条 `d["page_content"]`，别用 metadata）
+
+**b) `_rrf_fuse` 合并时 `term_coverage` 取 max**，与既有的 `vector_score` / `bm25_score` 处理方式保持一致（`:146-153`）
+
+**c) 新增模块常量**
+
+```python
+LEX_COVERAGE_MIN = 0.5   # 词面门槛：query 分词至少一半能在正文里找到
+```
+
+**d) 过滤分支改成**
+
+```python
+if score_threshold > 0:
+    if mode == "bm25":
+        # 归一化分恒为 1，不能当门槛；改用绝对覆盖率
+        results = [r for r in results if float(r.get("term_coverage") or 0) >= LEX_COVERAGE_MIN]
+    else:
+        # vector / hybrid：语义够像 **或** 词面确实命中，任一达标即保留
+        results = [
+            r for r in results
+            if float(r.get("vector_score") or 0) >= score_threshold
+            or float(r.get("term_coverage") or 0) >= LEX_COVERAGE_MIN
+        ]
+```
+
+**为什么 `LEX_COVERAGE_MIN = 0.5`**：
+
+- 单 token 查询（「曹俊生」在 jieba 下是 1 个词或几个字）⇒ coverage = 1.0，必过。
+- 多词查询命中一半以上才算词面相关；3 个词只命中 1 个（0.33）不算 —— 这本来就该被砍。
+- 阈值写成常量，不要散在代码里；后续要调只改一处。
+
+⚠️ **不许改成"混合模式直接取消阈值"**。取消后 bm25 的 top_k（噪声）会全部灌进来，`_rrf_fuse` 排序权重里 bm25 占 0.25，足以把弱相关结果顶到前面。必须保留双通道判据。
+
+### 51.3 预期行为变化（先知道，别当回归 bug 报）
+
+| 变化 | 说明 |
+|---|---|
+| **「关键字」会变少，甚至变空** | 这是修对了。以前查不存在的词也返回一堆，现在真的会返回 0。用户可能感觉"以前能搜到的没了"，那是误报被清掉了 |
+| **「混合」会变多** | 正是本次要的：关键字能命中的，混合也能命中 |
+| **生成流程受影响** | `store.search` 是公共函数，PPT/Word 的检索（`search_docs` / `search_cross_kb_docs`）都走它。混合门槛放宽 ⇒ 召回变多，**必须回归**一页 PPT + 一段 Word 生成，确认没把无关片段塞进 prompt |
+| **不会爆量** | `:199` 仍有 `results[:top_k]` 截断，条数不变，只是候选池更准 |
+
+### 51.4 本单不做
+
+- **不动排序权重**（`:159-162` 的 `0.7*vector + 0.25*bm25 + 0.05*rrf`）。专名场景排序确实吃亏（coverage=1 但 vector=0.35 ⇒ 0.495，会被语义更像但无关的段落压下去），但调权重会改变**全量**召回顺序，风险远大于收益。先只修"搜不到"，排序等有实测样本再单独开单。
+- **不动 `default_score_threshold = 0.5`**。它是全局参数，问答/大纲/正文第一跳都在用；人名天然向量分低，要解决只能按 query 类型分档，属另一件事，记债。
+
+### 51.5 pytest（新文件 `backend/tests/test_retrieval_modes.py`，**不加载真模型**）
+
+用合成 store + monkeypatch `embed_query`，保证秒级：
+
+1. 造 3 条 docs，其中 1 条正文含「曹俊生」；构造 `embeddings` 使该条对 query 的余弦 = 0.35，另两条 0.42（都 < 0.5）。
+2. `mode="vector"` → **0 条**（复现现状）。
+3. `mode="bm25"` → 含「曹俊生」的那条在结果里。
+4. `mode="hybrid"` → **必须也返回那条**。← **回归闸，当前代码这个用例会失败**，正好用来证明修了。
+5. `mode="bm25"` 查一个库里不存在的词（如「曹俊生zzz」）→ **0 条**。← 第二个回归闸（当前会返回 ≥1）。
+6. `mode="hybrid"` 查「曹俊生zzz」→ 0 条（防放宽过度）。
+
+注意：`_term_coverage` 用 jieba 分词，测试里对「曹俊生」不要假设切词结果，断言用「coverage > 0.5」而不是「等于 1」。
+
+### 51.6 验收
+
+**pytest**：6 条全绿，其中第 4、5 条在改之前必须失败（先跑一遍留证据，别直接一把改完说"通过了"）。
+
+**接口实测**（用智能搜索页，管理员登录）：
+
+| # | query | 期望 |
+|---|---|---|
+| 1 | 曹俊生 · 关键字 | ≥ 1 个文档 |
+| 2 | 曹俊生 · 语义 | 仍可能是 0（人名，正常，**本单不承诺修语义模式**） |
+| 3 | 曹俊生 · 混合 | **≥ 1 个文档**（本单核心验收） |
+| 4 | 曹俊生zzz · 三种模式 | **全部 0**（关键反验，防"为了让混合有结果而把门槛拆了"） |
+| 5 | 一个平时的正常业务 query（如「格力混改」） | 三种模式的条数不应显著少于改前 |
+
+第 4 条是防作弊闸：如果只把 `if score_threshold > 0` 整块删掉，第 3 条会过但第 4 条必挂。
+
+**回归**：PPT 抽一页重生成 + Word 一段重生成，看引用片段是否仍相关。
+
+### 51.7 下一单
+
+本单完成后：
+
+1. **46.4 拆行权限**（放宽「一条要点只对应 1 行」+ 先验模板容量）—— 仍挂着。
+2. 循环依赖（`outlineSerialize.ts` ↔ `ViewItem4Ppt.ts` 双向值级 import）。
+3. 截图越权隔离（50.8 第 2 条：`get_image` 任意登录用户知文件名即可取）。
+4. 检索排序与分级阈值（51.4 记的两条债）。
+
+⚠️ 后续任何人再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。
+
+## 五十二、OpenAI SDK 直连 8 处未带会话 token（P0：智能问答 / 大纲生成全挂）
+
+> 追加于 2026-10-22 08:40。**本单优先级高于五十一章（检索）**，先做本单。
+> 起因：用户实测「智能问答调用大模型出错了」，浏览器控制台：
+>
+> ```
+> POST http://<host>:8000/chat/chat/completions  401 (Unauthorized)
+> Uncaught (in promise) AuthenticationError: 401 status code (no body)
+>     at OpenAI.makeStatusError ...
+> ```
+
+### 52.0 根因（已实测，不是推测）
+
+`openai@4.67.0` 只认 `apiKey`，并把它塞进 `Authorization: Bearer <apiKey>`；它**不经过** `requestErrorConfig.ts:90-96` 那个统一注入 `token` 头的 umi-request 拦截器。而 8 个页面把 apiKey **硬编码成同一个 `sk-f46769...`**：
+
+```
+frontend/src/pages/AiAnswerChatchat.tsx:13            apiKey: 'sk-f46769...'  baseURL: <bf>/chat
+frontend/src/pages/AiAnswerChatchatDigitalMan.tsx:15  apiKey: 'sk-f46769...'  baseURL: <bf>/chat
+frontend/src/pages/AiGenDocOutline.tsx:38             apiKey: 'sk-f46769...'  baseURL: <bf>/chat
+frontend/src/pages/AiGenPptOutline.tsx:37             apiKey: 'sk-f46769...'  baseURL: <bf>/chat
+frontend/src/pages/KbAnswer.tsx:176                   apiKey: 'sk-f46769...'  baseURL: <bf>/knowledge_base/local_kb/<kb>
+frontend/src/pages/KbGenDocOutline.tsx:45             apiKey: 'sk-f46769...'  baseURL: <bf>/knowledge_base/local_kb/<kb>/
+frontend/src/pages/KbGenPptOutline.tsx:45             apiKey: 'sk-f46769...'  baseURL: <bf>/knowledge_base/local_kb/<kb>/
+frontend/src/pages/DocGen.tsx:15                      apiKey: 'sk-f46769...'  baseURL: <bf>/knowledge_base/local_kb/SEMIR/
+```
+
+后端 `security/auth.py:114-131 extract_token()` 的顺序是：`token` 头 → `?token=` → `Authorization: Bearer`，**且 Bearer 只在 `cand in _TOKENS`（命中会话表）时才认**。`sk-f46769...` 永远不在会话表里 ⇒ 恒 401。
+
+实测（curl，直连 7861）：
+
+```
+POST /chat/chat/completions  Authorization: Bearer sk-f46769...
+→ HTTP/1.1 401 Unauthorized   content-type: application/json   content-length: 121
+```
+
+121 字节正是 `guard.py:_unauthorized_body()` 的长度 ⇒ **401 来自四十九章的 AuthGuard，不是上游大模型**（也确认 `chat.py` 全文没有任何 `status_code=401` 的透传点）。
+
+### 52.1 修法：自定义 fetch 注入当前 token（不要改 apiKey 为一次性字符串）
+
+**禁止**写成 `apiKey: localStorage.getItem('token')`。原因：本单 8 处里有 3 处（`DocGen:15`、`AiAnswerChatchat:13`、`AiAnswerChatchatDigitalMan:15`）是**模块顶层**构造，模块在登录前/首次访问时就被求值，拿到的 token 可能是空；且同一会话内重新登录后 token 变了，旧实例仍是旧 token ⇒ 又 401，而且极难复现。`openai@4.67` 的 `apiKey` 类型是 `string`，不支持传函数。
+
+**正确做法**：利用 SDK 的 `fetch` 选项（`node_modules/openai/core.d.ts:9` 已确认签名 `(url: RequestInfo, init?: RequestInit) => Promise<Response>`），在**每次请求时**读最新 token。
+
+新建 `frontend/src/utils/bfOpenAI.ts`：
+
+```ts
+import OpenAI, { type ClientOptions } from 'openai';
+
+/**
+ * OpenAI SDK 的鉴权只走 apiKey → Authorization: Bearer，
+ * 不经过 requestErrorConfig 的 umi-request 拦截器。
+ * 这里用自定义 fetch 在每次请求时注入当前 session token，
+ * 避免模块顶层构造时把旧 token 固化下来。
+ */
+export const bfAuthFetch: typeof fetch = (input, init) => {
+  const token = localStorage.getItem('token') || '';
+  const headers = new Headers((init?.headers as HeadersInit) || {});
+  if (token) {
+    headers.set('token', token);                       // 后端 extract_token 第一优先
+    headers.set('Authorization', `Bearer ${token}`);    // 兼容只认 Bearer 的场景
+  }
+  return fetch(input, { ...init, headers });
+};
+
+export function bfOpenAI(baseURL: string, opts: Partial<ClientOptions> = {}) {
+  return new OpenAI({
+    apiKey: 'bf-session-token',   // 占位，真实凭据由 bfAuthFetch 注入
+    baseURL,
+    dangerouslyAllowBrowser: true,
+    fetch: bfAuthFetch,
+    ...opts,
+  });
+}
+```
+
+> `apiKey` 必须给一个**非空**占位：SDK 在 apiKey 为空时会直接抛 `Missing credentials`，根本不会发出请求。占位值会进 `Authorization: Bearer bf-session-token`，但随后被 `bfAuthFetch` 用真 token 覆盖，且后端 `extract_token` 先命中 `token` 头，不会走到 Bearer 分支。
+
+### 52.2 替换 8 处构造（逐一，不许漏）
+
+| # | 文件 | 行 | 替换为 |
+|---|---|---|---|
+| 1 | `pages/AiAnswerChatchat.tsx` | 13 | `const openai = bfOpenAI(getBfBaseUrl() + '/chat');` |
+| 2 | `pages/AiAnswerChatchatDigitalMan.tsx` | 15 | 同上 |
+| 3 | `pages/AiGenDocOutline.tsx` | 38 | 同上（去掉 `useMemo` 依赖里的多余项；`bfOpenAI` 可原地放在 useMemo 内） |
+| 4 | `pages/AiGenPptOutline.tsx` | 37 | 同上 |
+| 5 | `pages/KbAnswer.tsx` | 176 | `bfOpenAI(`${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}`)`（保留 `timeout: 60000`，写进第二参 `{ timeout: 60000 }`） |
+| 6 | `pages/KbGenDocOutline.tsx` | 45 | `bfOpenAI(`${getBfBaseUrl()}/knowledge_base/local_kb/${selectKbName}/`)` |
+| 7 | `pages/KbGenPptOutline.tsx` | 45 | 同上 |
+| 8 | `pages/DocGen.tsx` | 15 | `bfOpenAI(getBfBaseUrl() + '/knowledge_base/local_kb/SEMIR/')` |
+
+替换后每个文件的 `import { OpenAI } from 'openai'` 若不再使用则删除（`DocGen/AiAnswerChatchat/...` 都是只有这一处构造），改为 `import { bfOpenAI } from '@/utils/bfOpenAI';`。**别留下第二个 OpenAI 构造点。**
+
+`components/trash/` 下还有两个 `new OpenAI`（`KbChatwithSpeech4Doc.tsx:8`、`KbChatWithSpeech4Ppt.tsx:7`）：先 `grep -rn "trash/KbChat" src` 确认无人引用；无引用则**在本单一并改成 `bfOpenAI`**（成本 1 行，且能顺手清掉硬编码 key）；若被引用则必须改。
+
+### 52.3 让 401 报出人话（P1，同一单做）
+
+现在 SDK 拿到的是 `{"code":401,"msg":"请先登录","data":{...}}`，**不符合 OpenAI 的 error 结构**，所以 SDK 抛出的 `AuthenticationError.message` 是空的，这就是控制台那句 `401 status code (no body)` 的来源，用户完全看不出是登录过期。
+
+在 `guard.py` 的 401 分支里，对**OpenAI 兼容路径**返回 OpenAI 格式的错误体：
+
+```python
+def _is_openai_path(path: str) -> bool:
+    return path.endswith("/chat/completions") or path.endswith("/completions")
+
+# dispatch 内 enforce 分支：
+if _is_openai_path(request.url.path):
+    return JSONResponse(
+        status_code=401,
+        content={"error": {"message": "登录已过期，请重新登录", "type": "invalid_request_error", "code": "401"}},
+    )
+return JSONResponse(status_code=401, content=_unauthorized_body())
+```
+
+只对 `*/chat/completions` 与 `*/completions` 生效，其他接口返回体保持不变（`requestErrorConfig` 依赖 `code` 字段，别动）。
+
+### 52.4 验收（必须逐条贴证据）
+
+1. **静态闸**：`grep -rn "sk-f46769" frontend/src` **必须 0 命中**（含 `components/trash/`）。
+2. **静态闸**：`grep -rn "new OpenAI(" frontend/src` 只允许出现在 `utils/bfOpenAI.ts` 一处。
+3. **jest 用例 1**：`bfAuthFetch` 在 `localStorage.token='T1'` 时，对任意 url 调用都会带上 `token: T1` 与 `Authorization: Bearer T1`（mock 全局 fetch 断言 init.headers）。
+4. **jest 用例 2（回归闸）**：用 mock fetch 返回一个合法 chat completion JSON，构造 `bfOpenAI('http://x/chat')` 调 `client.chat.completions.create({...})`，断言**实际发出的请求头**里有当前 token —— 证明 SDK 真的走了自定义 fetch，而不只是单测了 fetch 本身。
+5. **jest 用例 3**：把 `localStorage.token` 从 `T1` 改成 `T2` 后（**不重建实例**）再发一次请求，请求头必须是 `T2`。这条专门防「模块顶层固化旧 token」的写法回潮。
+6. **后端**：`pytest` 断言 `POST /chat/chat/completions` 无 token 时 body 是 `{"error":{"message":"登录已过期，请重新登录",...}}` 且 status=401；带合法 token 时不再被 guard 拦截（可用 monkeypatch 让下游直接返回 200，避免真调模型）。
+7. **人工（用户做）**：智能问答发一条消息，Network 里 `chat/completions` 请求头含 `token:`，返回 200 且能正常流式输出。
+
+### 52.5 明确不要做的事
+
+1. **不许**把 `/chat` 或 `/knowledge_base/.../chat/completions` 加进 `guard.py` 白名单。这些是**计费的大模型调用**，匿名可打等于开放算力，也失去按用户审计。
+2. **不许**为了让它通而把 `AUTH_GUARD_MODE` 改回 `log`（现在 `.env:50` 是 `enforce`，是对的）。
+3. **不许**在后端加「固定 API key 白名单」（例如认那个 `sk-f46769...`）。浏览器端的 key 是公开的，等于永久后门；真 token 才能把调用记到具体用户，`user_logs` 才有意义。
+4. **不许**改 `apiKey` 为一次性字符串（见 52.1 的理由）。
+5. 不动 `chat.py` 的检索与 prompt 逻辑；不动 `ChatWithSpeech4Doc/Ppt` 内部实现（它们只消费传入的实例，实例修好就通了）。
+
+### 52.6 教训（写进本章，避免第三次）
+
+连续两轮踩同一个坑：**做「全站鉴权加固」这类横切改造时，清单只覆盖了我 grep 到的那几种写法**。
+- 四十九只列了 `axios.*` 与裸 `fetch(` ⇐ 漏了 `new OpenAI`；
+- 本轮直接后果是 8 个页面全 401，而四十九章的验收用例（curl 打接口）**全部通过**，因为 curl 天然覆盖不到浏览器 SDK。
+
+规则：**以后任何鉴权/网关类改造，清单必须包含五类客户端**：① umi-request ② axios/fetch 直连 ③ **第三方 SDK 构造点（`new OpenAI` / `new Anthropic` / 其他）** ④ `EventSource` ⑤ `<img src>`/`<a href>`/`window.open` 这类浏览器原生请求。
+后两类天然带不了 header，必须单独设计（前者 `?token=`，后者 blob + objectURL）。
+
+### 52.7 下一单
+
+本单（五十二）完成后：**先停下，回 handoff 报告，不要自行开工下一单**。五十三章由 WorkBuddy 在你回执后追加。
+
+已排定的后续链条（供参考，章尚未写出）：
+
+1. **五十三（预览方案重构，方案已定稿，待 WorkBuddy 写章）**：毕方现行预览走外部服务 `https://poc.intronlink.com/kkfv/onlinePreview`（kkFileView），该域名实测已不可达（`curl` code=000）⇒ `KbAnswer.tsx:31-37`、`DocSearch/index.tsx:234-244` 两处预览按钮全部失效。改为**页图优先 + 逐页文本降级**：命中带 `page` 且有 `assets/<doc>/<doc>_p<N>_<i>.png` 则显示该页整页图；无页图则回退到 `extracts/<doc>.jsonl` 的逐页 `snippet`（PDF 与 PPTX 都覆盖）。参考 docuMind `GET /documents/{doc_id}/pages/{page_no}` + Modal 展示的交互。**注意毕方页图只覆盖部分页，不能照搬 docuMind 的"每页必有图"假设。** 取图接口 `asset_file` 在 enforce 下需鉴权，`<img>` 直显要么用 `?token=`（后端 `extract_token` 支持 query 分支）要么走 `authAxios` blob + objectURL，**不许加 guard 白名单**（页图=知识库原文，匿名可看等于绕过四十九的鉴权）。
+2. **五十一（检索模式语义错误，6395 行）**：混合模式恒等于向量结果集、bm25 阈值被归一化架空。该章内容完整，直接执行。
+3. 之后：无既定功能单，等用户指定（候选：问卷/反馈二期、知识库图-段主题闸）。
+
+## 五十三、交付前收口：PPT 超长描述「假成功精简」+ 源码默认口令与登录提示（P0）
+
+### 53.0 结论（先看这段）
+
+两件事都不是"参数没调好"，各有明确代码缺陷：
+
+**A. PPT 124 字橙叹号**：自动精简**确实跑了**，但压缩后仍超长，代码把"非空"当成"成功"，随后写回又被校验拒绝 ⇒ **页面零变化，只多一句误导性的「已自动精简 1 条超长描述」**。
+
+实测（DeepSeek `deepseek-chat`，temperature 0.3，同一段 124 字文本）：
+
+| 提示词口径 | 次数 | 输出字数 | 达标(≤70) |
+|---|---|---|---|
+| 现行 `buildShortenItemPrompt`（"保留全部数字与出处"） | 5 | 112/112/113/112/113 | **0/5** |
+| 硬限制 70 + 最多 2 组数字 + 仍禁删事实 | 5 | 109/109/111/108/99 | **0/5** |
+| 允许删次要主体与过程细节、只留结论性事实 | 3 | 57/57/63 | **3/3** |
+
+⇒ 不是模型压不动，是**现行提示词明确命令它"保留全部数字与出处"，与 ≤70 字直接冲突**。把这条禁令换成"允许删细节"后 57~63 字稳定达标（口径差异 112 vs 57，远超噪声，可一次改对）。
+
+**B. 默认口令**：`bifang.intronlink` 在源码/文案/文档共 **6 类 13 处**；最糟的是登录失败提示**把账号密码直接印在页面上**（`locales/zh-CN/pages.ts:4`），登录框 placeholder 也写着密码（`:8`）。
+
+**编号说明**：原 52.7 排定的"五十三 = 预览重构"**顺延为五十四**，别再按 52.7 的旧编号找五十三章。理由：本单两件是"交付前必须清掉"的安全项 + 当前阻塞用户的缺陷，预览重构可晚一单。
+
+---
+
+## 53.A PPT：超长描述被"假成功"吞掉
+
+### 53.A.1 现象
+
+用户截图：生成 PPT 后「收购资金从哪来」页展开 5 点，第 1 点（股权质押）描述 **124 字**，橙叹号 tooltip「第 1 点描述须为 20～70 字（当前 124 字）」；同页第 5 点只有 40 余字，正常。
+
+### 53.A.2 完整链路（五处，全有行号）
+
+| # | 位置 | 行为 |
+|---|---|---|
+| 1 | `ViewItem4Ppt.ts:1911-1921` | `setContent` 校验失败 → `genError = vErr`、**仍 `setResult(viewItems)`**、`return false` ⇒ 124 字原文能显示出来 |
+| 2 | `AiOutlineGenPpt.tsx:547-567` / `KbOutlineGenPpt.tsx:599-625` | `ok === false` 才进 `autoShortenOverlongItems`，成功则 `setViewItemsStructured(next)` |
+| 3 | `pptItemShorten.ts:121-127` | 只判 `pptItemLength(compressed) > 0`，**不判 `<= dMax`** ⇒ 112 字也算"精简成功"，`shortened++` |
+| 4 | `AiOutlineGenPpt.tsx:581-583` | `shortened > 0` 就 `message.info('已自动精简 N 条超长描述')` ⇒ **假成功提示** |
+| 5 | `ViewItem4Ppt.ts:1850-1857` | `setViewItemsStructured(112 字)` 再次校验失败 ⇒ `return false`，**既不写回 viewItems 也不更新 genError** ⇒ UI 一切照旧 |
+
+净效果：跑了一次 LLM、弹了一句"已精简"、页面零变化。用户看到的与"完全没精简"完全一样。
+
+### 53.A.3 次要缺陷（同单一起修）
+
+| # | 位置 | 问题 |
+|---|---|---|
+| 1 | `ViewItem4Ppt.ts:1837-1864` | `setViewItemsStructured` 成功时**不清 `genError`**（`setContent:1875` 会清）⇒ 真精简成功也残留橙叹号，直到 `reparseAllSlideContents` 或重新生成 |
+| 2 | `pptItemShorten.ts:115` | `maxItems` 默认 3；一页 5 点若 4 条超长，只修前 3 条 |
+| 3 | `ViewItem4Ppt.ts:1586-1594` | 「建议切表格」门槛是 `overlong>=2 && heavy>=2`；本条只 1 条超长 ⇒ **连建议都不给**（而本例正是"单条 124 字含 4 组数字"） |
+| 4 | `ViewItem4Ppt.ts:1449` | 写作 prompt 只说"含 3 个以上数字必须砍铺垫"，**没有"最多几组数字"的硬上限**，模型可合法写 4 组数字 |
+
+### 53.A.4 修法
+
+**a) 精简提示词分两档（`pptItemShorten.ts:37-46`）**
+
+```ts
+export function buildShortenItemPrompt(item: ShortenItem, dMax: number): string {
+  const len = pptItemLength(item.content);
+  const heavy = len > dMax * 1.4 || countNumericUnitGroups(item.content) >= 2;
+  const rule = heavy
+    ? `压缩到 ${dMax} 字以内是硬限制。允许删去次要主体名称与过程细节，只保留「谁用什么方式拿到多少」这类结论性事实，` +
+      `数字最多保留 2 组（优先与标题直接相关的）。不要新增事实。`
+    : `压缩到 ${dMax} 字以内，保留全部数字，只删连接词与重复限定，不要新增内容。`;
+  return `${rule}\n不要用 [文档N]，不要输出任何来源标注。只输出压缩后的描述正文，不要标题、编号或前言。\n` +
+    `标题：${item.title}\n描述：${item.content}`;
+}
+```
+
+`countNumericUnitGroups` 已从 `outlineJson.ts` 导出（`ViewItem4Ppt.ts:5` 已在用）；`pptItemShorten.ts` 直接 `import { countNumericUnitGroups } from "@/components/DocUtil/outlineJson";`（函数级调用，不新增循环依赖风险）。
+
+**"允许删细节"这句是达标关键，不能省** —— 见 53.0 表格第 2/3 行对比。
+
+**b) 结果必须校验，不许假成功（`pptItemShorten.ts:104-133`）**
+
+```ts
+const dMax = descMaxForPptItem(layout, i, metricCount);
+const len = pptItemLength(next[i].content);
+if (len <= dMax) continue;
+let compressed = await shortenFn(i, next[i], dMax).catch(() => null);
+// 一次不达标：换更狠的口径重试一次
+if (compressed && pptItemLength(compressed) > dMax) {
+  compressed = await shortenFn(i, next[i], dMax, { forceHeavy: true }).catch(() => null);
+}
+if (compressed && pptItemLength(compressed) <= dMax) {
+  next[i] = { ...next[i], content: compressed };
+  shortened += 1;
+} else {
+  failed.push({ index: i, len, dMax });
+}
+```
+
+- 返回类型改为 `{ items, shortened, failed }`（`failed: Array<{index; len; dMax}>`）；
+- `shortenFn` 签名加第 4 参 `opts?: { forceHeavy?: boolean }`；两个页面的 `shortenSlideItem` 透传给 `shortenPptItemDesc({ ..., forceHeavy })`，内部拼到 `buildShortenItemPrompt`（`forceHeavy` 为 true 时强制走 heavy 口径）；
+- 页面渲染：
+```ts
+if (failed.length) {
+  const f = failed[0];
+  message.warning(`第 ${f.index + 1} 点仍超长（${f.len} 字，限 ${f.dMax} 字），建议改用表格版式或手工精简。`);
+} else if (shortened > 0) {
+  message.info(`已自动精简 ${shortened} 条超长描述`);
+}
+```
+**禁止 `failed` 非空时还弹"已自动精简"。**
+
+**c) 成功写回要清错误位（`ViewItem4Ppt.ts:1858`）**
+
+```ts
+this.setResult(viewItems);
+this.content = Slide.itemsToContentText(cleaned);
+this.genError = "";          // ← 补这一行
+return true;
+```
+
+**d) 「建议切表格」门槛改为单条触发（`ViewItem4Ppt.ts:1582-1594`）**
+
+```ts
+const heavy = rows.filter(
+  (r) => pptItemLength(r.content) > 100 && countNumericUnitGroups(r.content) >= 2,
+);
+if (heavy.length >= 1) {
+  msg += '本点含多组数字且明显超长，建议切换为「表格」版式（主体｜数值），或只保留 2 组关键数字。';
+}
+```
+旧门槛要求 `overlong>=2 && heavy>=2`，本例永远不触发 —— 而这恰恰是最该切表格的一页。
+
+**e) 写作 prompt 加数字组数上限（`ViewItem4Ppt.ts:1449`）**
+
+把
+```
+一条描述若含 3 个以上数字，必须砍掉铺垫，只留「主体 + 动作 + 数字」；超过 70 字即视为失败。
+```
+改为
+```
+一条描述最多保留 2 组数字；有 3 组以上时只留与标题最相关的 2 组，其余改写成定性表述（如「另有部分股权」）。
+超过 70 字即视为失败。
+```
+
+**f) `maxItems` 3 → 6**（一页最多 9 点，够用；不做无限次，避免一页打十几次模型）。
+
+### 53.A.5 验收
+
+1. **jest（防假成功）**：假 shortenFn 返回 `dMax+10` 字 ⇒ `shortened===0` 且 `failed` 含该条。
+2. **jest（重试）**：假 shortenFn 第一次返 `dMax+10`、第二次返 `dMax-5` ⇒ `shortened===1`，内容为第二次结果。
+3. **jest（清错误位）**：`setViewItemsStructured` 成功写回后 `slide.genError === ''`。
+4. **实测**：用 53.0 那段 124 字走 `shortenPptItemDesc`，断言 `pptItemLength(result) <= 70`（跑 3 次至少 2 次通过，LLM 仍有抖动）。
+5. **人工（用户做）**：重新生成该页，橙叹号消失；若仍超长，必须看到"建议改用表格版式"的明确提示，而不是"已精简"。
+
+---
+
+## 53.B 源码默认口令与登录提示
+
+### 53.B.1 全量清点
+
+| # | 文件:行 | 现状 | 性质 |
+|---|---|---|---|
+| 1 | `backend/app/db.py:430-432` | 3 个种子用户密码硬编码 `bifang.intronlink` | **P0 明文** |
+| 2 | `backend/app/routers/mock_api.py:173` | `user_add` 不传 password 时静默用该默认值 | **P0 明文 + 弱口令扩散** |
+| 3 | `frontend/src/locales/zh-CN/pages.ts:4` | 错误提示 `错误的用户名和密码(admin/bifang.intronlink)` | **P0：把账号密码印在登录页** |
+| 4 | `frontend/src/locales/zh-CN/pages.ts:8` | placeholder `密码: bifang.intronlink` | **P0：密码写在输入框** |
+| 5 | 其它 8 个语言包 | `ant.design` 同款文案：`ja-JP:5,10`、`id-ID:5,10`、`bn-BD:5,8,10`、`fa-IR:4,9`、`en-US:5,8,10`、`pt-BR:5,8,10`、`zh-TW:4,7,9` | P1 陈旧默认凭据 |
+| 6 | `frontend/src/pages/User/Login/index.tsx:221,235,257` | 组件内 `defaultMessage` 兜底 `admin/ant.design`、`admin or user` | P1 |
+| 7 | `frontend/src/pages/User/Login/index.tsx:217-224` | 失败时用**固定文案**，不透传后端 msg ⇒「账号已停用」也显示成「密码错误」 | P1 误导 |
+| 8 | `README.md:32`、`bifang-req.md:22` | 明写 `admin / bifang.intronlink` | P1 文档 |
+| 9 | `backend/app/routers/mock_api.py:102-114` | 审计 reason 区分「用户不存在/密码错误」 | **可接受**（内部审计需要，只要不回传前端） |
+
+### 53.B.2 修法
+
+**a) 种子密码不落源码（`db.py:424-455`）**
+
+```python
+def _seed_admin_password() -> tuple[str, bool]:
+    """返回 (密码, 是否自动生成)。环境变量优先；缺省随机 16 位。"""
+    env = (os.getenv("BIFANG_SEED_ADMIN_PASSWORD") or "").strip()
+    if env:
+        return env, False
+    return secrets.token_urlsafe(12), True
+```
+
+- 只在 `users` 表为空（真正首次初始化）时写入；
+- 自动生成时写 `backend/data/initial_admin.txt`（内容：用户名 / 密码 / 生成时间；`os.chmod(0o600)`），并 `logger.warning` 打一次"首次管理员密码已生成，见 <路径>，请登录后立即修改"；
+- **种子只建 `admin`**，删掉 `user` / `guest` 两个种子（已 grep 确认 `backend/` 与 `backend/tests/` 无任何代码/用例依赖这两个账号，`guest` 只是登录失败时的 `currentAuthority` 字面量，与账号无关）；新用户由管理员创建；
+- 种子的 `must_change_password` 置 1（见 c）。
+
+**b) `user_add` 必须带密码（`mock_api.py:170-175`）**
+
+```python
+plain = (body.get("password") or "").strip()
+if not plain:
+    return fail("新增用户必须设置初始密码", 400)
+pw_err = validate_password_strength(plain, username)
+if pw_err:
+    return fail(pw_err, 400)
+```
+
+前端 `UserForm.tsx:52`：新建态（`!isEdit`）密码项 `required`，编辑态保留"留空则不修改密码"。
+
+**c) 首登强改标记**
+
+- `users` 加两列（照 `db.py:270-285` `_migrate_user_logs_columns` 的写法：`PRAGMA table_info` + `ALTER TABLE`）：`must_change_password INTEGER DEFAULT 0`、`pwd_changed_at TEXT`；
+- `login_account` 成功返回体加 `"mustChangePassword": bool(user.get("must_change_password"))`（`mock_api.py:93-101`）；
+- `change_password` 成功后置 `must_change_password=0, pwd_changed_at=now`（`:284-286`）；
+- 前端 `Login/index.tsx:124-137` 成功后若有该标记：`message.warning('当前为初始密码，请立即在「个人中心 → 修改密码」修改')`（**不阻断**，避免多做一个强制改密页）。
+
+**d) 弱口令校验（新函数，放 `backend/app/security/passwords.py`）**
+
+```python
+_MIN_LEN = 8
+_WEAK = {"12345678", "password", "bifang", "bifang.intronlink", "ant.design", "admin123", "qwerty123"}
+
+def validate_password_strength(pwd: str, username: str = "") -> str | None:
+    if len(pwd or "") < _MIN_LEN:
+        return f"密码至少 {_MIN_LEN} 位"
+    if pwd.lower() == (username or "").lower():
+        return "密码不能与用户名相同"
+    if pwd.strip().lower() in _WEAK:
+        return "密码过于常见，请更换"
+    return None
+```
+
+> 这是**校验黑名单**（命中即拒绝，不写入任何账号），不是默认值。若你判断"源码里出现旧口令字符串"仍算泄露，可改成只存 `sha256` 摘要比对。
+
+接入点：`user_add`（`:173` 附近）、`change_password`（`:264-287`）、管理员重置分支（`:242-246`）。
+
+**e) 存量库：把仍在用旧默认口令的账号标记强改**
+
+源码不写旧口令明文，只写摘要（`sha256("bifang.intronlink")`）：
+
+```python
+_LEGACY_DEFAULT_SHA256 = {"dc455c7f96748d9656c54f967a11a25fa7168015b8f7551c0b235b3cdb8d66b8"}
+```
+
+登录成功分支（`mock_api.py:76-82`，与 `needs_rehash` 同处）：
+
+```python
+if hashlib.sha256(password.encode()).hexdigest() in _LEGACY_DEFAULT_SHA256:
+    conn.execute("UPDATE users SET must_change_password=1 WHERE userid=?", (user["userid"],))
+```
+
+即"谁还在用旧默认口令，下次登录就被标记强改"；无需反推 bcrypt，也不在源码出现明文。
+
+**f) 登录提示（前端）**
+
+- `Login/index.tsx:118-141`：失败分支同时保留后端文案
+```tsx
+const loginRes = await login({ ...values, type });
+const msg = loginRes.data;
+if (msg.status === 'ok') { ... }
+setUserLoginState({ ...msg, msg: loginRes.msg });   // ← 带上后端 msg
+```
+- `:217-224` 改为
+```tsx
+{status === 'error' && loginType === 'account' && (
+  <LoginMessage content={(userLoginState as API.LoginResult & { msg?: string })?.msg || '用户名或密码错误'} />
+)}
+```
+- `:235` placeholder → `请输入用户名`；`:257` → `请输入密码`；
+- 9 个语言包：`pages.login.accountLogin.errorMessage` 统一为「用户名或密码错误」（英文 `Incorrect username or password`），`password.placeholder` →「密码」、`username.placeholder` →「用户名」；
+- `README.md:32`、`bifang-req.md:22` 改成「首次启动见 `backend/data/initial_admin.txt`，或由环境变量 `BIFANG_SEED_ADMIN_PASSWORD` 指定」。
+
+**g) 交付兜底（强烈建议，成本 10 行）**
+
+一次性开关 `BIFANG_RESET_ADMIN_PASSWORD=<新密码>`：启动时若该 env 存在且 `admin` 用户存在，则重置其密码并把 `must_change_password=1`，然后打日志「已按环境变量重置 admin 密码，请从部署环境删除该变量」。客户忘密码时不至于锁死。
+
+### 53.B.3 验收
+
+1. `grep -rn "bifang.intronlink" backend/app frontend/src README.md bifang-req.md` **0 命中**（`__pycache__` 不计）。
+2. 删库重跑：`backend/data/initial_admin.txt` 存在（0600），其中密码 ≠ 旧值；用该密码能登录成功。
+3. 设 `BIFANG_SEED_ADMIN_PASSWORD=Test@12345` 重建库 ⇒ 密码就是它。
+4. `POST /mock_api/user/add`：不带 password ⇒ 400「新增用户必须设置初始密码」；`password=123` ⇒ 400「密码至少 8 位」；`username=admin&password=admin` ⇒ 400「密码不能与用户名相同」。
+5. 密码错登录 ⇒ 页面显示后端 `msg`（「用户名或密码错误」），且**页面任何位置都不出现密码字符串**；停用账号登录 ⇒ 显示「账号已停用」（不再被误报成密码错）。
+6. 用旧默认口令登录一次 ⇒ 响应 `mustChangePassword=true`；改密后变 false。
+7. `npm run test -- Login` 快照会因文案变化失败 —— 属预期，更新快照。
+
+---
+
+## 53.C 明确不做
+
+1. **不动 `PPT_ITEM_DESC_MAX = 70`**：它与 `SliderDrawer.tsx:222` 的 `maxLength` 同源，是**模板版式容量约束**，放宽前必须先验 P17 等模板（见 24 章：凭感觉改 100 会溢出）。
+2. **不做"精简失败自动切表格"**：切版式会改模板槽位数，属产品决策，只给提示。
+3. **不做登录失败锁定/图形验证码**：本单只清明文与提示，防爆破单独开单（记债）。
+4. **不重置现有账号密码**：只标记强改。本次实测 `admin/bifang.intronlink` 登录已失败，说明现网 admin 密码已被改过，**不要覆盖**。
+5. **不在 `.env` 新增默认密码变量**：`BIFANG_SEED_ADMIN_PASSWORD` 为可选覆盖，缺省走随机。
+
+---
+
+## 53.D 教训（写进本章）
+
+- **"非空即成功"是假成功的温床**：凡是"把 LLM 输出写回受限字段"的路径，判定条件必须是**目标约束本身**（`len <= dMax`），不是"有返回值"。同理，写回函数校验失败时**必须把失败原因抛给调用方**，不能 `return false` 了事。
+- **提示词自相矛盾时先做 A/B，不要凭感觉调数字**：本次用 3 组口径共 13 次实测，一次定位到唯一阻塞项。单次观测不可信（噪声 σ≈9%~14%），但 112 vs 57 的差异远超噪声。
+- **安全文案也是代码**：`(admin/用户名密码)` 这类"帮用户登录"的文案，本质是把凭据公开在页面上。删掉即可，不需要复杂方案。
+
+---
+
+## 53.E 下一单
+
+本单完成后：**回 handoff 报告，然后停下，不要自选下一单**。
+
+下一单 = **五十四（预览方案重构）**：方案已在 52.7 第 1 条写定（页图优先 + `extracts/<doc>.jsonl` 逐页文本降级，参考 docuMind），本章不改方案，**只把编号从原"五十三"顺延为"五十四"**。等你的 53 回执到了，WorkBuddy 再补写五十四章正文。

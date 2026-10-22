@@ -1,7 +1,7 @@
 import { PageContainer, ProCard } from '@ant-design/pro-components';
 import {Button, Spin, Row, Col, message, Flex, Progress, Typography} from 'antd';
 import React, {useState} from "react";
-import axios from "axios";
+import axios from "@/utils/authAxios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, buildKbDocWritingConstraintPrompt, stripHallucinatedDocCitations, stripCitationsDeep} from "@/components/DocUtil/parseChatCompletion";
 import {OutlinePromptDoc} from "@/components/DocUtil/OutlinePromptDoc";
 import {OutlineResultDoc} from "@/components/DocUtil/OutlineResultDoc";
@@ -362,8 +362,13 @@ const AiOutlineGenDoc: React.FC = () => {
                 }
                 return value;
               })
-              .catch(() => {
-                message.warning(`Key为${job.key}的段落文本生成请求失败了。`);
+              .catch((error) => {
+                const tip = error?.message || "";
+                message.warning(
+                  tip.includes("登录")
+                    ? tip
+                    : `Key为${job.key}的段落文本生成请求失败了。`,
+                );
                 throw new Error(job.key);
               }),
           ),

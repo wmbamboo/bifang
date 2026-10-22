@@ -4,11 +4,13 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.db import get_conn, ok, fail, rows_to_list, _now, new_id
 from app.security import auth as auth_mod
+from app.security.guard import require_api_admin
 from app.security.passwords import hash_password, needs_rehash, verify_password
+from app.security.rbac import is_admin
 from app.services import audit
 
 router = APIRouter(prefix="/mock_api", tags=["mock_api"])
@@ -156,14 +158,14 @@ async def current_user_api(request: Request):
 
 
 @router.get("/users")
-async def users():
+async def users(_admin: dict = Depends(require_api_admin)):
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM users ORDER BY userid").fetchall()
     return ok([_public_user(dict(r)) for r in rows])
 
 
 @router.post("/user/add")
-async def user_add(request: Request):
+async def user_add(request: Request, _admin: dict = Depends(require_api_admin)):
     from app.security.rbac import derive_access, normalize_roles, replace_user_roles
 
     body = await request.json()
@@ -201,7 +203,7 @@ async def user_add(request: Request):
 
 
 @router.post("/user/update")
-async def user_update(request: Request):
+async def user_update(request: Request, _admin: dict = Depends(require_api_admin)):
     from app.security.rbac import derive_access, normalize_roles, replace_user_roles
 
     body = await request.json()
@@ -246,7 +248,11 @@ async def user_update(request: Request):
 
 
 @router.get("/user/delete")
-async def user_delete(userid: str = Query(""), username: str = Query("")):
+async def user_delete(
+    userid: str = Query(""),
+    username: str = Query(""),
+    _admin: dict = Depends(require_api_admin),
+):
     with get_conn() as conn:
         if userid:
             conn.execute("DELETE FROM users WHERE userid=?", (userid,))
@@ -257,6 +263,8 @@ async def user_delete(userid: str = Query(""), username: str = Query("")):
 
 @router.put("/user/password")
 async def change_password(request: Request):
+    """本人可改自己的密码；改他人须 admin。"""
+    actor = auth_mod.require_user(request, on_timeout=audit.on_token_timeout)
     body = await request.json()
     user_id = body.get("userId")
     old_pwd = body.get("oldPwd")
@@ -267,6 +275,9 @@ async def change_password(request: Request):
             row = conn.execute("SELECT * FROM users WHERE username=?", (user_id,)).fetchone()
         if not row:
             return fail("用户不存在", 404)
+        target_name = row["username"]
+        if target_name != actor.get("username") and not is_admin(actor):
+            return fail("无权限", 403)
         if not verify_password(old_pwd or "", row["password"] or ""):
             return fail("原密码错误", 400)
         conn.execute(
@@ -401,14 +412,14 @@ async def post_user_log(request: Request):
 
 # ---- 菜单 ----
 @router.get("/menus")
-async def menus():
+async def menus(_admin: dict = Depends(require_api_admin)):
     with get_conn() as conn:
         rows = conn.execute('SELECT * FROM menus ORDER BY "order", id').fetchall()
     return ok(rows_to_list(rows))
 
 
 @router.get("/tree_menus")
-async def tree_menus():
+async def tree_menus(_admin: dict = Depends(require_api_admin)):
     with get_conn() as conn:
         rows = rows_to_list(conn.execute('SELECT * FROM menus ORDER BY "order", id').fetchall())
     nodes = {r["id"]: {**r, "children": []} for r in rows}
@@ -424,7 +435,7 @@ async def tree_menus():
 
 
 @router.post("/menu/add")
-async def menu_add(request: Request):
+async def menu_add(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     with get_conn() as conn:
         conn.execute(
@@ -451,7 +462,7 @@ async def menu_add(request: Request):
 
 
 @router.post("/menu/update")
-async def menu_update(request: Request):
+async def menu_update(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     with get_conn() as conn:
         conn.execute(
@@ -480,7 +491,11 @@ async def menu_update(request: Request):
 
 
 @router.get("/menu/delete")
-async def menu_delete(menu_id: int = Query(0), menu_name: str = Query("")):
+async def menu_delete(
+    menu_id: int = Query(0),
+    menu_name: str = Query(""),
+    _admin: dict = Depends(require_api_admin),
+):
     with get_conn() as conn:
         if menu_id:
             conn.execute("DELETE FROM menus WHERE id=?", (menu_id,))
@@ -491,7 +506,7 @@ async def menu_delete(menu_id: int = Query(0), menu_name: str = Query("")):
 
 # ---- 角色 ----
 @router.get("/roles")
-async def roles():
+async def roles(_admin: dict = Depends(require_api_admin)):
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM roles ORDER BY id").fetchall()
     data = []
@@ -503,7 +518,7 @@ async def roles():
 
 
 @router.post("/role/add")
-async def role_add(request: Request):
+async def role_add(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     with get_conn() as conn:
         conn.execute(
@@ -524,7 +539,7 @@ async def role_add(request: Request):
 
 
 @router.post("/role/update")
-async def role_update(request: Request):
+async def role_update(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     with get_conn() as conn:
         conn.execute(
@@ -544,7 +559,11 @@ async def role_update(request: Request):
 
 
 @router.get("/role/delete")
-async def role_delete(role_code: str = Query(""), role_name: str = Query("")):
+async def role_delete(
+    role_code: str = Query(""),
+    role_name: str = Query(""),
+    _admin: dict = Depends(require_api_admin),
+):
     with get_conn() as conn:
         conn.execute("DELETE FROM roles WHERE role_code=?", (role_code,))
         conn.execute("DELETE FROM role_res WHERE role_code=?", (role_code,))
@@ -552,18 +571,28 @@ async def role_delete(role_code: str = Query(""), role_name: str = Query("")):
 
 
 @router.get("/cur_user_role_menus")
-@router.get("/role_menus")
-async def role_menus(user_name: str = Query(""), role_code: str = Query("")):
-    """按角色查菜单；若传 user_name 则取该用户全部角色的菜单并集。"""
+async def cur_user_role_menus(request: Request, user_name: str = Query("")):
+    """当前用户（或 admin 查指定用户）的菜单并集。"""
     from app.security.rbac import load_user_roles, menu_auth_union
 
+    actor = auth_mod.require_user(request, on_timeout=audit.on_token_timeout)
+    target = (user_name or actor.get("username") or "").strip()
+    if target != actor.get("username") and not is_admin(actor):
+        return fail("无权限", 403)
     with get_conn() as conn:
-        if user_name:
-            roles = load_user_roles(conn, user_name)
-            data = menu_auth_union(conn, roles)
-            for item in data:
-                item["role_code"] = ",".join(roles)
-            return ok(data)
+        roles = load_user_roles(conn, target)
+        data = menu_auth_union(conn, roles)
+        for item in data:
+            item["role_code"] = ",".join(roles)
+    return ok(data)
+
+
+@router.get("/role_menus")
+async def role_menus(
+    role_code: str = Query(""),
+    _admin: dict = Depends(require_api_admin),
+):
+    with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM role_res WHERE role_code=? AND res_type='menu'",
             (role_code,),
@@ -572,7 +601,7 @@ async def role_menus(user_name: str = Query(""), role_code: str = Query("")):
 
 
 @router.post("/role/add_role_menus")
-async def add_role_menus(request: Request):
+async def add_role_menus(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     if not body:
         return ok(msg="空权限")
@@ -588,7 +617,11 @@ async def add_role_menus(request: Request):
 
 
 @router.get("/role_kbs")
-async def role_kbs(user_name: str = Query(""), role_code: str = Query("")):
+async def role_kbs(
+    user_name: str = Query(""),
+    role_code: str = Query(""),
+    _admin: dict = Depends(require_api_admin),
+):
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM role_res WHERE role_code=? AND res_type='kb'",
@@ -606,7 +639,7 @@ async def role_kbs(user_name: str = Query(""), role_code: str = Query("")):
 
 
 @router.post("/role/add_role_kbs")
-async def add_role_kbs(request: Request):
+async def add_role_kbs(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     if not body:
         return ok(msg="空权限")
@@ -623,14 +656,14 @@ async def add_role_kbs(request: Request):
 
 # ---- 机构 ----
 @router.get("/orgs")
-async def orgs():
+async def orgs(_admin: dict = Depends(require_api_admin)):
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM orgs ORDER BY id").fetchall()
     return ok(rows_to_list(rows))
 
 
 @router.get("/tree_orgs")
-async def tree_orgs():
+async def tree_orgs(_admin: dict = Depends(require_api_admin)):
     with get_conn() as conn:
         rows = rows_to_list(conn.execute("SELECT * FROM orgs ORDER BY id").fetchall())
     nodes = {r["id"]: {**r, "children": []} for r in rows}
@@ -646,7 +679,7 @@ async def tree_orgs():
 
 
 @router.post("/org/add")
-async def org_add(request: Request):
+async def org_add(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     with get_conn() as conn:
         conn.execute(
@@ -667,7 +700,7 @@ async def org_add(request: Request):
 
 
 @router.post("/org/update")
-async def org_update(request: Request):
+async def org_update(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     with get_conn() as conn:
         conn.execute(
@@ -688,7 +721,12 @@ async def org_update(request: Request):
 
 
 @router.get("/org/delete")
-async def org_delete(org_id: int = Query(0), org_name: str = Query(""), pid: int = Query(0)):
+async def org_delete(
+    org_id: int = Query(0),
+    org_name: str = Query(""),
+    pid: int = Query(0),
+    _admin: dict = Depends(require_api_admin),
+):
     with get_conn() as conn:
         if org_id:
             conn.execute("DELETE FROM orgs WHERE id=?", (org_id,))
@@ -698,7 +736,11 @@ async def org_delete(org_id: int = Query(0), org_name: str = Query(""), pid: int
 
 
 @router.get("/org/users")
-async def org_users(org_code: str = Query(""), org_name: str = Query("")):
+async def org_users(
+    org_code: str = Query(""),
+    org_name: str = Query(""),
+    _admin: dict = Depends(require_api_admin),
+):
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM users WHERE org_code=? OR (?='' AND org_code!='')",
@@ -708,7 +750,7 @@ async def org_users(org_code: str = Query(""), org_name: str = Query("")):
 
 
 @router.get("/org/un_users")
-async def un_org_users():
+async def un_org_users(_admin: dict = Depends(require_api_admin)):
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM users WHERE org_code IS NULL OR org_code=''"
@@ -717,7 +759,7 @@ async def un_org_users():
 
 
 @router.post("/org/users_remove")
-async def org_users_remove(request: Request):
+async def org_users_remove(request: Request, _admin: dict = Depends(require_api_admin)):
     usernames = await request.json()
     with get_conn() as conn:
         for u in usernames or []:
@@ -726,7 +768,7 @@ async def org_users_remove(request: Request):
 
 
 @router.post("/org/users_add")
-async def org_users_add(request: Request):
+async def org_users_add(request: Request, _admin: dict = Depends(require_api_admin)):
     body = await request.json()
     org_code = body.get("org_code")
     org_name = body.get("org_name")

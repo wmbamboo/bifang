@@ -5395,3 +5395,999 @@ jest 继续并入 `outlineStructureAssert`，用例两条：① 要点含 3 组�
 4. **RBAC 方案 C（真·多角色）** ← 43.10 已拍板，单独开章，排最后
 
 ⚠️ 排到 RBAC-C 那一单时，**第一条是回滚 43.10 方案 A 的副作用**：A 把「知识库管理」直接授给了 `user` 角色，C 落地后权限按角色并集算，若 A 的授权残留 ⇒ 所有 user 都带知识库管理。必须先删那条 `role_res`、改授 `kb_manager`。
+
+
+## 四十六、PPT 小项超长治理：自动精简重试 + 提示词治根 + table 内容模式判定（2026-10-22 04:45）
+
+### 46.0 背景（用户实测现象，不是猜的）
+
+知识库 PPT 生成「宝能系统持股路径」页，第 5 点报「第 5 点描述须为 20～70 字，当前 172 字」。
+
+已确认**校验本身是对的**：172 字里没有 `[文档N]`，`pptItemLength`（`ViewItem4Ppt.ts:12-14`）已经是剥离引用后的长度，**不是 42.2 失效**。
+
+根因是三条约束互相打架：
+
+| # | 约束 | 位置 |
+|---|---|---|
+| a | `MAX_ITEMS = 5`，该页已满 5 条 ⇒ 拆不出第 6 条 | `SliderDrawer.tsx:25` |
+| b | 提示词写死「本页必须且只能输出 N 行……即使其中列举了多个名称，也不要拆成多行」⇒ 不许拆 | `ViewItem4Ppt.ts:1262-1263` |
+| c | 小项描述上限 70 字 | `PPT_ITEM_DESC_MAX` `ViewItem4Ppt.ts:385` |
+
+⇒ 三条同时成立时模型只能违反其一，实测它选择违反字数。
+
+附：172 字里近一半是公司全称堆砌（「截至华润信托股份有限公司、深圳市钜盛华股份有限公司通过……」），删掉全称即可压到 45 字左右，PPT 里本就该用简称。
+
+### 46.1 生成后自动精简重试（P0）
+
+现状：`shortenSlideItem(_index, item, dMax)` **已实现**（`KbOutlineGenPpt.tsx:769`），prompt 也写对了（「保留全部数字与出处，只删连接词与重复限定」），但**只挂在 SliderDrawer 的手动按钮上**（`SliderDrawer.tsx:267`，条件 `dOver && props.onShortenItem && !asColumn && !asMetric`）。
+
+改法：
+1. 在**生成内容写入前**（`KbOutlineGenPpt.tsx` / `AiOutlineGenPpt.tsx` 调 `theSlide.setViewItemsStructured(items)` 之前），先扫一遍 items：用 `pptItemLength(item.content)` 对比该条的 dMax（按 layout 取：metric → `PPT_METRIC_DESC_MAX`=16 / columns → 28 / 其余 → `PPT_ITEM_DESC_MAX`=70）。
+2. 对**超长条目**调 `shortenSlideItem` 压缩后替换。**限流**：最多 3 条；单条失败静默保留原文，**不得因压缩失败而中断生成或抛错**。
+3. 压完再走 `setViewItemsStructured`，仍失败才报橙叹号。
+
+硬约束：
+- **不得**改变条目数量、**不得**改 layout —— 这两项会撞模板容量，属 46.4 范围，本单不碰。
+- 必须给用户可见反馈：有条目被压缩时 `message.info`（如「已自动精简 2 条超长描述」），否则用户不知道内容被动过。
+- 复用现有 `shortenSlideItem`，**不要**新写一份压缩 prompt。
+
+### 46.2 提示词治根（P0）
+
+`buildPptItemFormatPrompt`（`ViewItem4Ppt.ts:1259-1271`）在 `countLine` 之后、格式示范之前追加两条：
+
+- 「公司/机构/品牌一律用简称（如「华润信托」不必写「华润信托股份有限公司」），禁止为凑字数堆砌全称。」
+- 「一条描述若含 3 个以上数字，必须砍掉铺垫，只留「主体 + 动作 + 数字」；超过 70 字即视为失败。」
+
+⚠️ `countLine` 里那句「即使其中列举了多个名称，也不要拆成多行」**本次先不动**。去掉它会引发条数与模板容量不匹配（见 46.4），属另一个风险面。
+
+### 46.3 table 版式改为「标题 + 内容模式」双源判定（P0）
+
+现状只有标题词，`coerceLayoutBySlideTitle`（`outlineJson.ts:167`）：
+```ts
+const tableCue = /价格带|对照表|矩阵表|排行表|分档表|表格/.test(t);
+```
+标题不含这些词就永不抬 table，而「宝能系统持股路径」这类数据并列页恰好吃亏。
+
+改法：在 `outlineJson.ts` 新增 `tipsSuggestTableLayout(tips: string[] | undefined): boolean`，与 `tipsSuggestMetricLayout`（`:112`）并列。**阈值必须保守，防误伤 metric 页**：
+
+```
+1. list.length >= 3                     // 表格至少 3 行
+2. 每条 tips 都含至少一个数字 /\d/        // 每行都有数值，才是「记录行」
+3. 非数字字符占比 >= 40%                 // 是「标签+数值」，不是纯数字短语（防 metric 误伤）
+4. tips 平均长度 <= 24 字                // 短条目，非叙事句
+```
+
+然后把 `tableCue` 改成 `原标题正则 || tipsSuggestTableLayout(tips)`。**保持 table 判定在 metric 判定之前**（`:167-171` 现有顺序不变）——table 单格上限 120 字，比 metric 的 16 字宽松得多，命中时优先用宽松的。
+
+⚠️ 第 3 条是防误伤的关键：metric 页的 tips 多为「586亿」「42.3%」这类**纯数字短语**，非数字字符占比极低，因此不会被误抬成 table。**这条必须写 jest 反验**（见 46.7 第 1 条）。
+
+### 46.4 拆行权限 —— 本单不做，先记债
+
+放开「一条要点只对应 1 行」需要同步放宽 `MAX_ITEMS`（现 5）与 list 模板容量。**必须先验模板能吃几条**（打开对应版式的占位符个数实测）才能改，不能凭感觉放宽。本单不动，等实测结论再开单。
+
+### 46.5 生成后「建议切表格」提示（P1，时间紧可延后）
+
+`validateSlideViewItems` 在 list / progress 分支报错时追加条件提示：
+```
+超长条目数 >= 2
+且其中至少 2 条 pptItemLength > 100
+且 countNumericUnitGroups(该条描述) >= 2
+⇒ 错误文案末尾追加：「本页多条描述超长且含多组数字，建议在幻灯片设置中切换为「表格」版式。」
+```
+**只提示、不自动切换** —— 自动切换需要把描述重组成管道行（`title` 字段承载 `品类|价带|销量` 结构），属新行为，风险另议。
+
+### 46.6 执行序
+
+1. 46.1 自动精简重试（**Kb / Ai 两页都要接**，只接一页会漏）
+2. 46.2 提示词两条
+3. 46.3 table 双源判定 + `tipsSuggestTableLayout`
+4. 46.5 建议切表提示（可延后）
+5. jest
+
+### 46.7 验收（我会逐条判，回执只写「已完成」不给过）
+
+jest 并入既有 `outlineStructureAssert` 套件（**不新建文件**），新增 4 条：
+
+1. **反验（最重要）**：tips 为纯数字短语（如 `['586亿','42.3%','1.2万']`）⇒ `tipsSuggestTableLayout` 必须返回 **false**；且 `coerceLayoutBySlideTitle` 仍判 metric，**不能被抬成 table**
+2. tips 为「标签+数值」且 ≥3 条（如 `['欧莱雅 586亿','雅诗兰黛 42.3%','宝洁 1.2万']`）⇒ 判 **table**
+3. 含 `[文档13]` 的 172 字描述，经 `shortenSlideItem` 压缩后 `pptItemLength <= 70`，且返回值不含 `[文档`
+4. `buildPptItemFormatPrompt()` 输出含「简称」与「3 个以上数字」两条子串断言
+
+UI 验收（须用户操作，代码侧不用等）：
+- 重生成「宝能系统持股路径」页，看第 5 点是否自动压到 70 内且数字保留
+- 若仍超长，看是否出现「建议切换为表格」提示
+
+### 46.8 下一单
+
+本单完成后做 **RBAC 方案 C（真·多角色）**：
+
+1. **第一条必须先回滚 43.10 方案 A 的副作用** —— 删除当时授给 `user` 角色的「知识库管理」菜单授权（`role_res`），改授新的 `kb_manager` 角色。否则 C 落地后权限按角色并集算，**所有 user 都会带上知识库管理**，把 A 的粗粒度固化下来。
+2. 再建 `user_roles` 关联表、`_actor` 返回角色集合、前端菜单按并集渲染、用户管理界面支持勾选多角色。
+
+⚠️ 后续任何人（我或用户）再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。
+
+
+## 四十七、PPT 写作大纲栏：展示简单层提示词 + 编辑态分层（对齐文档侧 38.5 / 39.1）（2026-10-22 05:15）
+
+### 47.0 需求与现状
+
+用户要求：PPT 生成的「写作大纲」栏要参照文章（Doc）生成的做法 —— **展示面只给简单提示词，不展示整串模板；编辑态也要分层**。
+
+现状（已核实）：
+
+| 位置 | 现状 |
+|---|---|
+| `OutlinePromptPpt.tsx:89-91` | 直接渲染 `{slide.prompt}` 整串（含【页面内容】【页面其他功能块】等契约） |
+| `EditablePromptCollapse4Ppt.tsx:66-76` | `contentShower` = `<pre>{slide.prompt}</pre>` 整串 |
+| `EditablePromptCollapse4Ppt.tsx:79-84` | `contentEditor` = 单个 `Input.TextArea` 编辑整串 prompt |
+| `KbOutlineGenPpt.tsx:775` / `AiOutlineGenPpt.tsx` 同构 | `cbSavePromptResult(key, newPrompt: string)` 只能保存整串 |
+
+**Ai 页也要改**（`AiOutlineGenPpt.tsx:832` 同样有「写作大纲」栏），只改 Kb 会漏一半。
+
+### 47.1 ⚠️ PPT 侧与文档侧的字段差异（别照抄文档侧）
+
+`Slide`（`ViewItem4Ppt.ts:1594-1607`）字段只有：`index / title / subTitle / layout / key / label / prompt / content / genError / viewItems`。
+
+**没有**文档侧的 `role / question / pointGuide / allowTable / allowFigure / promptManual`。所以 `simplePptSlidePrompt` 不能照抄 `simpleDocParagraphPrompt`（`ViewItem4Doc.ts:444`）的「岗位视角 / 本章要回答的问题」那两块。
+
+PPT 侧的语义来源是：
+- **要点真源 = `slide.subTitle`**（`role: text` 多行），用 `parseSlideTips`（`ViewItem4Ppt.ts:507`）解析
+- 版式 = `slide.layout`，中文名可直接复用 `layoutLabel`（`outlineSerialize.ts`）
+- 条数口径 = `countOutlineTips(slide.subTitle)`；metric_list 拆分用 `splitMetricListTips`（`:526`）
+
+### 47.2 新增 `simplePptSlidePrompt`（P0）
+
+在 `ViewItem4Ppt.ts` 新增（**不要**放进 `ViewItem4Doc.ts`）：
+
+```ts
+export function simplePptSlidePrompt(slide: Slide): string
+```
+
+输出形态（多行，展示面用 `whiteSpace: "pre-wrap"`）：
+```
+【{slide.title}】版式：{layoutLabel(slide.layout)}
+本页要点：1) [数据卡] xxx；2) [要点] xxx
+```
+规则：
+- `subTitle` 解析不出要点时退化成一行提示「（本页未解析到要点，完整提示词见编辑态）」，**不得**回退去展示整串 prompt
+- role 显示：`metric` → `[数据卡]`，`list` → `[要点]`（与 `ViewItem4Ppt.ts:2210` 现有口径一致）
+- 输出里**不得**出现契约词（「请优先采信」「禁止」「【输出格式】」「【本页标题】」等）——这条要写 jest 断言
+
+### 47.3 展示层改造（P0）
+
+`OutlinePromptPpt.tsx:89-91` 的 `children` 从 `{slide.prompt}` 改为「chips + 简单层」，照抄 `OutlinePromptDoc.tsx:94-118` 的结构：
+
+- **chips（数字口径）**：版式 `layoutLabel(slide.layout)`；要点 `countOutlineTips` 条；`metric_list` 时拆成「数据卡 M / 要点 K」；条数上限（list ≤5 / metric 2～9 / metric_list 8 / columns 20）
+- **正文（语义）**：`simplePptSlidePrompt(slide)`
+
+### 47.4 编辑态分层（P0）
+
+`EditablePromptCollapse4Ppt.tsx` 照抄 `EditablePromptCollapse4Doc.tsx:257-290` 的双层模式：
+
+- **上层「简单层」**：
+  - 版式 `Select`（选项取 `LAYOUTS`，显示 `layoutLabel`）
+  - 要点行列表：每行 = role 切换（`metric`/`list`）+ Input + 删除按钮；底部「添加要点行」
+- **下层「高级」**：整串 `slide.prompt` 的 `TextArea`，**默认折叠**，标注「改这里会覆盖简单层」
+
+判定：仿 `paragraphHasStructuredPrompt`，加 `slideHasStructuredPrompt(slide)` = `parseSlideTips(slide.subTitle).length > 0`。为 false（存量无结构化要点）时**保留现有单个 TextArea 整串编辑**，不要强行分层。
+
+### 47.5 保存链路扩 patch（P0）
+
+现状 `cbSaveResultFn:(key:string,newPrompt:string)=>void` 只收整串。改为仿文档侧 `DocPromptSavePatch`：
+
+```ts
+export type PptPromptSavePatch = { subTitle?: string; layout?: SlideLayout; prompt?: string };
+```
+
+- `EditablePromptCollapse4Ppt` 的 `cbSaveResultFn` 签名改为 `(key: string, patch: PptPromptSavePatch | string)`
+- `OutlinePromptPpt.tsx:72-75` 的 `onSaveResultFn` 同步改签名
+- `KbOutlineGenPpt.tsx:775` / `AiOutlineGenPpt.tsx` 的 `cbSavePromptResult` 同步支持 patch
+
+### 47.6 🔴 一致性硬约束（这条最容易做错）
+
+生成时发送的是（`KbOutlineGenPpt.tsx:561`、`AiOutlineGenPpt.tsx:509`）：
+```
+slide.prompt + KB_WRITING_CONSTRAINT_PROMPT + buildPptItemFormatPrompt(countOutlineTips(slide.subTitle), slide.layout, ...)
+```
+
+⇒ **`slide.prompt` 和 `slide.subTitle` 是两条独立数据**，要点在两边各存一份。
+
+因此：简单层改了要点行 / 版式后，**必须同时更新 `slide.subTitle` 与 `slide.prompt` 里的要点段**，否则会出现「`buildPptItemFormatPrompt` 按新条数约束、而 prompt 里还是旧要点」的打架，模型必然输出条数不符。
+
+要点段同步做法：用正则定位 `slide.prompt` 里 `【页面其他功能块】` / `【大纲要点】` 之后的要点行整体替换；**找不到标记时追加一段**，不要静默丢弃。
+
+### 47.7 执行序
+
+1. **先确认四十六是否已提交**（回执 05:08 已完成但 `git log` 仍停在 `61764c4`，改动可能还在工作区）。未提交就先提交四十六，别让两个单的改动混在工作区。
+2. 47.2 `simplePptSlidePrompt`
+3. 47.3 展示层（Kb + Ai 两页都走同一个 `OutlinePromptPpt`，改一处即可，但要确认 Ai 页也用了它）
+4. 47.4 编辑态分层
+5. 47.5 保存 patch
+6. jest
+
+### 47.8 验收（我会逐条判）
+
+jest 并入既有 `outlineStructureAssert` 套件（不新建文件），新增 4 条：
+
+1. `simplePptSlidePrompt` 对含 `subTitle` 的 slide：输出含页标题、含 `layoutLabel`、含编号要点；**不含**「请优先采信」「禁止」「【输出格式】」「【本页标题】」任一契约词
+2. `subTitle` 为空 ⇒ 返回退化文案，**不抛错、不回退成整串 prompt**
+3. **一致性**：改一条要点行后，`countOutlineTips(slide.subTitle)` 与 prompt 要点段行数**必须相等**（这条是 47.6 的回归闸）
+4. `slideHasStructuredPrompt` 为 false 时编辑态走整串 TextArea 分支（渲染不报错）
+
+UI 验收（须用户操作）：
+- PPT 生成页写作大纲栏不再显示整串契约，只显示 chips + 简单层
+- 点编辑：上半是版式 + 要点行，下半折叠的高级整串
+- 改一条要点后重新生成，确认条数与版式约束跟着变
+
+### 47.9 下一单
+
+本单完成后做 **RBAC 方案 C（真·多角色）**：
+
+1. **第一条必须先回滚 43.10 方案 A 的副作用** —— 删除当时授给 `user` 角色的「知识库管理」菜单授权（`role_res`），改授新的 `kb_manager` 角色。否则 C 落地后权限按角色并集算，**所有 user 都会带上知识库管理**。
+2. 再建 `user_roles` 关联表、`_actor` 返回角色集合、前端菜单按并集渲染、用户管理界面支持勾选多角色。
+
+⚠️ 后续任何人（我或用户）再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。
+
+
+## 四十八、四十七验收判卷：两处收口（版式名两份真相 / 高级区手改被静默覆盖）（2026-10-22 05:30）
+
+### 48.0 判卷结论：四十七**通过**
+
+实测证据（不是复述回执）：
+
+| 项 | 证据 |
+|---|---|
+| 简单层不含契约 | `simplePptSlidePrompt`（`ViewItem4Ppt.ts:1108`）输出只有「【标题】版式：X」+「本页要点：1) [要点] …」，无「请优先采信/禁止/【输出格式】」 |
+| 47.6 一致性 | `syncOutlineTipsIntoPrompt`（`:1136`）覆盖了三种形态：【大纲要点】/【页面其他功能块】/追加到【写作任务】前，并有 `countPromptOutlineTipLines`（`:1165`）专供一致性断言 |
+| 展示层 | `OutlinePromptPpt.tsx:80-92` chips + 简单层，结构与文档侧 `OutlinePromptDoc.tsx:94-118` 一致 |
+| 编辑层分层 | `EditablePromptCollapse4Ppt.tsx:216` 简单层 Tag / `:236` 版式 Select / `:253` role Select / `:276` 添加要点行 / `:289` 高级折叠 |
+| Ai 页也接了 | `AiOutlineGenPpt.tsx:711` 与 `KbOutlineGenPpt.tsx:775` 都改成 `applyPptPromptSavePatch(slide, patch)` |
+| jest | **我自己跑的：20 过**（exit=0），含四十七 4 条 |
+
+顺带澄清我上一轮的担心不成立：42.4 用例虽改成 2 条 tips，但仍是 **3 组数字**，且新增了 `expect(tipsSuggestTableLayout(tips)).toBe(false)` 反断言 ⇒ 覆盖没被削弱，反而更严。
+
+### 48.1 版式中文名两份真相（P1）
+
+- `pptLayoutLabelZh`（`ViewItem4Ppt.ts:1075`）与 `layoutLabel`（`outlineSerialize.ts:177`）功能重复
+- 差异：前者有 `progress → '进度'`，后者**没有** progress 分支（落到 default 返回「列表」）
+
+后果：同一张 progress 页 —— 写作大纲展示层（走 `pptLayoutLabelZh`）显示「进度」，编辑态 label（`EditablePromptCollapse4Ppt.tsx:130` 走 `layoutLabel`）显示「列表」，**同一页两个名字**。以后加版式要改两处。
+
+修法：
+1. `layoutLabel` 补上 `progress → '进度'`（顺带核对 8 种 layout 无遗漏）
+2. `pptLayoutLabelZh` 改为 `return layoutLabel(layout)`，保留导出名以免动调用点
+
+### 48.2 🔴 高级区手改要点段会被简单层**静默覆盖**（P0）
+
+链路：
+1. `EditablePromptCollapse4Ppt.tsx:105-108` 的 `onSave` **总是**构造 `{subTitle, layout, prompt}` 三字段 patch，`subTitle` 来自 `formatSlideTips(draft.tips)`
+2. `applyPptPromptSavePatch`（`ViewItem4Ppt.ts:1189`）：`tips !== undefined` 且 `patch.prompt !== undefined` ⇒ 执行 `syncOutlineTipsIntoPrompt(draft.prompt, draft.tips)`
+3. `draft.tips` 初始化自 `slide.subTitle`（`:78`）。**用户在高级 TextArea 里改了要点段、但没动简单层 ⇒ 保存时 prompt 要点段被旧 tips 覆盖，且没有任何提示**
+
+你自己的回执「风险点」里写到了这条（「高级区手改要点段保存时会被简单层 tips 覆盖」），但没修。**用户手改的内容丢了且不知情，这是会挨骂的那种 bug。**
+
+修法：
+- **主修**：`onSave` 只在 tips 真正被编辑时才带 `subTitle`。加 `tipsDirty` 标记（初始化 false；`removeTip`/`addTip`/role 变更/要点文本 onChange 时置 true）。未 dirty 时 patch 只带 `{layout?, prompt}` ⇒ 走 `applyPptPromptSavePatch` 的 else 分支，不会 sync。
+- **兜底**：若 `draft.prompt !== slide.prompt`（高级区确实被改过），优先保留 prompt、不做 sync，并 `message.info`「高级提示词已改动，要点段以高级区为准」。
+
+### 48.3 jest（并入 `outlineStructureAssert`，不新建文件）
+
+1. **回归闸（最重要）**：只改高级 prompt 的要点段、不动简单层 ⇒ 保存后 `slide.prompt` **保留手改内容**（当前会被覆盖，这条现在应该失败）
+2. 只改简单层要点 ⇒ 保存后 prompt 要点段同步（强化既有一致性用例）
+3. `pptLayoutLabelZh` 与 `layoutLabel` 对全部 8 种 layout 返回值**全等**
+
+### 48.4 UI 验收（须用户操作，代码侧不用等）
+
+- 打开 PPT 生成页「写作大纲」栏：只显示 chips + 简单层，不再有整串契约
+- 点编辑：上半版式 + 要点行，下半折叠的「高级」
+- 改一条要点后重新生成该页，确认条数/版式约束跟着变
+- **验收 48.2**：在高级区改一句要点文字 → 保存 → 重新打开，确认改动还在（当前版本会丢）
+
+### 48.5 验收判卷补充（2026-10-22 05:35，我已验）
+
+**四十八通过**。实测证据：
+
+- `layoutLabel`（`outlineSerialize.ts:177`）已补 `progress → "进度"`；`pptLayoutLabelZh`（`ViewItem4Ppt.ts:1075`）改为 `return layoutLabel(layout)`
+- `tipsDirty`（`EditablePromptCollapse4Ppt.tsx:68`）+ `buildDualLayerPptSavePatch`（`ViewItem4Ppt.ts:1192`）纯函数，返回 `{patch, infoMsg}`；`applyPptPromptSavePatch:1241` 用 `syncTipsIntoPrompt !== false` 消费
+- **jest 我实跑：23 过**（exit=0），含四十八 3 条
+- 回归闸用例（`:380`）写得扎实：构造含【本页标题】【大纲要点】【写作任务】的真实 prompt → 模拟高级手改 → 三重断言（`subTitle` undefined / `syncTipsIntoPrompt` false / prompt 保留手改且不含旧要点）
+
+⚠️ **本单改动尚未提交**（HEAD 仍是 `f4f27d1`，工作区 11 个文件）。**开工下一单前必须先提交本单**，别让两个单的改动混在工作区。
+
+两条记债（本单不修）：
+1. **简单层与高级区同时改** ⇒ 以高级 prompt 为准但仍写 `subTitle`，导致条数真源更新而 prompt 要点段未同步（47.6 一致性的一个例外）。现有 `message.info` 已提示，但可在两者都 dirty 时把提示加强为「条数已更新但要点段未同步，请确认一致」。
+2. **值级循环依赖已确认存在**：`outlineSerialize.ts:1-12` import `ViewItem4Ppt` 的运行时函数，`ViewItem4Ppt.ts:6` 反向 import `layoutLabel`。因只在函数体内调用（非模块顶层）且 jest 通过，当前可接受；若将来 `layoutLabel` 被移到模块顶层调用链上，需把它抽到无依赖的小模块。
+
+### 48.6 下一单
+
+1. **先提交四十八**（见上）
+2. 再做 **RBAC 方案 C（真·多角色）**：
+   - **第一条必须先回滚 43.10 方案 A 的副作用** —— 删除当时授给 `user` 角色的「知识库管理」菜单授权（`role_res`），改授新的 `kb_manager` 角色。否则 C 落地后权限按角色并集算，**所有 user 都会带上知识库管理**。
+   - 再建 `user_roles` 关联表、`_actor` 返回角色集合、前端菜单按并集渲染、用户管理界面支持勾选多角色。
+
+⚠️ 后续任何人（我或用户）再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。
+
+
+## 四十九、后端接口鉴权全面加固（P0：全站除 feedback 外零鉴权）
+
+> 写章时间 2026-10-22 07:10。本单是我（WorkBuddy）验收 RBAC-C 时**实测发现**的安全问题，
+> 不是用户提的需求。优先级高于一切功能单。
+
+### 49.0 为什么必须现在做（以下全部是实测，不是推测）
+
+**证据 1 —— 无 token 直接拖走全部用户 PII：**
+
+```
+$ curl -s http://127.0.0.1:7861/mock_api/users
+{"code":200,...,"data":[{"username":"admin","email":"<邮箱>","phone":null,
+ "dept":"AI技术部","address":null,...}, ...]}
+```
+
+注意：这个请求**没有带任何身份**，返回 200。
+
+**证据 2 —— 鉴权覆盖率普查（`grep -c "require_user|current_user|_actor"`）：**
+
+| router | 前缀 | 路由数 | 鉴权处 |
+|---|---|---|---|
+| `mock_api.py` | `/mock_api` | 38 | 4（仅 CurrentUser×2 + 审计 logs×2） |
+| `knowledge_base.py` | `/knowledge_base` | 26 | **0** |
+| `chat.py` | `/chat` | 12 | **0** |
+| `kb_chat.py` | — | 1 | **0** |
+| `feedback.py` | `/api/feedback` | 11 | 9 ✅ |
+
+**77 个路由里只有 feedback 那 11 个是守住的。** 四十三章做的「真 token 校验」我当时只针对
+`feedback.py` 的 `_actor` 写，没有做全站普查 —— 这是我的疏漏，等于堵了前门、后门大开。
+
+**证据 3 —— 这些接口现在全是裸的：**
+
+| 接口 | 后果 |
+|---|---|
+| `POST /knowledge_base/delete_knowledge_base` | 匿名删库 |
+| `POST /knowledge_base/delete_docs` | 匿名删文档 |
+| `POST /mock_api/user/add` | 匿名建号，且 `roles` 由请求体决定 ⇒ **直接建 admin** |
+| `POST /mock_api/user/update` | 匿名改任意用户角色 ⇒ **提权** |
+| `GET /mock_api/user/delete` | 匿名删号 |
+| `PUT /mock_api/user/password` | 匿名改任意用户密码 |
+| `POST /mock_api/role/add_role_menus`<br>`POST /mock_api/role/add_role_kbs` | **匿名给自己角色授权任意菜单/知识库** ⇒ 四十八刚建好的 RBAC-C 形同虚设 |
+| `/menu/*`、`/org/*` | 匿名改菜单与组织 |
+
+### 49.1 前置：先把未提交的改动落定
+
+HEAD 仍是 `c5c15a4`（四十八）。工作区有 **23 个文件**未提交，混着两单：
+
+1. RBAC 方案 C（`rbac.py`、`db.py`、`auth.py`、`access.ts`、`UserForm.tsx` …）
+2. 06:56 那单「普通用户可看自己的反馈」（`routes.ts`、`FeedbackAdmin.tsx`、`FeedbackBadge.tsx`、`menu.ts`）
+
+**按 48.5 定的规则，开工本单前必须先拆成两个 commit 提交**，否则本单再叠上去就回滚不到
+「RBAC-C 完成」这个已知好状态。
+
+> 顺带确认：RBAC-C 本身我验过了，**做得对**——数据库实测
+> `lizy -> kb_manager` + `lizy -> user`（并集，未污染全体 user）；
+> `role_res` 里 kb 授权只剩 `admin` 和 `kb_manager`，**43.10A 给 user 的授权已删干净**；
+> 反馈页只读门控也正确（`FeedbackAdmin.tsx:48` `isAdmin` 控写操作、非 admin 默认 `mine=1`）。
+
+### 49.2 方案：中间件全局守卫 + 分级依赖 + 两阶段开关
+
+**不要逐路由加鉴权** —— 77 个路由逐个改既慢又必漏。用中间件一网打尽。
+
+**49.2.1 新增 `backend/app/security/guard.py`**
+
+- `AuthGuardMiddleware`：除白名单外全部要求有效 token，无/失效 → `401`
+  （JSON 体，别返回 HTML，前端 `requestErrorConfig` 才好处理）。
+- 复用 `app/security/auth.py` 已有的 `current_user()` / token 校验逻辑，**不要另写一套判定**。
+- 两个开关（走 `Settings`，见下）：
+  - `AUTH_GUARD_MODE`：`off` / `log` / `enforce`，默认 `enforce`
+  - `log` 模式下**只写 `user_logs` 不拦截**，用来观察一轮有没有误伤
+- ⚠️ 配置项必须**在 `Settings` 里声明字段**，不能 `os.getenv`（这是 43.1 修过的坑：
+  `extra="ignore"` 会静默丢弃未声明的键）。
+
+**49.2.2 白名单（放行，不鉴权）**
+
+| 路径 | 理由 |
+|---|---|
+| `OPTIONS *` | CORS 预检，浏览器自动发且**不带 header** |
+| `/`、`/health` | 健康检查（`main.py:61/71`） |
+| `POST /mock_api/login/account` | 登录本身 |
+| `POST /mock_api/login/outLogin` | 退出（无 token 也要能退，否则登不出去） |
+| `/static`、`/assets`、`/docs`、`/openapi.json` | 静态/文档 |
+
+**49.2.3 分级依赖（中间件只管「已登录」，敏感的另加角色闸）**
+
+在 `guard.py` 里导出三个 FastAPI 依赖：
+
+- `require_api_user` —— 已登录（中间件已保证，显式声明用）
+- `require_api_admin` —— `is_admin(actor)`，否则 `403`
+- `require_api_kb` —— `admin` 或 `kb_manager`，否则 `403`
+
+### 49.3 ⚠️ 最大风险：流式接口可能不带 token
+
+前端 `requestErrorConfig.ts:90-96` 是 umi-request 的**全局** requestInterceptors，
+统一塞 `config.headers.token`，所以绝大多数请求是安全的。
+
+但**流式接口要单独验**：`chat.py` / `kb_chat.py` 的 SSE 如果是 `EventSource` 或裸 `fetch` 直连，
+**不会经过这个拦截器**，一上 enforce 就会全部 401，生成功能直接瘫痪。
+
+处理顺序：
+1. 先全局 grep `EventSource` / `fetch(` 直连后端的点；
+2. 能改成走 `request`（带 token）就改；
+3. 改不动的（SSE 协议限制）⇒ 后端对该路径**改用 query 参数 `?token=` 校验**，
+   **不要**直接塞白名单放行 —— 白名单等于不鉴权，生成接口是有成本的资源。
+
+### 49.4 角色闸映射表（照此加 `Depends`）
+
+`mock_api`（前缀 `/mock_api`）下：
+
+| 接口 | 依赖 |
+|---|---|
+| `/users`、`/user/add`、`/user/update`、`/user/delete` | `require_api_admin` |
+| `/user/password` | **特例**：`body.username` 等于自己 ⇒ 放行；否则 `require_api_admin`。<br>⚠️ 个人中心改自己密码走这条，一刀切 admin 会直接打断，必须按此判 |
+| `/user/logs`、`/login/logs` | `require_api_admin`（已有 `is_admin` 分支，**保留不动**，别重复加） |
+| `/menus`、`/tree_menus`、`/menu/add`、`/menu/update`、`/menu/delete` | `require_api_admin` |
+| `/roles`、`/role/add`、`/role/update`、`/role/delete`、`/role_menus`、`/role/add_role_menus`、`/role_kbs`、`/role/add_role_kbs` | `require_api_admin` |
+| `/orgs` 及 `/org/*` 全部 | `require_api_admin` |
+| `/cur_user_role_menus`、`/user-log`、`/CurrentUser`、`/currentUser` | `require_api_user`（中间件已覆盖，可不显式加） |
+
+`knowledge_base`（前缀 `/knowledge_base`）下：
+
+| 接口 | 依赖 |
+|---|---|
+| `/delete_knowledge_base`、`/delete_docs` | `require_api_kb`（admin 或 kb_manager） |
+| 其余 | `require_api_user`（中间件已覆盖） |
+
+> 知识库是核心资产，删除不能只对「已登录」开放 —— 否则 lizy 之外的任意 user 都能删。
+
+### 49.5 验收（必须 curl 实测并把输出贴进 handoff，不接受「已完成」三个字）
+
+前置：重启后端（中间件 + 补丁要生效）。
+
+| # | 用例 | 期望 |
+|---|---|---|
+| 1 | 无 token `GET /mock_api/users` | **401**（修复前是 200，这是回归闸） |
+| 2 | 无 token `POST /knowledge_base/delete_docs`（空 body） | **401**，且**不得进入业务逻辑**（看日志无 SQL） |
+| 3 | lizy token `GET /mock_api/users` | **403**（lizy = user + kb_manager，非 admin） |
+| 4 | hezl token `GET /mock_api/users` | 200 |
+| 5 | lizy token `POST /knowledge_base/delete_docs` | 200（kb_manager 有权限） |
+| 6 | 普通 user token 同上 | 403 |
+| 7 | 无 token `POST /mock_api/login/account` | 仍 200（白名单，别把登录自己锁死） |
+| 8 | 无 token `GET /health` | 200 |
+| 9 | 无 token `GET /mock_api/roles` | 401 |
+| 10 | 前端冒烟：登录 → 知识库列表 → 生成一页 → 提交反馈 → 审计页 | 全通，无 401 |
+
+第 3、5、6 条是角色闸的关键验证：**必须证明 kb_manager 能管知识库、但不能管用户**。
+
+pytest：新增 `backend/tests/test_auth_guard.py`，至少覆盖 1/2/3/7/8。
+
+### 49.6 顺带：仓库卫生（`frontend/public/` 有 Windows 附件标记垃圾）
+
+```
+ D "frontend/public/pptTemplate-simple - 副本 (2).pptx:Zone.Identifier"
+ D "frontend/public/pptTemplate-simple - 副本.pptx:Zone.Identifier"
+?? "frontend/public/pptTemplate-simple - 副本 (2).pptxZone.Identifier"   ← 文件名编码已错乱
+?? "frontend/public/pptTemplate-simple - 副本.pptxZone.Identifier"
+```
+
+`:Zone.Identifier` 是 Windows 从邮件/IM 下载文件时自动生成的安全标记（NTFS 备用数据流），
+**无任何用途**，且 UNC 下读出来文件名里的冒号丢了、变成两份不同命名的未跟踪文件。
+
+处理：
+1. `.gitignore` 加 `*:Zone.Identifier` 和 `**/*Zone.Identifier*`；
+2. `git rm --cached` 掉已入库的那两个；
+3. ⚠️ **不要**删 `pptTemplate-simple - 副本.pptx`、`副本 (2).pptx`、`副本20260925.pptx`
+   这几个本体 —— 是不是测试残留要问用户，AI 不擅自删用户的文件。
+
+### 49.7 客户端 IP 采集链路（2026-10-22 07:05 用户实测报告，与本单同源，一并做）
+
+**现象**：登录日志 IP 全是 `127.0.0.1`，手机访问也是。
+
+**结论：不是取值逻辑写错，是链路上没人传真实 IP；而且一旦传了就必然被伪造。**
+
+**49.7.1 证据链（我已实测）**
+
+| 环节 | 实测 |
+|---|---|
+| 取值代码 | `auth.py:40-49` `_client_ip()` 顺序对：`X-Forwarded-For` → `X-Real-IP` → `request.client.host` ✅ |
+| 调用点 | `mock_api.py:59/85/103/131` 都走 `client_meta(request)` ✅ |
+| 前端 baseURL | `utils/bfBaseUrl.ts:12-14` 默认返回 `window.location.origin` ⇒ 手机访问 `http://<PC内网IP>:8000`，请求打到 **8000 同源**，由 umi dev proxy 转发 |
+| 前端 proxy | `config/proxy.ts` 的 dev 段有 `'/mock_api/'` → `127.0.0.1:7861`，但**全域 `xfwd` 零命中** ⇒ http-proxy-middleware **不会**加 `X-Forwarded-For` |
+| 后端启动 | `start.sh:22` `uvicorn --host 0.0.0.0 --port 7861 --reload`，**无 `--proxy-headers`** |
+| 结果 | 后端 TCP 对端恒为 `127.0.0.1`（dev server 在本机发起）⇒ 落回 `request.client.host` |
+
+**49.7.2 更严重的问题：`_client_ip` 无条件信任 header ⇒ 审计日志可被任意伪造**
+
+我为了取证，直接打后端并自带一个**不存在**的 IP：
+
+```
+$ curl -X POST http://127.0.0.1:7861/mock_api/login/account \
+    -H "X-Forwarded-For: 203.0.113.7" -d '{"username":"__probe_ip__","password":"x"}'
+
+$ login_logs 最新一条：
+  __probe_ip__ | login_fail | ip= 203.0.113.7 | 2026-10-22T07:06:34
+```
+
+⇒ **代码采信了客户端自报的 IP。** 任何人加一个 header 就能把登录记录写成任意 IP。
+所以「全是 127.0.0.1」和「可以随便写」是同一个洞的两面 —— 只补前者会得到一份**看起来很真但可伪造**的审计日志。
+
+**49.7.3 修法（三步，缺一不可）**
+
+**① 前端 proxy：覆盖写 `X-Real-IP`，不要用 `xfwd`**
+
+`xfwd: true` 是**追加**语义：客户端自带的伪造 IP 会留在最左，而 `_client_ip` 取 `split(",")[0]` ⇒ 仍然取到伪造值。必须用 `onProxyReq` **覆盖**：
+
+```ts
+// config/proxy.ts，'/mock_api/'、'/api/'、'/chat/'、'/knowledge_base/' 四处都要加
+onProxyReq: (proxyReq: any, req: any) => {
+  const raw = String(req.socket?.remoteAddress || "");
+  const ip = raw.replace(/^::ffff:/, "");        // ::ffff:192.168.1.7 → 192.168.1.7
+  proxyReq.setHeader("x-real-ip", ip);           // 覆盖，不是追加
+  proxyReq.setHeader("x-forwarded-for", ip);
+},
+```
+
+> umi 透传 http-proxy-middleware，v2 用 `onProxyReq`、v3 用 `on: { proxyReq }`。
+> **先确认当前版本**，写错位置会静默不生效（配置对象里多一个没人读的键，不报错）。
+
+**② 后端：只在直连对端可信时才采信 header**
+
+```python
+# auth.py:_client_ip
+TRUSTED_PROXIES = {"127.0.0.1", "::1"}   # 可加配置项；默认只信回环
+
+peer = (request.client.host if request.client else "") or ""
+if peer not in TRUSTED_PROXIES:
+    return peer                  # 外部直连：一律忽略它自带的任何 header
+real = (request.headers.get("x-real-ip") or "").strip()
+if real:
+    return real                  # 覆盖语义最可靠，优先
+xff = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+if xff:
+    return xff[-1]               # 追加语义下真实值在最右；绝不用 xff[0]
+return peer
+```
+
+⚠️ **`TRUSTED_PROXIES` 别写成整个内网段**（`192.168/16`）。同局域网任何机器都能直连 7861，
+写宽了等于没防。默认只信回环就够：手机 ⇒ dev server 本机转发 ⇒ peer 是 `127.0.0.1`；
+生产 nginx 同理。跨机部署时再单独加配置。
+
+⚠️ **不要改成 `uvicorn --proxy-headers`**：uvicorn 自己也会取 XFF 最左，等于把 ② 的校验绕过去了。
+
+**③ 测试污染：`testclient` 已经混进生产库**
+
+```
+distinct client_ip：'127.0.0.1' -> 12, 'testclient' -> 4, '203.0.113.7' -> 1（我这次的取证）
+```
+
+`testclient` 是 pytest `TestClient` 的默认 host，说明 **pytest 直接写进了 `backend/data/bifang.db`**。
+处理：
+- pytest 用独立库（`BIFANG_DB` 指向 `tmp_path`，或 conftest 里 monkeypatch `get_conn`）；
+- 存量 4 条 `testclient` 行 + 我那 1 条 `__probe_ip__`/`203.0.113.7`：**删掉**（它们不是真实事件，
+  留着会污染后续「异常登录」排查）。
+
+**49.7.4 生产环境（nginx）**
+
+```nginx
+proxy_set_header X-Real-IP        $remote_addr;
+proxy_set_header X-Forwarded-For  $proxy_add_x_forwarded_for;
+```
+
+**49.7.5 验收**
+
+| # | 用例 | 期望 |
+|---|---|---|
+| 1 | 后端直连，自带 `X-Forwarded-For: 203.0.113.7` 打登录 | 日志记的是 **`127.0.0.1`**（伪造被忽略）—— 这条是回归闸，现在是 `203.0.113.7` |
+| 2 | 经前端 proxy 访问登录 | 日志记的是**真实对端 IP**（本机浏览器 `127.0.0.1`，**手机访问必须是 `192.168.x.x` 之类内网地址**） |
+| 3 | 手机访问一次 | 日志出现手机内网 IP，且不是 127.0.0.1 |
+| 4 | pytest 跑完 | `login_logs` / `user_logs` **不新增任何 `testclient` 行** |
+| 5 | 存量脏数据 | `testclient` 4 条、`__probe_ip__` 1 条已删 |
+
+第 3 条**必须用真实手机验**，这条我做不了。
+
+### 49.8 【已发生·最高优先】守卫上线后前端 7 处 axios 直连未带 token，PPT 生成全挂
+
+> 2026-10-22 07:25 用户实测截图：Kb 页 PPT 内容生成 `slide1`–`slide10` **全部失败**，
+> 提示「Key为slideN的幻灯片文本生成请求失败了」。这不是新 bug，是 49.2 的直接副作用。
+
+**49.8.1 实测证据**
+
+```
+$ curl -X POST http://127.0.0.1:7861/knowledge_base/local_kb/%E4%B8%87%E7%A7%91/chat/completions
+{"code":401,"msg":"请先登录","data":{"isLogin":false},...}
+[code=401]
+```
+
+而 PPT 页发这个请求用的是：
+
+```ts
+// KbOutlineGenPpt.tsx:526
+const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+// :561 / :571
+axios.post(url, buildMsg(...), { headers });
+```
+
+**用 axios 直接 `import axios from "axios"`，绕过了 `requestErrorConfig.ts:90-96` 的 umi-request 全局拦截器
+⇒ 不带 token ⇒ guard 默认 `enforce` 直接 401。**
+
+我在 49.3 写过「先全局 grep 直连后端的点」，中间件做了、这步漏了。**这是本单必须补的收尾项。**
+
+**49.8.2 全量清单（我已扫完，共 7 处，全部缺 token）**
+
+| 文件 | 行 | 用途 | 影响 |
+|---|---|---|---|
+| `pages/KbOutlineGenPpt.tsx` | 561 / 571 | Kb 页 PPT 每页内容生成（**就是截图这个**） | 全部失败 |
+| `pages/AiOutlineGenPpt.tsx` | 509 / 519 | Ai 页 PPT 每页内容生成 | 全部失败 |
+| `pages/KbOutlineGenDoc.tsx` | 566 | Kb 页 Word 段落生成（每段一次、全并行） | **全部失败**（用户还没试 Word） |
+| `pages/AiOutlineGenDoc.tsx` | 340 | Ai 页 Word 段落生成 | 全部失败 |
+| `components/DocUtil/pptItemShorten.ts` | 85 | 42.3/46.1 的「AI 精简」「自动精简」 | 静默失效（catch 返回 null） |
+
+已确认**正确带 token、不用改**的：`ChatWithSpeech4Ppt.tsx:596`、`KbListCompSnl.tsx:26`、`KbListCompMpl.tsx:20`。
+`ProductLabelNew.tsx:325` 打的是 `192.168.0.195:19912` 商品标签服务，不经毕方后端，**不受影响、不要动**。
+
+**49.8.3 立即止血（让业务先能用）**
+
+`backend/.env` 加一行并重启后端：
+
+```
+AUTH_GUARD_MODE=log
+```
+
+`log` 模式下守卫**只记 `auth_guard_miss` 不拦截**，业务立刻恢复；同时 `user_logs` 里会持续积累漏网请求，
+可以拿它反查还有哪些点没带 token。**确认 49.8.4 改完并全量验证后，再改回 `enforce`**。
+
+**49.8.4 根治：统一注入，不要 7 处各写一遍**
+
+新增 `frontend/src/utils/authAxios.ts`：
+
+```ts
+import axios from 'axios';
+
+/** 统一带 session token 的 axios 实例（绕过 umi-request 的直连请求必须用它） */
+const authAxios = axios.create();
+
+authAxios.interceptors.request.use((cfg) => {
+  const token = localStorage.getItem('token') || '';
+  if (token) {
+    cfg.headers = { ...(cfg.headers || {}), token };
+  }
+  return cfg;
+});
+
+authAxios.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    if (err?.response?.status === 401) {
+      err.message = '登录已过期，请重新登录';
+    }
+    return Promise.reject(err);
+  },
+);
+
+export default authAxios;
+```
+
+然后把上表 5 个文件的 `import axios from "axios"` 换成 `import axios from "@/utils/authAxios"`
+（**只换这几个页面的 import**；`requestErrorConfig` 等自己的 axios 别动）。
+
+⚠️ **必须同时修「空响应」这个误导**：守卫 401 返回体是 `{code:401,data:{isLogin:false}}`，
+`parseChatCompletionData` 解析不到 `choices`，用户看到的却是「空响应」——**完全指错方向**。
+在 401 分支直接给「登录已过期，请重新登录」，不要让它掉进内容解析失败的文案。
+
+**49.8.5 验收（必须实测，不接受「已完成」）**
+
+| # | 用例 | 期望 |
+|---|---|---|
+| 1 | 登录后 Kb 页生成 10 页 PPT | 全部成功，无「Key为slideN…失败」 |
+| 2 | Ai 页同样生成一次 | 全部成功 |
+| 3 | Kb 页 / Ai 页 Word 生成一次 | 全部成功（这条最容易漏，因为 Word 是每段一次并发） |
+| 4 | 触发一次「AI 精简」（造一个 >70 字的点） | 精简生效，不静默返回原样 |
+| 5 | 退出登录后再点生成 | 提示「登录已过期，请重新登录」，**不是**「空响应」 |
+| 6 | `AUTH_GUARD_MODE` 改回 `enforce` 后重跑 1–3 | 仍全成功（证明 token 注入真的生效，不是靠 log 模式蒙过去） |
+| 7 | `user_logs` 里 `action='auth_guard_miss'` | 改完并跑完 1–3 后**不再新增** |
+
+第 6 条是关键：**必须在 enforce 下复测**，否则等于没修。
+
+### 49.9 下一单
+
+本单完成后：**无既定功能单**。等用户指定。
+
+若用户未指定，建议顺序：
+1. 49.6 的仓库卫生收尾
+2. 本轮遗留的技术债：`ViewItem4Ppt ↔ outlineSerialize` 循环依赖（48.4 记过）、
+   46.4「允许拆行」需先验 list 模板容量
+
+⚠️ 后续任何人（我或用户）再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。
+
+## 五十、反馈弹窗可拖动 / 截图可见 / 状态配色（P1 交互；含一个 P0：截图接口已全 401）
+
+### 50.0 背景
+
+用户四条需求（都针对反馈弹窗，截图见对话）：
+
+1. 弹窗要能**在屏幕内拖动**，便于先把框拖开、再截当前页面。
+2. Ctrl+V 粘贴后出现的「图片示意框」，**框线与文字改蓝**，让人注意到有变化。
+3. **反馈内容查看处**也要能看到截图（不只是提交时能看到文件名）。
+4. **状态 tag 按状态给不同颜色**，便于相关人看到进程变化。
+
+调研时我另发现一个**用户没提但更严重的 P0**，本单必须一起修，否则第 3 条根本做不到：
+
+```
+$ curl -o /dev/null -w '%{http_code}' http://127.0.0.1:7861/api/feedback/image/3eac9fb685bb4789b88504a7a1bd2228.png
+401
+```
+
+`feedback.py:241` 的 `get_image` 只 `_imgs_dir()/file_name` 读文件，**不做鉴权判断**——401 是四十九的 `AuthGuardMiddleware` 拦的。而 `<img src>` / antd `<Image src>` 是**浏览器原生 GET，带不了 `token` header**，所以四十九 enforce 之后：
+
+> **`FeedbackAdmin.tsx:293-305` 的截图预览已经全部裂图**（用户很可能还没去看）。
+
+修法**绝不能**把 `/api/feedback/image` 加进 guard 白名单——反馈截图含内部页面、任务上下文，匿名可拉等于开口子，和刚做完的鉴权加固方向相反。必须改为**前端带 token 取 blob**（`authAxios` 已存在，`utils/authAxios.ts`）。
+
+### 50.1 前置（先做完再动本单）
+
+1. **提交四十九**。当前工作区 26 项未提交（`guard.py`、`authAxios.ts`、proxy、start.sh、7 处 axios 替换…）。HEAD 仍停 `ee699fd`。规矩同 48.5：开工下一单前先提交本单，否则回滚不到"四十九完成"这个已知好状态。
+2. **删掉 `backend/package-lock.json`**（未跟踪）。`backend/` 是 Python 项目，这是某次误在 backend 目录跑 npm 产生的垃圾。
+3. 本单改完单独提交，commit message 用 `feat(feedback): 弹窗可拖动 + 截图卡片 + 状态配色`。
+
+### 50.2 弹窗可拖动（核心）
+
+**不要引入 `react-draggable`**。项目 `package.json` 里没有任何拖拽库（`draggable|react-rnd|@dnd-kit` 零命中），为这点功能加一个依赖不划算，而且 antd v5 的 Modal 用 `style` 就能定位。
+
+改 `components/Feedback/FeedbackModal.tsx`：
+
+**a) 位置状态**
+
+```tsx
+const [pos, setPos] = useState<{ x: number; y: number } | null>(null); // null = 默认居中
+```
+
+**b) 拖动只在标题栏**（表单里要选字、要拖文件，整框可拖会误触）
+
+```tsx
+title={
+  <div
+    style={{ cursor: 'move', userSelect: 'none' }}
+    onMouseDown={onDragStart}
+  >
+    遇到问题？告诉我们
+  </div>
+}
+```
+
+**c) 起点必须实测，不许用 state 推算**
+
+```tsx
+const onDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
+  const modalEl = (e.currentTarget as HTMLElement).closest('.ant-modal') as HTMLElement | null;
+  if (!modalEl) return;
+  const rect = modalEl.getBoundingClientRect();
+  const start = { mx: e.clientX, my: e.clientY, x: rect.left, y: rect.top };
+  e.preventDefault();
+  document.body.style.userSelect = 'none';   // 拖的时候别选中页面文字
+  const move = (ev: MouseEvent) => {
+    const next = clampModalPos(
+      start.x + (ev.clientX - start.mx),
+      start.y + (ev.clientY - start.my),
+      rect.width, rect.height,
+      window.innerWidth, window.innerHeight,
+    );
+    setPos(next);
+  };
+  const up = () => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    document.body.style.userSelect = '';
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+};
+```
+
+**d) clamp 必须是可测纯函数**（放 `components/Feedback/modalDrag.ts`）
+
+```ts
+export function clampModalPos(
+  x: number, y: number,
+  w: number, h: number,
+  vw: number, vh: number,
+): { x: number; y: number } {
+  const maxX = Math.max(0, vw - w);
+  const maxY = Math.max(0, vh - h);
+  return {
+    x: Math.min(Math.max(0, x), maxX),
+    y: Math.min(Math.max(0, y), maxY),
+  };
+}
+```
+
+语义写清：**整个弹窗必须留在视口内**。`h >= vh` 时 `maxY = 0`，即只能贴顶——这时靠下面的 body 滚动兜底，见 (f)。
+
+**e) 应用位置**
+
+```tsx
+<Modal
+  /* 其余 props 不变 */
+  style={
+    pos
+      ? { position: 'fixed', top: pos.y, left: pos.x, margin: 0 }
+      : undefined
+  }
+/>
+```
+
+`style` 落到 `.ant-modal`（antd v5 语义）。默认不传 = 维持现状居中（`top:100px` + `margin:0 auto`），只在用户拖过之后才接管，避免一打开就跳位。
+
+**f) 长内容必须能滚**（拖动后 fixed 定位会丢掉原来 `.ant-modal-wrap` 的滚动）
+
+```tsx
+styles={{ body: { maxHeight: 'calc(100vh - 220px)', overflow: 'auto' } }}
+```
+
+这条不加，截图多、上下文展开时**提交按钮会被推出视口且无法滚动**——比不能拖更糟。
+
+**g) 位置记忆 + 边界复原**
+
+- 拖动结束写 `sessionStorage['bf_fb_modal_pos']`（JSON `{x,y}`），打开时读。
+- 读回来的位置**必须再过一遍 `clampModalPos`**：浏览器窗口变小后旧坐标会把框甩出屏幕。
+- 反序列化失败（`"{}"`、`"null"`、脏数据）一律回落 `null`，不许抛错。
+
+**h) 同时改掉遮罩（这条是"便于截图"的关键，用户没说但一定会撞上）**
+
+```tsx
+maskClosable={false}
+styles={{ mask: { background: 'rgba(0, 0, 0, 0.06)' } }}
+```
+
+antd 默认 mask 是 `rgba(0,0,0,0.45)`，整页会被压暗，**截出来的图是灰的**。拖开只是解决"挡住"，遮罩不变暗才是解决"截得对"。
+
+⚠️ 行为变更（必须知道）：**点遮罩不再关闭**，只能点右上角 X 或「取消」。理由：拖动和截图时鼠标很容易划到遮罩上，误关会直接丢掉已填的描述和已上传的截图。这条写进回执，别当回归 bug 报。
+
+### 50.3 截图卡片：蓝色 + 缩略图 + 上传态
+
+现状 `FeedbackModal.tsx:227-241`：粘完只出一个灰 `<Tag>{n.slice(0,10)}…</Tag>`——**显示的是 uuid 文件名**，用户根本认不出是哪张图，也没法判断"粘进去了没有"。这正是用户说"要能注意到有变化"的原因。
+
+**a) `images` 类型从 `string[]` 改成结构化**
+
+```ts
+type Shot = { name: string; localUrl?: string; status?: 'uploading' | 'done' };
+const [images, setImages] = useState<Shot[]>([]);
+```
+
+提交时只取 `name`（`body.images = images.filter(s => s.name).map(s => s.name)`），**别把 localUrl 发上去**。
+
+**b) 上传前先插占位**（现在要等请求回来才有 UI，粘完 1~2 秒没反应，用户会以为没粘上）
+
+- 粘贴/选择时立刻 `URL.createObjectURL(file)` 插入一条 `{ localUrl, status: 'uploading' }`
+- 成功 → 回填 `name`、`status: 'done'`；失败 → 移除该条 + `message.error`
+- 组件卸载时 `revokeObjectURL` 所有 localUrl（防内存泄漏）
+
+**c) 卡片样式（用户明确要的"框线与文字蓝"）**
+
+- 容器：`border: 1px solid #1677ff`、`borderRadius: 8`、`padding: 4`，尺寸 76×76
+- 图：`objectFit: cover`、`borderRadius: 6`，铺满
+- 文字：`截图 {i+1}`，`color: #1677ff`、`fontSize: 12`
+- 删除：右上角 16px 圆形按钮，`#1677ff` 底白字 `×`
+- 上传中：占位用蓝色虚线 `1px dashed #1677ff` + `<Spin size="small" />`
+
+**不要继续用 `<Tag>`**——Tag 塞不下缩略图，且 closable 的 × 和图片叠在一起很难点。
+
+**d) 数量上限**：`images.length >= 6` 时拒绝继续粘贴并提示「最多 6 张」。现在**没有上限**，粘 20 张会把弹窗撑爆、提交体也过大（后端单图限 8MB，但没有张数限制）。
+
+### 50.4 截图在两处"查看"里可见（含 P0 修复）
+
+**a) 新增 `components/Feedback/useFeedbackImages.ts`**
+
+```ts
+export function useFeedbackImages(names: string[]): Record<string, string>
+```
+
+- 对每个 `name` 走 `authAxios.get('/api/feedback/image/' + name, { responseType: 'blob' })`
+- 成功 → `URL.createObjectURL(blob)`，返回 `name -> url` 映射
+- 失败 → 该条不放入映射（**渲染时降级成"图片加载失败"占位，不要整块崩掉**）
+- `names` 变化/卸载 → 逐个 `revokeObjectURL`
+- `names` 用 `join(',')` 做依赖，避免数组引用变化导致无限重取
+
+**b) 管理页 `FeedbackAdmin.tsx:293-305`**
+
+现在是 `<Image src={`/api/feedback/image/${n}`} />` —— enforce 后必 401，改成：
+
+```tsx
+const imgUrls = useFeedbackImages(detail?.images || []);
+...
+<Image src={imgUrls[n]} fallback={...} />
+```
+
+保留 `Image.PreviewGroup` 点击放大。
+
+**c) 弹窗右下「我的反馈（最近）」列表 `FeedbackModal.tsx:302-319`**
+
+每项左侧加 40×40 缩略图（`useFeedbackImages(item.images)`，同名 hook 复用）；**同时显示状态中文 tag**（见 50.5）。没有截图的行不留空位。
+
+**d) 顺手修一个数据断层**：提交成功后本地直接塞进 `mine` 的那条（`:147-153`）**没有带 `images`**，所以刚提交完看不到自己的截图，要等下次打开。补 `images: body.images`。
+
+**e) 编号→详情入口**：列表项内容加 `onClick`，跳 `/admin/feedback?id={id}`（`FeedbackAdmin.tsx:67-68` 已支持 `?id=` 自动开抽屉）。现在点了没反应，用户看不到自己提交的处理结果。
+
+### 50.5 状态 tag 配色（一份真相）
+
+现状三处各写各的，且**显示的是英文原值**：
+
+| 位置 | 现状 |
+|---|---|
+| `FeedbackAdmin.tsx:178` 表格列 | `<Tag>{v}</Tag>` → 显示 `pending` |
+| `FeedbackAdmin.tsx:278` 抽屉 | `<Tag color="blue">` → **所有状态恒蓝** |
+| `FeedbackModal.tsx:308` 我的反馈 | `<Tag>{item.status}</Tag>` → 显示 `fixed` |
+
+**a) 在 `services/feedback.ts` 加 `feedbackStatusLabel`**（与既有 `notifyStatusLabel:113` 同构，同一文件同一风格）：
+
+```ts
+export function feedbackStatusLabel(status?: string): {
+  text: string; color: string; tip?: string;
+} {
+  switch (status) {
+    case 'pending':   return { text: '待处理', color: 'orange',  tip: '已提交，等待处理' };
+    case 'resolving': return { text: '处理中', color: 'blue',    tip: '正在修复或评估' };
+    case 'fixed':     return { text: '待确认', color: 'purple',  tip: '已修复，等待提交人确认' };
+    case 'resolved':  return { text: '已关闭', color: 'green',   tip: '提交人已确认' };
+    case 'ignored':   return { text: '已忽略', color: 'default', tip: '经评估不处理' };
+    default:          return { text: status || '—', color: 'default' };
+  }
+}
+```
+
+配色依据：`fixed` 用紫色而不是绿/蓝——它是**唯一需要提交人动手**的状态，必须从一排蓝绿里跳出来；`pending` 橙是待办色；`resolved` 绿表示终态；`ignored` 灰表示归档。
+
+**b) `STATUS_OPTS`（`:33-40`）改成从它派生**，别留两份文案：
+
+```ts
+const STATUS_OPTS = [
+  { value: '', label: '全部状态' },
+  ...(['pending','resolving','fixed','resolved','ignored'] as const)
+       .map(s => ({ value: s, label: feedbackStatusLabel(s).text })),
+];
+```
+
+**c) 三处统一替换**，抽屉里的 `<Tag color="blue">` 那个写死颜色必须删掉。
+
+**d) 角标颜色**（可选，但建议做）：`FeedbackBadge.tsx:26` 的 `<Badge count>` 现在恒红。`fixed` 待确认才是真正要人处理的，保持红即可；**不要**区分颜色——Badge 只有一色，多色反而看不出重点。本项不动，写在这里是防止有人顺手改。
+
+### 50.6 jest（并入既有 `tests/feedbackContext.test.ts`，不新建文件）
+
+1. `clampModalPos`：给 `(x=-100, y=-100)` → `{0,0}`；给超出右下 → 夹到 `vw-w` / `vh-h`；给 `h > vh` → `y=0`。
+2. `feedbackStatusLabel`：五个状态**颜色两两不相等**（防"全返回 default"这种假实现），且 `fixed` 的 `text` 必须是「待确认」不能是 `fixed`。
+3. `feedbackStatusLabel('')` / `undefined` → 不抛错，`text` 为 `—`。
+4. 位置持久化：`readModalPos()` 对 `'{}'` / `'null'` / `'abc'` 一律返回 `null` 不抛错。
+5. `useFeedbackImages`：mock `authAxios.get` 返回 blob → 断言映射值以 `blob:` 开头；`names` 变空后 `revokeObjectURL` 被调用（需 mock `URL.createObjectURL` / `revokeObjectURL`，jsdom 无实现）。
+
+### 50.7 验收（我判卷时会按这几条实测）
+
+**代码侧**
+1. `grep 'react-draggable' package.json` 零命中（没偷偷加依赖）。
+2. `grep 'api/feedback/image' frontend/src` 只剩 `useFeedbackImages.ts` 一处拼接，`FeedbackAdmin`/`FeedbackModal` 里不再有裸 URL 进 `<Image src>`。
+3. `guard.py` 白名单里**没有** `feedback/image`。
+4. `grep 'color="blue"' FeedbackAdmin.tsx` 在状态 tag 那行已消失。
+5. jest 全绿（原 4 条 + 新增 5 条）。
+
+**接口侧（Curator 自测）**
+6. 无 token `GET /api/feedback/image/<real>.png` → **仍 401**（不许为修图放宽鉴权）。
+7. 带 admin token 同一 URL → 200 且 `content-type: image/png`。
+
+**UI 侧（必须用户点，我做不了）**
+8. 弹窗能拖、拖到边缘停住、关掉重开位置还在。
+9. 拖开后页面**不再明显变暗**（能直接截）。
+10. Ctrl+V 粘 2~3 张：卡片为蓝色边框、有缩略图、能单张删。
+11. 管理员进 `/admin/feedback` 打开详情：截图**能看到**（这是 P0 的验收点，修前必裂）。
+12. 普通用户（lizy）进 `/admin/feedback?mine=1`：看得到自己的截图与状态中文。
+13. 一屏内五种状态颜色互不相同，`待确认` 最跳。
+
+### 50.8 本单不做 / 记债
+
+- **不做「截图模式」**（点一下把弹窗缩成标题条）：拖动已满足需求，多一个状态机不值。
+- **不做截图私密隔离**：`get_image` 目前任何登录用户知道文件名就能取（uuid 不可猜，但仍是越权面）。正确做法是校验该图属于当前用户可见的反馈，属鉴权范畴，单独开单。
+- **`list_feedback` 只 `LIMIT 500` 无分页**，管理页 `pagination` 是前端分页假象——记债，等反馈量上来再改。
+
+### 50.9 下一单
+
+本单完成后：**无既定功能单，等用户指定**。
+
+候选（按我判断的优先级，用户可改）：
+1. **46.4 拆行权限**（放宽「一条要点只对应 1 行」+ 验模板容量）—— PPT 172 字的根因之一，仍挂着。
+2. **循环依赖**（`outlineSerialize.ts` ↔ `ViewItem4Ppt.ts` 双向值级 import）—— 现只在函数体内调用故安全，属结构性债。
+3. **截图越权隔离**（50.8 第 2 条）。
+
+⚠️ 后续任何人再往本文档追加新章时，**必须把这条「下一单」继承到新章末尾**，否则又会丢章。

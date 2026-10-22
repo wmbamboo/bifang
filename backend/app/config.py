@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     feedback_site_base: str = "http://localhost:8000"
 
+    # 全站鉴权：off | log | enforce（四十九）
+    auth_guard_mode: str = "enforce"
+    # 可信反向代理（逗号分隔）；仅这些 peer 才采信 X-Real-IP / X-Forwarded-For
+    trusted_proxies: str = "127.0.0.1,::1"
+
+    @property
+    def trusted_proxy_set(self) -> set[str]:
+        return {p.strip() for p in self.trusted_proxies.split(",") if p.strip()}
+
     @property
     def data_path(self) -> Path:
         return Path(self.data_dir).resolve()

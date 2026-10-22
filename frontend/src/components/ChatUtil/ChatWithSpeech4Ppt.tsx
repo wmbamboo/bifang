@@ -592,11 +592,13 @@ const Chat=(props:ChatProps)=> {
               Object.assign(body, so);
               body.stream_options = so;
             }
+            const sessionToken = localStorage.getItem('token') || '';
             const res = await fetch(`${base}chat/completions`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${apiKey}`,
+                ...(sessionToken ? { token: sessionToken } : {}),
               },
               body: JSON.stringify(body),
             });

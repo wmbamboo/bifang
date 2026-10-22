@@ -21,6 +21,10 @@ frontend/.umi-test
 **/.DS_Store
 *.log
 
+# Windows 下载附件 Zone.Identifier 垃圾（四十九·6）
+*:Zone.Identifier
+**/*Zone.Identifier*
+
 # 私钥
 frontend/config/ssl/*.key
 

@@ -1,36 +1,27 @@
 /**
  * @name 代理的配置
  * @see 在生产环境 代理是无法生效的，所以这里没有生产环境的配置
- * -------------------------------
- * The agent cannot take effect in the production environment
- * so there is no configuration of the production environment
- * For details, please see
- * https://pro.ant.design/docs/deploy
- *
  * @doc https://umijs.org/docs/guides/proxy
  */
-export default {
-  // 如果需要自定义本地开发服务器  请取消注释按需调整
-  // dev: {
-  //   // localhost:8000/api/** -> https://preview.pro.ant.design/api/**
-  //   '/api/': {
-  //     // 要代理的地址
-  //     target: 'https://preview.pro.ant.design',
-  //     // 配置了这个可以从 http 代理到 https
-  //     // 依赖 origin 的功能可能需要这个，比如 cookie
-  //     changeOrigin: true,
-  //   },
-  // },
 
-  /**
-   * @name 详细的代理配置
-   * @doc https://github.com/chimurai/http-proxy-middleware
-   */
+/** 覆盖写真实对端 IP，防客户端伪造 XFF（四十九·7） */
+function setRealIp(proxyReq: any, req: any) {
+  const raw = String(req.socket?.remoteAddress || '');
+  const ip = raw.replace(/^::ffff:/, '');
+  if (!ip) return;
+  proxyReq.setHeader('x-real-ip', ip);
+  proxyReq.setHeader('x-forwarded-for', ip);
+}
+
+const withIp = (cfg: Record<string, unknown>) => ({
+  ...cfg,
+  onProxyReq: setRealIp,
+});
+
+export default {
   test: {
-    // localhost:8000/api/** -> https://preview.pro.ant.design/api/**
     '/api/': {
       target: 'https://proapi.azurewebsites.net',
-      // target: 'http://AI互联:7861',
       changeOrigin: true,
       pathRewrite: { '^': '' },
     },
@@ -43,40 +34,35 @@ export default {
     },
   },
   dev: {
-    '/chat/': {
-      target: 'http://127.0.0.1:7861',
-      // target: 'http://192.168.0.195:7861',
-      changeOrigin: true,
-      pathRewrite: { '^': '' },
-    },
-    '/knowledge_base/': {
-      target: 'http://127.0.0.1:7861',
-      // target: 'http://192.168.0.195:7861',
-      changeOrigin: true,
-      pathRewrite: { '^': '' },
-    },
-    '/api/': {
+    '/chat/': withIp({
       target: 'http://127.0.0.1:7861',
       changeOrigin: true,
       pathRewrite: { '^': '' },
-    },
+    }),
+    '/knowledge_base/': withIp({
+      target: 'http://127.0.0.1:7861',
+      changeOrigin: true,
+      pathRewrite: { '^': '' },
+    }),
+    '/api/': withIp({
+      target: 'http://127.0.0.1:7861',
+      changeOrigin: true,
+      pathRewrite: { '^': '' },
+    }),
     '/goods-labels-mgt/': {
       target: 'http://192.168.0.195:19912',
-      // target: 'http://192.168.0.195:7861',
       changeOrigin: true,
       pathRewrite: { '^': '' },
     },
-     '/mock_api/': {
+    '/mock_api/': withIp({
       target: 'http://127.0.0.1:7861',
-      // target: 'http://192.168.0.195:7861',
       changeOrigin: true,
       pathRewrite: { '^': '' },
-    },
+    }),
     '/kkfv/': {
-     target: 'http://192.168.0.195:8012',
-     // target: 'http://192.168.0.195:8012',
-     changeOrigin: true,
-     pathRewrite: { '^/kkfv': '' },
-   },
+      target: 'http://192.168.0.195:8012',
+      changeOrigin: true,
+      pathRewrite: { '^/kkfv': '' },
+    },
   },
 };

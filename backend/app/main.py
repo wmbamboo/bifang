@@ -11,6 +11,7 @@ from app.routers import chat, knowledge_base, kb_chat, mock_api, feedback
 from app.services import kb_service
 from app.services import upload_task_service
 from app.services.audit import AuditMiddleware
+from app.security.guard import AuthGuardMiddleware
 
 
 @asynccontextmanager
@@ -51,6 +52,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(AuditMiddleware)
+    # 鉴权守卫放在 CORS/Audit 之后注册 ⇒ 实际执行顺序更靠外（先鉴权）
+    app.add_middleware(AuthGuardMiddleware)
 
     app.include_router(knowledge_base.router)
     app.include_router(chat.router)

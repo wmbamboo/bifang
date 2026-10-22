@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import get_settings
 from app.db import ok, fail
+from app.security.guard import require_api_kb
 from app.services import kb_service
 from app.services import upload_task_service
 
@@ -48,7 +49,9 @@ async def update_info(request: Request):
 
 
 @router.post("/delete_knowledge_base")
-async def delete_knowledge_base(request: Request):
+async def delete_knowledge_base(
+    request: Request, _kb: dict = Depends(require_api_kb)
+):
     body = await request.body()
     text = body.decode("utf-8").strip()
     kb_name = ""
@@ -102,7 +105,7 @@ async def list_files(
 
 
 @router.post("/delete_docs")
-async def delete_docs(request: Request):
+async def delete_docs(request: Request, _kb: dict = Depends(require_api_kb)):
     body = await _read_json(request)
     return kb_service.delete_docs(
         knowledge_base_name=body.get("knowledge_base_name") or "",

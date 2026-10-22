@@ -16,7 +16,10 @@ export default function KbListMplComp({ onSelectionChange}){
   const fetchData = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/knowledge_base/list_knowledge_bases');
+      const token = localStorage.getItem('token') || '';
+      const response = await fetch('/knowledge_base/list_knowledge_bases', {
+        headers: token ? { token } : {},
+      });
       const resData = await response.json();
       setDataSource(resData.data);
     } catch (error) {

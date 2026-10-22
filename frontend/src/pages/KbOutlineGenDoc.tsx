@@ -3,7 +3,7 @@ import { useModel } from '@umijs/max';
 import { useTheme } from 'antd-style';
 import {Button, Checkbox, Empty, Spin, message, Flex, Progress, Tag} from 'antd';
 import React, {useEffect, useState} from "react";
-import axios from "axios";
+import axios from "@/utils/authAxios";
 import {
   parseChatCompletionData,
   WRITING_SYSTEM_PROMPT,
@@ -584,8 +584,13 @@ const KbOutlineGenDoc: React.FC = () => {
                 wordCnts += applyParsed(job.key, value);
                 return value;
               })
-              .catch(() => {
-                message.warning(`Key为${job.key}的段落文本生成请求失败了。`);
+              .catch((error) => {
+                const tip = error?.message || "";
+                message.warning(
+                  tip.includes("登录")
+                    ? tip
+                    : `Key为${job.key}的段落文本生成请求失败了。`,
+                );
                 throw new Error(job.key);
               }),
           ),

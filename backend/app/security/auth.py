@@ -38,15 +38,23 @@ def session_id_of(token: str) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if xff:
-        return xff
+    """仅当 TCP 对端是可信代理时才采信 X-Real-IP（四十九·7）。
+
+    不单独采信裸 X-Forwarded-For：本机直连 peer 也是 127.0.0.1，
+    若信 XFF 则 curl 自带伪造头仍会写进审计。dev proxy / nginx 须覆盖写 X-Real-IP。
+    """
+    from app.config import get_settings
+
+    peer = ""
+    if request.client:
+        peer = (request.client.host or "").strip()
+    trusted = get_settings().trusted_proxy_set
+    if peer not in trusted:
+        return peer
     real = (request.headers.get("x-real-ip") or "").strip()
     if real:
         return real
-    if request.client:
-        return request.client.host or ""
-    return ""
+    return peer
 
 
 def client_meta(request: Request) -> tuple[str, str]:
@@ -106,11 +114,23 @@ def validate_token(
 
 
 def extract_token(request: Request) -> str:
-    return (
+    """header token → query token → Authorization Bearer（仅当命中会话表）。"""
+    h = (
         request.headers.get("token")
         or request.headers.get("Token")
         or ""
     ).strip()
+    if h:
+        return h
+    q = (request.query_params.get("token") or "").strip()
+    if q:
+        return q
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        cand = auth[7:].strip()
+        if cand and cand in _TOKENS:
+            return cand
+    return ""
 
 
 def current_user(request: Request, *, on_timeout=None) -> Optional[dict]:

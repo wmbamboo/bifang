@@ -22,7 +22,10 @@ const  KbListSnlComp =(props: KbListSnlCompProps)=> {
   //获取取后端数据
   const getKbList = async () => {
     try {
-      const response = await fetch('/knowledge_base/list_knowledge_bases');
+      const token = localStorage.getItem('token') || '';
+      const response = await fetch('/knowledge_base/list_knowledge_bases', {
+        headers: token ? { token } : {},
+      });
       const res = await response.json();
       let resData = res.data || [];
       if (props.includeAll) {

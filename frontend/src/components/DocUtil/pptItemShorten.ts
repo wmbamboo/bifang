@@ -1,7 +1,7 @@
 /**
  * PPT 小项描述精简：与 SliderDrawer / 生成后自动重试共用同一套 prompt 口径。
  */
-import axios from "axios";
+import axios from "@/utils/authAxios";
 import {
   parseChatCompletionData,
   stripHallucinatedDocCitations,

@@ -3,7 +3,7 @@ import {useModel} from '@umijs/max';
 import {useTheme} from 'antd-style';
 import {Button, Empty, Flex, message, Progress, Spin, Tag} from 'antd';
 import React, {useCallback, useEffect, useMemo, useState} from "react";
-import axios from "axios";
+import axios from "@/utils/authAxios";
 import {parseChatCompletionData, WRITING_SYSTEM_PROMPT, KB_WRITING_CONSTRAINT_PROMPT, KB_GEN_EMPTY_ERROR} from "@/components/DocUtil/parseChatCompletion";
 import {Chapter, clean4PptTitle, Ppt, Slide, stripChapterOrdinalPrefix, buildPptItemFormatPrompt, countOutlineTips, validateSlideViewItems, splitMetricListTips, buildColumnsFillVars, buildMetricColumnsFillVars, buildMetricListFillVars, buildTableFillVars, buildImageGridFillVars, parseSlideTips, parseSlideImageAssets, applyPptPromptSavePatch, PptPromptSavePatch} from "@/components/DocUtil/ViewItem4Ppt";
 import {
@@ -632,8 +632,9 @@ const KbOutlineGenPpt: React.FC = () => {
             return value
           }).catch(error=>{
             const key=getKeyFromTArray(idx);
-            Ppt.markGenError(chapters, key, "内容生成请求失败");
-            message.warning(`Key为${key}的幻灯片文本生成请求失败了。`)
+            const tip = error?.message || "内容生成请求失败";
+            Ppt.markGenError(chapters, key, tip);
+            message.warning(tip.includes("登录") ? tip : `Key为${key}的幻灯片文本生成请求失败了。`)
           })
       )).then(results=>{
         if (autoShortenedTotal > 0) {

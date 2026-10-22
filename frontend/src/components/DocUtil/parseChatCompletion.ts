@@ -80,12 +80,15 @@ export function parseChatCompletionData(
     return { ok: false, error: String(payload) };
   }
 
-  // 毕方业务错误：{ code, msg }
+  // 毕方业务错误：{ code, msg }（守卫 401 勿落成「空响应」）
   if (
     payload.code !== undefined &&
     payload.code !== 200 &&
     !Array.isArray(payload.choices)
   ) {
+    if (Number(payload.code) === 401 || payload?.data?.isLogin === false) {
+      return { ok: false, error: '登录已过期，请重新登录' };
+    }
     return {
       ok: false,
       error: payload.msg || payload.message || `错误码 ${payload.code}`,

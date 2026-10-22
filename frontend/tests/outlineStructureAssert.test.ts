@@ -35,8 +35,11 @@ import {
 } from "@/components/DocUtil/kbImageAssetsCore";
 import {aspectDeviation, coverSrcRect} from "@/components/DocUtil/imageBufferMeta";
 import {shopMetricMismatchInEvidence} from "@/components/DocUtil/outlineEvidenceValidate";
-import { shortenPptItemDesc } from "@/components/DocUtil/pptItemShorten";
-import axios from "axios";
+import {
+  autoShortenOverlongItems,
+  shortenPptItemDesc,
+} from "@/components/DocUtil/pptItemShorten";
+import authAxios from "@/utils/authAxios";
 import { readFileSync } from "fs";
 import * as path from "path";
 
@@ -272,7 +275,7 @@ describe("四十六 PPT 超长治理 / table 双源", () => {
 
     const compressed =
       "华润信托与钜盛华经多层路径持股约12.3%，另有待解禁股份需跟踪[文档13]";
-    const post = jest.spyOn(axios, "post").mockResolvedValue({
+    const post = jest.spyOn(authAxios, "post").mockResolvedValue({
       data: {
         choices: [{ message: { content: compressed } }],
       },
@@ -291,10 +294,10 @@ describe("四十六 PPT 超长治理 / table 双源", () => {
     expect(pptItemLength(out || "")).toBeLessThanOrEqual(PPT_ITEM_DESC_MAX);
   });
 
-  it("format prompt 含简称与 3 个以上数字约束", () => {
+  it("format prompt 含简称与最多 2 组数字约束", () => {
     const prompt = buildPptItemFormatPrompt(5, "list");
     expect(prompt).toContain("简称");
-    expect(prompt).toContain("3 个以上数字");
+    expect(prompt).toContain("最多保留 2 组数字");
   });
 });
 
@@ -460,5 +463,51 @@ describe("四十八 版式名统一 / 高级手改不覆盖", () => {
     }
     expect(pptLayoutLabelZh("progress")).toBe("进度");
     expect(layoutLabel("progress")).toBe("进度");
+  });
+});
+
+describe("五十三·A 自动精简不得假成功", () => {
+  const longContent = "甲".repeat(PPT_ITEM_DESC_MAX + 20);
+
+  it("仍超长则 shortened=0 且 failed 含该条", async () => {
+    const over = "乙".repeat(PPT_ITEM_DESC_MAX + 10);
+    const { shortened, failed, items } = await autoShortenOverlongItems(
+      [{ title: "股权质押", content: longContent }],
+      "list",
+      async () => over,
+    );
+    expect(shortened).toBe(0);
+    expect(failed).toEqual([
+      expect.objectContaining({ index: 0, dMax: PPT_ITEM_DESC_MAX }),
+    ]);
+    expect(items[0].content).toBe(longContent);
+  });
+
+  it("首次超长、forceHeavy 达标 ⇒ shortened=1", async () => {
+    const over = "丙".repeat(PPT_ITEM_DESC_MAX + 10);
+    const ok = "丁".repeat(PPT_ITEM_DESC_MAX - 5);
+    let calls = 0;
+    const { shortened, failed, items } = await autoShortenOverlongItems(
+      [{ title: "股权质押", content: longContent }],
+      "list",
+      async (_i, _item, _dMax, opt) => {
+        calls += 1;
+        return opt?.forceHeavy ? ok : over;
+      },
+    );
+    expect(calls).toBe(2);
+    expect(shortened).toBe(1);
+    expect(failed).toEqual([]);
+    expect(items[0].content).toBe(ok);
+  });
+
+  it("setViewItemsStructured 成功后清空 genError", () => {
+    const slide = new Slide("s1", "t", "list", "");
+    slide.genError = "第 1 点描述须为 20～70 字";
+    const ok = slide.setViewItemsStructured([
+      { title: "标题够四字", content: "描述正文足够二十个字以上才算过校验门槛啊" },
+    ]);
+    expect(ok).toBe(true);
+    expect(slide.genError).toBe("");
   });
 });

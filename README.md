@@ -29,7 +29,7 @@ cp .env.example .env   # 填写 DEEPSEEK_API_KEY
 ```
 
 默认：`http://127.0.0.1:7861`  
-账号：`admin` / `bifang.intronlink`
+首次启动账号见 `backend/data/initial_admin.txt`，或由环境变量 `BIFANG_SEED_ADMIN_PASSWORD` 指定
 
 ### 前端（需 Linux Node，推荐 nvm Node 20）
 

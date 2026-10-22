@@ -1446,7 +1446,7 @@ export function buildPptItemFormatPrompt(
     countLine +
     PPT_NO_DOC_CITE +
     '公司/机构/品牌一律用简称（如「华润信托」不必写「华润信托股份有限公司」），禁止为凑字数堆砌全称。\n' +
-    `一条描述若含 3 个以上数字，必须砍掉铺垫，只留「主体 + 动作 + 数字」；超过 ${PPT_ITEM_DESC_MAX} 字即视为失败。\n` +
+    `一条描述最多保留 2 组数字；有 3 组以上时只留与标题最相关的 2 组，其余改写成定性表述（如「另有部分股权」）。超过 ${PPT_ITEM_DESC_MAX} 字即视为失败。\n` +
     '必须逐行输出，每行一条；不要用方括号，不要前言后语。下面只示范一行写法，不要照抄成多条：\n' +
     `1. 概括标题（${PPT_ITEM_TITLE_MIN}～${PPT_ITEM_TITLE_MAX}字） - 具体描述（${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX}字）\n` +
     '各点描述必须互不雷同：每条描述只服务该行标题（对应一条大纲要点），禁止把同一段品牌背景/案例故事粘到多个小点后面。\n'
@@ -1578,19 +1578,16 @@ export function validateSlideViewItems(
     }
     if (pptItemLength(content) < PPT_ITEM_DESC_MIN || pptItemLength(content) > PPT_ITEM_DESC_MAX) {
       let msg = `第 ${n} 点描述须为 ${PPT_ITEM_DESC_MIN}～${PPT_ITEM_DESC_MAX} 字（当前 ${pptItemLength(content)} 字）。`;
-      // 46.5：多条超长且含多组数字 → 建议切表格（只提示不自动切）
+      // 单条含多组数字且明显超长 → 建议切表格（只提示不自动切）
       if (layout === 'list' || layout === 'progress') {
-        const overlong = rows.filter(
-          (r) => pptItemLength(r.content) > PPT_ITEM_DESC_MAX,
-        );
-        const heavy = overlong.filter(
+        const heavy = rows.filter(
           (r) =>
             pptItemLength(r.content) > 100 &&
             countNumericUnitGroups(r.content) >= 2,
         );
-        if (overlong.length >= 2 && heavy.length >= 2) {
+        if (heavy.length >= 1) {
           msg +=
-            '本页多条描述超长且含多组数字，建议在幻灯片设置中切换为「表格」版式。';
+            '本点含多组数字且明显超长，建议切换为「表格」版式（主体｜数值），或只保留 2 组关键数字。';
         }
       }
       return msg;
@@ -1860,6 +1857,7 @@ export class Slide{
     );
     this.setResult(viewItems);
     this.content = Slide.itemsToContentText(cleaned);
+    this.genError = "";
     return true;
   }
 

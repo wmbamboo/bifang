@@ -65,7 +65,7 @@ cp .env.example .env
 
 - 地址：`http://127.0.0.1:7861`
 - 文档：`http://127.0.0.1:7861/docs`
-- 默认账号：`admin` / `bifang.intronlink`
+- 首次管理员密码见 `data/initial_admin.txt`，或环境变量 `BIFANG_SEED_ADMIN_PASSWORD`
 
 ## 检索模式
 

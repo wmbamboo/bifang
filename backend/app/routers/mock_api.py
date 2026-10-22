@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends, Query, Request
 from app.db import get_conn, ok, fail, rows_to_list, _now, new_id
 from app.security import auth as auth_mod
 from app.security.guard import require_api_admin
-from app.security.passwords import hash_password, needs_rehash, verify_password
+from app.security.passwords import (
+    hash_password,
+    is_legacy_default_password,
+    needs_rehash,
+    validate_password_strength,
+    verify_password,
+)
 from app.security.rbac import is_admin
 from app.services import audit
 
@@ -73,13 +79,20 @@ async def login_account(request: Request):
                 msg="账号已停用",
                 code=200,
             )
-        # 明文或旧算法：登录成功后升级为 bcrypt
-        if needs_rehash(stored):
-            with get_conn() as conn:
+        # 明文或旧算法：登录成功后升级为 bcrypt；旧默认口令标记强改
+        must_change = bool(int(user.get("must_change_password") or 0))
+        with get_conn() as conn:
+            if needs_rehash(stored):
                 conn.execute(
                     "UPDATE users SET password=? WHERE userid=?",
                     (hash_password(password), user["userid"]),
                 )
+            if is_legacy_default_password(password):
+                conn.execute(
+                    "UPDATE users SET must_change_password=1 WHERE userid=?",
+                    (user["userid"],),
+                )
+                must_change = True
         token = auth_mod.issue_token(username)
         audit.write_login_log(
             username=username,
@@ -96,6 +109,7 @@ async def login_account(request: Request):
                 "type": login_type,
                 "currentAuthority": user.get("access") or "user",
                 "token": token,
+                "mustChangePassword": must_change,
             },
             msg="登录成功",
         )
@@ -170,10 +184,15 @@ async def user_add(request: Request, _admin: dict = Depends(require_api_admin)):
 
     body = await request.json()
     userid = body.get("userid") or new_id()[:8]
-    plain = body.get("password") or "bifang.intronlink"
+    plain = (body.get("password") or "").strip()
+    if not plain:
+        return fail("新增用户必须设置初始密码", 400)
+    username = body.get("username")
+    pw_err = validate_password_strength(plain, username or "")
+    if pw_err:
+        return fail(pw_err, 400)
     roles = normalize_roles(body.get("roles") or [body.get("access") or "user"])
     access = derive_access(roles)
-    username = body.get("username")
     with get_conn() as conn:
         conn.execute(
             """
@@ -240,9 +259,13 @@ async def user_update(request: Request, _admin: dict = Depends(require_api_admin
         if roles is not None:
             replace_user_roles(conn, username, roles)
         if body.get("password"):
+            new_plain = str(body.get("password") or "").strip()
+            pw_err = validate_password_strength(new_plain, username or "")
+            if pw_err:
+                return fail(pw_err, 400)
             conn.execute(
-                "UPDATE users SET password=? WHERE username=?",
-                (hash_password(body.get("password")), username),
+                "UPDATE users SET password=?, must_change_password=0, pwd_changed_at=? WHERE username=?",
+                (hash_password(new_plain), _now(), username),
             )
     return ok(msg="更新成功")
 
@@ -280,9 +303,15 @@ async def change_password(request: Request):
             return fail("无权限", 403)
         if not verify_password(old_pwd or "", row["password"] or ""):
             return fail("原密码错误", 400)
+        pw_err = validate_password_strength(new_pwd or "", target_name)
+        if pw_err:
+            return fail(pw_err, 400)
         conn.execute(
-            "UPDATE users SET password=? WHERE userid=?",
-            (hash_password(new_pwd or ""), row["userid"]),
+            """
+            UPDATE users SET password=?, must_change_password=0, pwd_changed_at=?
+            WHERE userid=?
+            """,
+            (hash_password(new_pwd or ""), _now(), row["userid"]),
         )
     return ok(msg="密码修改成功")
 

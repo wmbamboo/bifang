@@ -249,10 +249,12 @@ def init_db() -> None:
             );
             """
         )
+        _migrate_user_logs_columns(conn)
+        _migrate_users_password_flags(conn)
         _seed_defaults(conn)
         _seed_rbac_and_samples(conn)
         _migrate_plaintext_passwords(conn)
-        _migrate_user_logs_columns(conn)
+        _maybe_reset_admin_password(conn)
         _ensure_login_logs(conn)
         _patch_audit_menu_and_kb_user(conn)
         _patch_user_emails_and_lizy(conn)
@@ -421,38 +423,107 @@ def _patch_user_emails_and_lizy(conn: sqlite3.Connection) -> None:
     )
 
 
+def _seed_admin_password() -> tuple[str, bool]:
+    """返回 (密码, 是否自动生成)。环境变量优先；缺省随机。"""
+    import os
+    import secrets
+
+    env = (os.getenv("BIFANG_SEED_ADMIN_PASSWORD") or "").strip()
+    if env:
+        return env, False
+    return secrets.token_urlsafe(12), True
+
+
+def _migrate_users_password_flags(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    for name, typ in (
+        ("must_change_password", "INTEGER DEFAULT 0"),
+        ("pwd_changed_at", "TEXT DEFAULT ''"),
+    ):
+        if name in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {name} {typ}")
+        except sqlite3.OperationalError:
+            pass
+
+
+def _maybe_reset_admin_password(conn: sqlite3.Connection) -> None:
+    """BIFANG_RESET_ADMIN_PASSWORD 存在则重置 admin 并标记强改（用完请删 env）。"""
+    import logging
+    import os
+
+    from app.security.passwords import hash_password
+
+    plain = (os.getenv("BIFANG_RESET_ADMIN_PASSWORD") or "").strip()
+    if not plain:
+        return
+    row = conn.execute("SELECT userid FROM users WHERE username='admin'").fetchone()
+    if not row:
+        return
+    conn.execute(
+        """
+        UPDATE users SET password=?, must_change_password=1, pwd_changed_at=''
+        WHERE username='admin'
+        """,
+        (hash_password(plain),),
+    )
+    logging.getLogger("bifang").warning(
+        "已按环境变量 BIFANG_RESET_ADMIN_PASSWORD 重置 admin 密码，请从部署环境删除该变量"
+    )
+
+
 def _seed_defaults(conn: sqlite3.Connection) -> None:
+    import logging
+    import os
+    from pathlib import Path
+
     from app.security.passwords import hash_password
 
     user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    if user_count == 0:
-        default_users = [
-            ("00000001", "admin", "bifang.intronlink", "毕方", "admin"),
-            ("00000002", "user", "bifang.intronlink", "毕方user", "user"),
-            ("00000003", "guest", "bifang.intronlink", "毕方guest", "user"),
-        ]
-        avatar = "https://gw.alipayobjects.com/zos/antfincdn/XAosXuNZyF/BiazfanxmamNRoxxVxka.png"
-        for userid, username, password, name, access in default_users:
-            conn.execute(
-                """
-                INSERT INTO users (userid, username, password, name, access, unit, dept, email, phone, address, signature, avatar)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    userid,
-                    username,
-                    hash_password(password),
-                    name,
-                    access,
-                    "英创互联",
-                    "AI技术部",
-                    "antdesign@alipay.com",
-                    "010-15021502",
-                    "财智大厦A-1502",
-                    "毕生所学，方为一用",
-                    avatar,
-                ),
-            )
+    if user_count != 0:
+        return
+
+    plain, auto = _seed_admin_password()
+    avatar = "https://gw.alipayobjects.com/zos/antfincdn/XAosXuNZyF/BiazfanxmamNRoxxVxka.png"
+    conn.execute(
+        """
+        INSERT INTO users (
+            userid, username, password, name, access, unit, dept, email, phone,
+            address, signature, avatar, must_change_password
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """,
+        (
+            "00000001",
+            "admin",
+            hash_password(plain),
+            "毕方",
+            "admin",
+            "英创互联",
+            "AI技术部",
+            "",
+            "",
+            "",
+            "毕生所学，方为一用",
+            avatar,
+        ),
+    )
+    if auto:
+        settings = get_settings()
+        out = Path(settings.data_dir) / "initial_admin.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            f"username=admin\npassword={plain}\ngenerated_at={_now()}\n",
+            encoding="utf-8",
+        )
+        try:
+            os.chmod(out, 0o600)
+        except OSError:
+            pass
+        logging.getLogger("bifang").warning(
+            "首次管理员密码已生成，见 %s，请登录后立即修改", out
+        )
 
 
 def _migrate_plaintext_passwords(conn: sqlite3.Connection) -> None:

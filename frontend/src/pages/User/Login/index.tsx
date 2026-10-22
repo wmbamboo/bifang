@@ -131,14 +131,17 @@ const Login: React.FC = () => {
           defaultMessage: '登录成功！',
         });
         message.success(defaultLoginSuccessMessage);
+        if ((msg as any).mustChangePassword) {
+          message.warning('当前为初始密码，请立即在「个人中心 → 修改密码」修改');
+        }
         await fetchUserInfo(values?.username || '');
         const urlParams = new URL(window.location.href).searchParams;
         history.push(urlParams.get('redirect') || '/');
         return;
       }
       console.log(msg);
-      // 如果失败去设置用户错误信息
-      setUserLoginState(msg);
+      // 失败时带上后端 msg（如「账号已停用」），勿只用固定文案
+      setUserLoginState({ ...msg, msg: (loginRes as any).msg });
     } catch (error) {
       const defaultLoginFailureMessage = intl.formatMessage({
         id: 'pages.login.failure',
@@ -216,10 +219,13 @@ const Login: React.FC = () => {
 
           {status === 'error' && loginType === 'account' && (
             <LoginMessage
-              content={intl.formatMessage({
-                id: 'pages.login.accountLogin.errorMessage',
-                defaultMessage: '账户或密码错误(admin/ant.design)',
-              })}
+              content={
+                (userLoginState as API.LoginResult & { msg?: string })?.msg ||
+                intl.formatMessage({
+                  id: 'pages.login.accountLogin.errorMessage',
+                  defaultMessage: '用户名或密码错误',
+                })
+              }
             />
           )}
           {type === 'account' && (
@@ -232,7 +238,7 @@ const Login: React.FC = () => {
                 }}
                 placeholder={intl.formatMessage({
                   id: 'pages.login.username.placeholder',
-                  defaultMessage: '用户名: admin or user',
+                  defaultMessage: '请输入用户名',
                 })}
                 rules={[
                   {
@@ -254,7 +260,7 @@ const Login: React.FC = () => {
                 }}
                 placeholder={intl.formatMessage({
                   id: 'pages.login.password.placeholder',
-                  defaultMessage: '密码: ant.design',
+                  defaultMessage: '请输入密码',
                 })}
                 rules={[
                   {

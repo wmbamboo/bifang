@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 const USERLIST = [
     { userid: '00000001',
       username:'admin',
-      password:'bifang.intronlink',
+      password:'mock-password',
       name: '毕方',
       access:'admin',
       unit:'英创互联',
@@ -15,7 +15,7 @@ const USERLIST = [
     },
     { userid: '00000002',
       username:'user',
-      password:'bifang.intronlink',
+      password:'mock-password',
       name: '毕方user',
       access:'user',
       unit:'英创互联',
@@ -28,7 +28,7 @@ const USERLIST = [
     },
     { userid: '00000003',
       username:'guest',
-      password:'bifang.intronlink',
+      password:'mock-password',
       name: '毕方guest',
       access:'user',
       unit:'英创互联',
@@ -42,7 +42,7 @@ const USERLIST = [
     {
       userid: '4',
       username:'john',
-      password:'bifang.intronlink',
+      password:'mock-password',
       name: 'John Brown',
       access:'admin',
       unit:'英创互联',
@@ -56,7 +56,7 @@ const USERLIST = [
     {
       userid: '5',
       username:'jim',
-      password:'bifang.intronlink',
+      password:'mock-password',
       name: 'Jim Green',
       access:'user',
       unit:'英创互联',
@@ -70,7 +70,7 @@ const USERLIST = [
     {
       userid: '6',
       username:'john',
-      password:'bifang.intronlink',
+      password:'mock-password',
       name: 'Joe Black',
       access:'user',
       unit:'英创互联',
@@ -85,7 +85,7 @@ const USERLIST = [
 const USERINFO={
       userid: '00000001',
       username:'ant.design',
-      password:'bifang.intronlink',
+      password:'mock-password',
       name: '毕 方',
       access:'admin',
       unit:'英创互联',

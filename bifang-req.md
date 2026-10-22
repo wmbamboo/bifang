@@ -19,4 +19,4 @@ cd backend && cp .env.example .env   # 填写 DEEPSEEK_API_KEY
 cd frontend && bf_baseUrl=http://127.0.0.1:7861 npm start
 ```
 
-默认账号：`admin` / `bifang.intronlink`
+首次管理员密码见 `backend/data/initial_admin.txt`，或环境变量 `BIFANG_SEED_ADMIN_PASSWORD`

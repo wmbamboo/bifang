@@ -15,9 +15,12 @@ import {
   SlideLayout,
   splitMetricListTips,
 } from "@/components/DocUtil/ViewItem4Ppt";
+import { countNumericUnitGroups } from "@/components/DocUtil/outlineJson";
 import { DEFAULT_LLM_MODEL } from "@/constants/llm";
 
 export type ShortenItem = { title: string; content: string };
+
+export type ShortenFail = { index: number; len: number; dMax: number };
 
 export function descMaxForPptItem(
   layout: SlideLayout | string | undefined,
@@ -37,10 +40,19 @@ export function descMaxForPptItem(
 export function buildShortenItemPrompt(
   item: ShortenItem,
   dMax: number,
+  opts?: { forceHeavy?: boolean },
 ): string {
+  const len = pptItemLength(item.content);
+  const heavy =
+    !!opts?.forceHeavy ||
+    len > dMax * 1.4 ||
+    countNumericUnitGroups(item.content) >= 2;
+  const rule = heavy
+    ? `压缩到 ${dMax} 字以内是硬限制。允许删去次要主体名称与过程细节，只保留「谁用什么方式拿到多少」这类结论性事实，` +
+      `数字最多保留 2 组（优先与标题直接相关的）。不要新增事实。`
+    : `压缩到 ${dMax} 字以内，保留全部数字，只删连接词与重复限定，不要新增内容。`;
   return (
-    `把下面这句压缩到 ≤${dMax} 字，保留全部数字与出处，只删连接词与重复限定，不要新增内容。` +
-    `不要用 [文档N]，不要输出任何来源标注。只输出压缩后的描述正文，不要标题、编号或前言。\n` +
+    `${rule}\n不要用 [文档N]，不要输出任何来源标注。只输出压缩后的描述正文，不要标题、编号或前言。\n` +
     `标题：${item.title}\n描述：${item.content}`
   );
 }
@@ -59,6 +71,7 @@ export async function shortenPptItemDesc(opts: {
   extraUserSuffix?: string;
   requireKbHits?: boolean;
   model?: string;
+  forceHeavy?: boolean;
 }): Promise<string | null> {
   const {
     item,
@@ -67,8 +80,10 @@ export async function shortenPptItemDesc(opts: {
     extraUserSuffix = "",
     requireKbHits = false,
     model = DEFAULT_LLM_MODEL,
+    forceHeavy = false,
   } = opts;
-  const prompt = buildShortenItemPrompt(item, dMax) + extraUserSuffix;
+  const prompt =
+    buildShortenItemPrompt(item, dMax, { forceHeavy }) + extraUserSuffix;
   const msg = {
     messages: [
       { content: WRITING_SYSTEM_PROMPT, role: "system", name: "string" },
@@ -98,8 +113,7 @@ export async function shortenPptItemDesc(opts: {
 }
 
 /**
- * 超长条目自动精简：最多 3 条；单条失败静默保留原文。
- * shortenFn 应复用页面 shortenSlideItem / shortenPptItemDesc。
+ * 超长条目自动精简：最多 6 条；必须压到 ≤dMax 才算成功，否则记入 failed。
  */
 export async function autoShortenOverlongItems(
   items: ShortenItem[],
@@ -108,28 +122,38 @@ export async function autoShortenOverlongItems(
     index: number,
     item: ShortenItem,
     dMax: number,
+    opts?: { forceHeavy?: boolean },
   ) => Promise<string | null>,
   opts?: { metricCount?: number; maxItems?: number },
-): Promise<{ items: ShortenItem[]; shortened: number }> {
+): Promise<{ items: ShortenItem[]; shortened: number; failed: ShortenFail[] }> {
   const metricCount = opts?.metricCount ?? 0;
-  const maxItems = opts?.maxItems ?? 3;
+  const maxItems = opts?.maxItems ?? 6;
   const next = items.map((it) => ({ ...it }));
   let shortened = 0;
+  const failed: ShortenFail[] = [];
   for (let i = 0; i < next.length; i++) {
     if (shortened >= maxItems) break;
     const dMax = descMaxForPptItem(layout, i, metricCount);
-    if (pptItemLength(next[i].content) <= dMax) continue;
-    try {
-      const compressed = await shortenFn(i, next[i], dMax);
-      if (compressed && pptItemLength(compressed) > 0) {
-        next[i] = { ...next[i], content: compressed };
-        shortened += 1;
-      }
-    } catch {
-      // 静默保留原文
+    const len = pptItemLength(next[i].content);
+    if (len <= dMax) continue;
+    let compressed = await shortenFn(i, next[i], dMax).catch(() => null);
+    if (compressed && pptItemLength(compressed) > dMax) {
+      compressed = await shortenFn(i, next[i], dMax, { forceHeavy: true }).catch(
+        () => null,
+      );
+    }
+    if (compressed && pptItemLength(compressed) <= dMax) {
+      next[i] = { ...next[i], content: compressed };
+      shortened += 1;
+    } else {
+      failed.push({
+        index: i,
+        len: compressed ? pptItemLength(compressed) : len,
+        dMax,
+      });
     }
   }
-  return { items: next, shortened };
+  return { items: next, shortened, failed };
 }
 
 export function metricCountFromSubTitle(subTitle: string | undefined): number {

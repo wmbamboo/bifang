@@ -588,6 +588,7 @@ const KbOutlineGenPpt: React.FC = () => {
       let completeCnts=0;
       let wordCnts=0;
       let autoShortenedTotal=0;
+      let autoShortenFailed: Array<{ index: number; len: number; dMax: number }> = [];
       Promise.allSettled(promiseArr.map(
         (p,idx)=>
           p.then(async value=>{
@@ -606,19 +607,23 @@ const KbOutlineGenPpt: React.FC = () => {
                     title: vi.title || '',
                     content: vi.content || '',
                   }));
-                  const { items: next, shortened } = await autoShortenOverlongItems(
+                  const { items: next, shortened, failed } = await autoShortenOverlongItems(
                     items,
                     theSlide.layout,
-                    async (_i, item, dMax) =>
+                    async (_i, item, dMax, opt) =>
                       shortenPptItemDesc({
                         item,
                         dMax,
                         url,
                         extraUserSuffix: KB_WRITING_CONSTRAINT_PROMPT,
                         requireKbHits: true,
+                        forceHeavy: opt?.forceHeavy,
                       }),
                     { metricCount: metricCountFromSubTitle(theSlide.subTitle) },
                   );
+                  if (failed.length) {
+                    autoShortenFailed = autoShortenFailed.concat(failed);
+                  }
                   if (shortened > 0) {
                     autoShortenedTotal += shortened;
                     ok = theSlide.setViewItemsStructured(next);
@@ -637,7 +642,12 @@ const KbOutlineGenPpt: React.FC = () => {
             message.warning(tip.includes("登录") ? tip : `Key为${key}的幻灯片文本生成请求失败了。`)
           })
       )).then(results=>{
-        if (autoShortenedTotal > 0) {
+        if (autoShortenFailed.length) {
+          const f = autoShortenFailed[0];
+          message.warning(
+            `第 ${f.index + 1} 点仍超长（${f.len} 字，限 ${f.dMax} 字），建议改用表格版式或手工精简。`,
+          );
+        } else if (autoShortenedTotal > 0) {
           message.info(`已自动精简 ${autoShortenedTotal} 条超长描述`);
         }
         const completeCount=results.filter(r=>r.status==='fulfilled').length;
@@ -806,12 +816,14 @@ const KbOutlineGenPpt: React.FC = () => {
     _index: number,
     item: { title: string; content: string },
     dMax: number,
+    opt?: { forceHeavy?: boolean },
   ): Promise<string | null> => {
     const url = getBfBaseUrl() + '/knowledge_base/local_kb' + `/${kbName}/chat/completions`;
     return shortenPptItemDesc({
       item,
       dMax,
       url,
+      forceHeavy: opt?.forceHeavy,
       extraUserSuffix: KB_WRITING_CONSTRAINT_PROMPT,
       requireKbHits: true,
     });

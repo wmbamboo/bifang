@@ -109,6 +109,28 @@ export async function resendFeedbackNotify(id: string) {
   );
 }
 
+/** 反馈处理状态展示文案（表格 / 抽屉 / 弹窗共用） */
+export function feedbackStatusLabel(status?: string): {
+  text: string;
+  color: string;
+  tip?: string;
+} {
+  switch (status) {
+    case 'pending':
+      return { text: '待处理', color: 'orange', tip: '已提交，等待处理' };
+    case 'resolving':
+      return { text: '处理中', color: 'blue', tip: '正在修复或评估' };
+    case 'fixed':
+      return { text: '待确认', color: 'purple', tip: '已修复，等待提交人确认' };
+    case 'resolved':
+      return { text: '已关闭', color: 'green', tip: '提交人已确认' };
+    case 'ignored':
+      return { text: '已忽略', color: 'default', tip: '经评估不处理' };
+    default:
+      return { text: status || '—', color: 'default' };
+  }
+}
+
 /** 通知状态展示文案 */
 export function notifyStatusLabel(status?: string): {
   text: string;

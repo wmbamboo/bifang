@@ -18,6 +18,7 @@ import {
 import { useLocation, useModel } from '@umijs/max';
 import {
   addFeedbackComment,
+  feedbackStatusLabel,
   getFeedback,
   listFeedback,
   notifyStatusLabel,
@@ -26,17 +27,16 @@ import {
   type FeedbackItem,
   type FeedbackStatus,
 } from '@/services/feedback';
+import { useFeedbackImages } from '@/components/Feedback/useFeedbackImages';
 
 const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
 
 const STATUS_OPTS: { value: FeedbackStatus | ''; label: string }[] = [
   { value: '', label: '全部状态' },
-  { value: 'pending', label: '待处理' },
-  { value: 'resolving', label: '处理中' },
-  { value: 'fixed', label: '待确认' },
-  { value: 'resolved', label: '已关闭' },
-  { value: 'ignored', label: '已忽略' },
+  ...(['pending', 'resolving', 'fixed', 'resolved', 'ignored'] as const).map(
+    (s) => ({ value: s as FeedbackStatus, label: feedbackStatusLabel(s).text }),
+  ),
 ];
 
 const FeedbackAdmin: React.FC = () => {
@@ -58,6 +58,7 @@ const FeedbackAdmin: React.FC = () => {
   const [reply, setReply] = useState('');
   const [comment, setComment] = useState('');
   const [reopenReason, setReopenReason] = useState('');
+  const detailImgUrls = useFeedbackImages(detail?.images || []);
 
   useEffect(() => {
     const q = new URLSearchParams(loc.search || '');
@@ -175,7 +176,11 @@ const FeedbackAdmin: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       width: 100,
-      render: (v: string) => <Tag>{v}</Tag>,
+      render: (v: string) => {
+        const s = feedbackStatusLabel(v);
+        const tag = <Tag color={s.color}>{s.text}</Tag>;
+        return s.tip ? <Tooltip title={s.tip}>{tag}</Tooltip> : tag;
+      },
     },
     {
       title: '内容',
@@ -275,7 +280,15 @@ const FeedbackAdmin: React.FC = () => {
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <div>
               <Tag>{detail.feedback_type}</Tag>
-              <Tag color="blue">{detail.status}</Tag>
+              {(() => {
+                const s = feedbackStatusLabel(detail.status);
+                const tag = <Tag color={s.color}>{s.text}</Tag>;
+                return s.tip ? (
+                  <Tooltip title={s.tip}>{tag}</Tooltip>
+                ) : (
+                  tag
+                );
+              })()}
               {(() => {
                 const n = notifyStatusLabel(detail.notify_status);
                 const tag = <Tag color={n.color}>通知:{n.text}</Tag>;
@@ -293,13 +306,28 @@ const FeedbackAdmin: React.FC = () => {
             {detail.images && detail.images.length > 0 && (
               <Image.PreviewGroup>
                 <Space wrap>
-                  {detail.images.map((n) => (
-                    <Image
-                      key={n}
-                      width={96}
-                      src={`/api/feedback/image/${n}`}
-                    />
-                  ))}
+                  {detail.images.map((n) =>
+                    detailImgUrls[n] ? (
+                      <Image key={n} width={96} src={detailImgUrls[n]} />
+                    ) : (
+                      <div
+                        key={n}
+                        style={{
+                          width: 96,
+                          height: 96,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: '#f5f5f5',
+                          color: '#999',
+                          fontSize: 12,
+                          borderRadius: 4,
+                        }}
+                      >
+                        图片加载失败
+                      </div>
+                    ),
+                  )}
                 </Space>
               </Image.PreviewGroup>
             )}

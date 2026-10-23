@@ -37,8 +37,13 @@ def get_embedding_model():
         from sentence_transformers import SentenceTransformer
 
         device = _resolve_device()
-        print(f"[embedding] loading {settings.embedding_model} on {device}")
-        _model = SentenceTransformer(settings.embedding_model, device=device)
+        print(f"[embedding] loading {settings.embedding_model} on {device} (local_files_only)")
+        # 只用 HF_HOME 本地缓存，不访问 Hub（避免无 HF_TOKEN 的限速提示）
+        _model = SentenceTransformer(
+            settings.embedding_model,
+            device=device,
+            local_files_only=True,
+        )
         return _model
 
 

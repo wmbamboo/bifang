@@ -53,7 +53,7 @@ def _public_user(u: dict) -> dict:
 @router.post("/login/account")
 async def login_account(request: Request):
     body = await request.json()
-    username = body.get("username") or ""
+    username = (body.get("username") or "").strip()
     password = body.get("password") or ""
     login_type = body.get("type") or "account"
     ip, ua = auth_mod.client_meta(request)
@@ -226,7 +226,17 @@ async def user_update(request: Request, _admin: dict = Depends(require_api_admin
     from app.security.rbac import derive_access, normalize_roles, replace_user_roles
 
     body = await request.json()
-    username = body.get("username")
+    username = (body.get("username") or "").strip()
+    userid = (body.get("userid") or "").strip()
+    if not username and userid:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT username FROM users WHERE userid=?", (userid,)
+            ).fetchone()
+        if row:
+            username = (row["username"] or "").strip()
+    if not username:
+        return fail("缺少用户名", 400)
     roles = None
     if body.get("roles") is not None:
         roles = normalize_roles(body.get("roles") or ["user"])
@@ -234,7 +244,7 @@ async def user_update(request: Request, _admin: dict = Depends(require_api_admin
     else:
         access = body.get("access")
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE users SET name=?, access=?, email=?, phone=?, org_code=?, org_name=?,
                    unit=?, dept=?, address=?, signature=?, avatar=?, user_status=?
@@ -256,10 +266,13 @@ async def user_update(request: Request, _admin: dict = Depends(require_api_admin
                 username,
             ),
         )
+        if cur.rowcount == 0:
+            return fail("用户不存在", 404)
         if roles is not None:
             replace_user_roles(conn, username, roles)
-        if body.get("password"):
-            new_plain = str(body.get("password") or "").strip()
+        raw_pwd = body.get("password")
+        if raw_pwd is not None and str(raw_pwd).strip():
+            new_plain = str(raw_pwd).strip()
             pw_err = validate_password_strength(new_plain, username or "")
             if pw_err:
                 return fail(pw_err, 400)

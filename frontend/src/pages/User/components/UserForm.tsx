@@ -43,7 +43,7 @@ const UserForm: React.FC<UserFormProps> = ({
           <Input  placeholder={"请输入姓名"}/>
         </Form.Item>
         <Form.Item name="username" label="用户名" rules={[{ required: true }]}>
-          <Input disabled={isEdit} placeholder={"请输入登录用户名"} />
+          <Input readOnly={isEdit} placeholder={"请输入登录用户名"} />
         </Form.Item>
         <Form.Item
           name="password"
@@ -73,7 +73,7 @@ const UserForm: React.FC<UserFormProps> = ({
           name="roles"
           label="角色"
           rules={[{ required: true, type: 'array', min: 1, message: '请至少选择一个角色' }]}
-          extra="可多选；含「管理员」则主身份为 admin，否则为 user；「知识库管理员」可叠加"
+          extra="可多选；含「管理员」则主身份为 admin，否则为 user；知识库管理员 / 反馈接收员 / 反馈验证员 / 程序猿可叠加"
         >
           <Select
             mode="multiple"

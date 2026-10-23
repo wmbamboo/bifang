@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     # 可信反向代理（逗号分隔）；仅这些 peer 才采信 X-Real-IP / X-Forwarded-For
     trusted_proxies: str = "127.0.0.1,::1"
 
+    # Cursor SDK（反馈打包派发）
+    cursor_api_key: str = ""
+    cursor_agent_model: str = "composer-2.5"
+    # 空则默认取 backend 上级目录（毕方仓库根）
+    bifang_repo_root: str = ""
+
     @property
     def trusted_proxy_set(self) -> set[str]:
         return {p.strip() for p in self.trusted_proxies.split(",") if p.strip()}
@@ -106,6 +112,16 @@ class Settings(BaseSettings):
     @property
     def origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def repo_root(self) -> Path:
+        if self.bifang_repo_root.strip():
+            return Path(self.bifang_repo_root).expanduser().resolve()
+        return BASE_DIR.parent.resolve()
+
+    @property
+    def feedback_packs_dir(self) -> Path:
+        return self.data_path / "feedback_packs"
 
 
 @lru_cache

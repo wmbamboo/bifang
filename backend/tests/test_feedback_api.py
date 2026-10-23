@@ -132,6 +132,49 @@ def test_no_email_skipped_notify(client: TestClient, monkeypatch):
     assert r.json()["data"]["notify_status"] == "no_email"
 
 
+def test_unread_count_submitter_vs_assignee(client: TestClient):
+    admin_tok = _login(client, "admin", "admin")
+    alice_tok = _login(client, "alice", "alice")
+    fid_sub = uuid.uuid4().hex
+    fid_asg = uuid.uuid4().hex
+    client.post(
+        "/api/feedback",
+        headers={"token": alice_tok},
+        json={"id": fid_sub, "feedback_type": "bug", "content": "mine-fixed"},
+    )
+    client.post(
+        "/api/feedback",
+        headers={"token": alice_tok},
+        json={"id": fid_asg, "feedback_type": "bug", "content": "assigned"},
+    )
+    client.put(
+        f"/api/feedback/{fid_sub}",
+        headers={"token": admin_tok},
+        json={"status": "fixed"},
+    )
+    client.put(
+        f"/api/feedback/{fid_asg}",
+        headers={"token": admin_tok},
+        json={"status": "resolving", "assignee": "admin"},
+    )
+    r_all = client.get(
+        "/api/feedback/unread-count",
+        headers={"token": admin_tok},
+    )
+    assert r_all.json()["code"] == 200
+    assert r_all.json()["data"]["count"] == 1
+    r_sub = client.get(
+        "/api/feedback/unread-count?scope=submitter",
+        headers={"token": admin_tok},
+    )
+    assert r_sub.json()["data"]["count"] == 0
+    r_alice = client.get(
+        "/api/feedback/unread-count?scope=submitter",
+        headers={"token": alice_tok},
+    )
+    assert r_alice.json()["data"]["count"] == 1
+
+
 def test_smtp_fail_still_200(client: TestClient, monkeypatch):
     from app.services import feedback_mail
 

@@ -261,6 +261,15 @@ async def asset_file(
     return FileResponse(path, media_type=media, filename=path.name)
 
 
+@router.get("/preview_pages")
+async def preview_pages(
+    knowledge_base_name: str = Query(""),
+    file_name: str = Query(""),
+):
+    """文档预览页枚举：页图 + extracts 文本（只读扫描，防穿越）。"""
+    return kb_service.list_preview_pages(knowledge_base_name, file_name)
+
+
 @router.post("/material_pool/allocate")
 async def allocate_material_pool(request: Request):
     """任务 4B / 方案 B：一次建池并返回「章节→片段」互斥分配表。"""

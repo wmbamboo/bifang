@@ -28,3 +28,5 @@ faiss-cpu>=1.8.0
 # pip install torch --index-url https://download.pytorch.org/whl/cu126
 pytest>=8.0
 bcrypt>=4.0.0
+# Cursor SDK（反馈打包派发 Local Agent）
+cursor-sdk>=0.1.0

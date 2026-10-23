@@ -16,6 +16,9 @@ const UserList: React.FC = () => {
     { label: '管理员', value: 'admin' },
     { label: '用户', value: 'user' },
     { label: '知识库管理员', value: 'kb_manager' },
+    { label: '反馈接收员', value: 'feedback_receiver' },
+    { label: '反馈验证员', value: 'feedback_verifier' },
+    { label: '程序猿', value: 'coder' },
   ];
   const beInUsers=new Set(['admin','user']);
   const roleLabel = (codes: string[] | string | undefined) => {
@@ -114,6 +117,7 @@ const UserList: React.FC = () => {
         message.success('用户添加成功');
       } else {
         payload.userid = currentUser.userid;
+        payload.username = payload.username || currentUser.username;
         await updateUser(payload);
         message.success('用户信息修改成功');
       }

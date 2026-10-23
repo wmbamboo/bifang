@@ -11,7 +11,7 @@ from starlette.types import ASGIApp
 
 from app.config import get_settings
 from app.security import auth as auth_mod
-from app.security.rbac import is_admin
+from app.security.rbac import is_admin, is_feedback_coder, is_feedback_receiver
 from app.services import audit
 
 # 不鉴权路径（前缀或精确）
@@ -144,7 +144,23 @@ def require_api_kb(request: Request) -> dict:
     raise HTTPException(status_code=403, detail="无知识库管理权限")
 
 
+def require_api_feedback_dispatch(request: Request) -> dict:
+    user = require_api_user(request)
+    if is_feedback_receiver(user):
+        return user
+    raise HTTPException(status_code=403, detail="无反馈派发权限")
+
+
+def require_api_feedback_dev(request: Request) -> dict:
+    user = require_api_user(request)
+    if is_feedback_coder(user):
+        return user
+    raise HTTPException(status_code=403, detail="无反馈开发管理权限")
+
+
 # FastAPI Depends 别名
 RequireUser = Depends(require_api_user)
 RequireAdmin = Depends(require_api_admin)
 RequireKb = Depends(require_api_kb)
+RequireFeedbackDispatch = Depends(require_api_feedback_dispatch)
+RequireFeedbackDev = Depends(require_api_feedback_dev)

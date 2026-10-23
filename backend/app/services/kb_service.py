@@ -740,6 +740,113 @@ def resolve_asset_path(kb_name: str, file_name: str, asset_id: str) -> Optional[
     return None
 
 
+def _safe_doc_stem(file_name: str) -> Optional[str]:
+    """文档名 → stem；拒绝路径穿越与空名。"""
+    raw = (file_name or "").replace("\\", "/").strip()
+    if not raw or ".." in raw.split("/"):
+        return None
+    name = Path(raw).name
+    if not name or name in {".", ".."} or ".." in name:
+        return None
+    stem = Path(name).stem
+    if not stem or ".." in stem or "/" in stem or "\\" in stem:
+        return None
+    return stem
+
+
+def list_preview_pages(kb_name: str, file_name: str) -> dict:
+    """预览页枚举：页图优先（whole > embedded），并合并 extracts 文本降级。
+
+    只扫目录 + 读 jsonl，不做解析。返回 pages: [{page, asset_id?, snippet?, page_type?}]。
+    """
+    kb = (kb_name or "").strip()
+    if not kb or ".." in kb or "/" in kb or "\\" in kb:
+        return fail("知识库名称无效", 400)
+    stem = _safe_doc_stem(file_name)
+    if not stem:
+        return fail("文件名无效", 400)
+    safe_name = Path((file_name or "").replace("\\", "/")).name or f"{stem}.pdf"
+
+    by_page: dict[int, dict] = {}
+
+    # extracts 文本
+    extracts = get_settings().kb_root / kb / "extracts" / f"{stem}.jsonl"
+    if extracts.is_file():
+        for line in extracts.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                pg = int(rec.get("page"))
+            except (TypeError, ValueError):
+                continue
+            if pg <= 0:
+                continue
+            entry = by_page.setdefault(pg, {"page": pg})
+            snip = str(rec.get("snippet") or "").strip()
+            if snip:
+                entry["snippet"] = snip[:2000]
+            ptype = rec.get("page_type")
+            if ptype:
+                entry["page_type"] = str(ptype)
+
+    adir = get_settings().kb_root / kb / "assets" / stem
+    # whole/page_N.* 优先
+    whole = adir / "whole"
+    if whole.is_dir():
+        for p in whole.iterdir():
+            if not p.is_file():
+                continue
+            m = re.match(r"page_(\d+)\.(png|jpe?g|webp)$", p.name, re.I)
+            if not m:
+                continue
+            pg = int(m.group(1))
+            entry = by_page.setdefault(pg, {"page": pg})
+            # whole 覆盖已有 embedded
+            entry["asset_id"] = f"whole/{p.name}"
+            entry["image_kind"] = "whole"
+
+    # 根目录 embedded：{stem}_pN_i.png，同页取最小 i；已有 whole 不覆盖
+    if adir.is_dir():
+        emb_best: dict[int, tuple[int, str]] = {}
+        for p in adir.iterdir():
+            if not p.is_file() or p.parent != adir:
+                continue
+            m = re.match(
+                rf"^{re.escape(stem)}_p(\d+)_(\d+)\.(png|jpe?g|webp)$",
+                p.name,
+                re.I,
+            )
+            if not m:
+                continue
+            pg, idx = int(m.group(1)), int(m.group(2))
+            prev = emb_best.get(pg)
+            if prev is None or idx < prev[0]:
+                emb_best[pg] = (idx, p.name)
+        for pg, (_idx, name) in emb_best.items():
+            entry = by_page.setdefault(pg, {"page": pg})
+            if entry.get("image_kind") == "whole":
+                continue
+            entry["asset_id"] = name
+            entry["image_kind"] = "embedded"
+
+    pages = [by_page[k] for k in sorted(by_page.keys())]
+    for p in pages:
+        p["has_image"] = bool(p.get("asset_id"))
+        p.setdefault("snippet", "")
+    return ok(
+        {
+            "knowledge_base_name": kb,
+            "file_name": safe_name,
+            "stem": stem,
+            "pages": pages,
+        }
+    )
+
+
 def vectorize_files(
     knowledge_base_name: str,
     file_names: Optional[list[str]] = None,

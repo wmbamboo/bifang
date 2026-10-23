@@ -5,6 +5,7 @@ import { useRequest } from '@umijs/max';
 import { Empty, Input, Pagination, Progress, Segmented, Space, Tooltip, Typography, message } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { updateIdOfOutlineRes } from '@/components/DocUtil/OutlineStore';
+import DocPreviewModal from '@/components/DocUtil/DocPreviewModal';
 import styles from './index.less';
 
 updateIdOfOutlineRes();
@@ -87,6 +88,10 @@ const DocSearch: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 8;
   const [kbMap, setKbMap] = useState<KbMap>({});
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewKb, setPreviewKb] = useState('');
+  const [previewFile, setPreviewFile] = useState('');
+  const [previewPage, setPreviewPage] = useState<number | undefined>();
 
   const fetchKbList = async () => {
     const resData = await KbAPI.listKnowledgeBases();
@@ -230,16 +235,16 @@ const DocSearch: React.FC = () => {
     }
   };
 
-  const base64Encode = (str: string) => btoa(encodeURIComponent(str));
-
   const handlePreview = (record: API.SearchResult) => {
     if (!record.metadata?.kb_name || !record.metadata?.source) {
       message.error('文档信息不完整');
       return;
     }
-    const url = `https://poc.intronlink.com/kkfv/kbfiles/${record.metadata.kb_name}/content/${record.metadata.source}`;
-    const previewUrl = `https://poc.intronlink.com/kkfv/onlinePreview?url=${encodeURIComponent(base64Encode(url))}`;
-    window.open(previewUrl);
+    setPreviewKb(record.metadata.kb_name);
+    setPreviewFile(record.metadata.source);
+    const pg = Number((record.metadata as any)?.page);
+    setPreviewPage(Number.isFinite(pg) && pg > 0 ? pg : undefined);
+    setPreviewOpen(true);
   };
 
   const modeLabel =
@@ -397,6 +402,13 @@ const DocSearch: React.FC = () => {
           </div>
         )}
       </div>
+      <DocPreviewModal
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        knowledgeBaseName={previewKb}
+        fileName={previewFile}
+        initialPage={previewPage}
+      />
     </PageContainer>
   );
 };

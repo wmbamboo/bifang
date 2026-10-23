@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { PageContainer } from '@ant-design/pro-components';
 import {
+  Badge,
   Button,
   Drawer,
   Input,
   List,
+  Modal,
   Select,
   Space,
   Table,
@@ -18,16 +20,26 @@ import {
 import { useLocation, useModel } from '@umijs/max';
 import {
   addFeedbackComment,
+  dispatchFeedbackToCursor,
   feedbackStatusLabel,
+  getCursorJob,
   getFeedback,
   listFeedback,
+  markFeedbackCommentsRead,
   notifyStatusLabel,
+  prepareFeedbackForWorkbuddy,
   resendFeedbackNotify,
   updateFeedback,
+  type CursorJobMeta,
   type FeedbackItem,
   type FeedbackStatus,
 } from '@/services/feedback';
 import { useFeedbackImages } from '@/components/Feedback/useFeedbackImages';
+import authAxios from '@/utils/authAxios';
+
+const refreshUnreadBadge = () => {
+  window.dispatchEvent(new Event('bf-feedback-unread-refresh'));
+};
 
 const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
@@ -46,28 +58,45 @@ const FeedbackAdmin: React.FC = () => {
     me?.roles?.length ? me.roles : me?.access ? [me.access] : [];
   /** 仅 admin 可改状态/指派；普通用户只读自己的提交与处理结果 */
   const isAdmin = roles.includes('admin');
+  const canViewAll =
+    isAdmin ||
+    roles.includes('feedback_receiver') ||
+    roles.includes('feedback_verifier');
+  const canDispatch =
+    isAdmin || roles.includes('feedback_receiver');
+  const canVerifyRole =
+    isAdmin || roles.includes('feedback_verifier');
   const loc = useLocation();
   const [rows, setRows] = useState<FeedbackItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string>('');
-  // 非 admin 默认「我的」；后端对非 admin 也会强制 user=?
-  const [mine, setMine] = useState(isAdmin ? 0 : 1);
+  // 无全量权限默认「我的」；接收员/验证员/admin 默认全部
+  const [mine, setMine] = useState(canViewAll ? 0 : 1);
   const [assignee, setAssignee] = useState('');
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<FeedbackItem | null>(null);
   const [reply, setReply] = useState('');
   const [comment, setComment] = useState('');
   const [reopenReason, setReopenReason] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [dispatching, setDispatching] = useState(false);
+  const [cursorJob, setCursorJob] = useState<CursorJobMeta | null>(null);
+  const [workbuddyJob, setWorkbuddyJob] = useState<{
+    job_id: string;
+    instruction: string;
+  } | null>(null);
+  const [scrollToComments, setScrollToComments] = useState(false);
+  const commentsRef = useRef<HTMLDivElement | null>(null);
   const detailImgUrls = useFeedbackImages(detail?.images || []);
 
   useEffect(() => {
     const q = new URLSearchParams(loc.search || '');
     if (q.get('mine') === '1') setMine(1);
-    else if (!isAdmin) setMine(1);
+    else if (!canViewAll) setMine(1);
     if (q.get('assignee') === 'me') setAssignee('me');
     const id = q.get('id');
     if (id) openDetail(id);
-  }, [isAdmin]);
+  }, [canViewAll]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,18 +130,40 @@ const FeedbackAdmin: React.FC = () => {
     load();
   }, [load]);
 
-  const openDetail = async (id: string) => {
+  const openDetail = async (
+    id: string,
+    opts?: { focusComments?: boolean },
+  ) => {
     try {
       const res = await getFeedback(id);
       if (res?.code === 200) {
         setDetail(res.data);
         setReply(res.data?.reply || '');
         setOpen(true);
+        setScrollToComments(!!opts?.focusComments);
+        if (opts?.focusComments) {
+          await markFeedbackCommentsRead(id);
+          setRows((prev) =>
+            prev.map((r) =>
+              r.id === id ? { ...r, new_comment_count: 0 } : r,
+            ),
+          );
+          refreshUnreadBadge();
+        }
       } else message.error(res?.msg || '加载详情失败');
     } catch (e: any) {
       message.error(e?.message || '加载详情失败');
     }
   };
+
+  useEffect(() => {
+    if (!open || !scrollToComments) return;
+    const t = window.setTimeout(() => {
+      commentsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setScrollToComments(false);
+    }, 120);
+    return () => window.clearTimeout(t);
+  }, [open, scrollToComments, detail?.id]);
 
   const changeStatus = async (next: FeedbackStatus) => {
     if (!detail) return;
@@ -156,8 +207,118 @@ const FeedbackAdmin: React.FC = () => {
     if (res?.code === 200) {
       message.success('已评论');
       setComment('');
-      openDetail(detail.id);
+      await markFeedbackCommentsRead(detail.id);
+      openDetail(detail.id, { focusComments: true });
+      load();
+      refreshUnreadBadge();
     } else message.error(res?.msg || '评论失败');
+  };
+
+  const pollCursorJob = useCallback(async (jobId: string) => {
+    try {
+      const res = await getCursorJob(jobId);
+      if (res?.code === 200 && res.data) {
+        setCursorJob(res.data);
+        const st = res.data.status || '';
+        if (st === 'done' || st === 'error') return;
+        window.setTimeout(() => pollCursorJob(jobId), 2000);
+      }
+    } catch {
+      /* 轮询失败不打断 */
+    }
+  }, []);
+
+  const onDispatchCursor = async () => {
+    if (!selectedIds.length) {
+      message.warning('请先勾选反馈');
+      return;
+    }
+    setDispatching(true);
+    try {
+      const res = await dispatchFeedbackToCursor({ ids: selectedIds });
+      if (res?.code === 200 && res.data?.job_id) {
+        message.success('已提交 Cursor 处理');
+        setCursorJob({ job_id: res.data.job_id, status: res.data.status });
+        pollCursorJob(res.data.job_id);
+      } else {
+        message.error(res?.msg || '派发失败');
+      }
+    } catch (e: any) {
+      message.error(e?.message || '派发失败');
+    } finally {
+      setDispatching(false);
+    }
+  };
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // http 非安全上下文降级方案
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  const onDispatchWorkbuddy = async () => {
+    if (!selectedIds.length) {
+      message.warning('请先勾选反馈');
+      return;
+    }
+    setDispatching(true);
+    try {
+      const res = await prepareFeedbackForWorkbuddy({ ids: selectedIds });
+      if (res?.code === 200 && res.data?.job_id) {
+        setWorkbuddyJob({
+          job_id: res.data.job_id,
+          instruction: res.data.instruction,
+        });
+        const copied = await copyText(res.data.instruction);
+        message.success(
+          copied
+            ? '已打包，分析指令已复制到剪贴板'
+            : '已打包，请在弹窗中复制分析指令',
+        );
+        pollCursorJob(res.data.job_id);
+      } else {
+        message.error(res?.msg || '打包失败');
+      }
+    } catch (e: any) {
+      message.error(e?.message || '打包失败');
+    } finally {
+      setDispatching(false);
+    }
+  };
+
+  const downloadPack = async () => {
+    const jobId = cursorJob?.job_id;
+    if (!jobId) return;
+    try {
+      const res = await authAxios.get(
+        `/api/feedback/cursor-jobs/${jobId}/pack`,
+        { responseType: 'blob' },
+      );
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `feedback_pack_${jobId.slice(0, 8)}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      message.error(e?.message || '下载失败');
+    }
   };
 
   const columns = [
@@ -186,6 +347,27 @@ const FeedbackAdmin: React.FC = () => {
       title: '内容',
       dataIndex: 'content',
       ellipsis: true,
+    },
+    {
+      title: '评论',
+      dataIndex: 'comment_count',
+      width: 88,
+      render: (_: any, r: FeedbackItem) => {
+        const total = Number(r.comment_count || 0);
+        const neu = Number(r.new_comment_count || 0);
+        return (
+          <Badge count={neu} size="small" offset={[6, 0]}>
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0, minWidth: 24 }}
+              onClick={() => openDetail(r.id, { focusComments: true })}
+            >
+              {total}
+            </Button>
+          </Badge>
+        );
+      },
     },
     {
       title: '提交人',
@@ -225,9 +407,21 @@ const FeedbackAdmin: React.FC = () => {
     },
   ];
 
-  const isOwner =
+  const loginUser =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('loginUser')) ||
+    '';
+  /** 提交人：username / loginUser / 显示名 任一命中即可（防 user_name 存成登录名导致误判） */
+  const isOwner = !!(
     detail &&
-    (detail.user === me?.username || detail.user_name === me?.name);
+    (
+      (me?.username &&
+        (detail.user === me.username || detail.user_name === me.username)) ||
+      (loginUser &&
+        (detail.user === loginUser || detail.user_name === loginUser)) ||
+      (me?.name && detail.user_name === me.name)
+    )
+  );
+  const canVerify = isOwner || canVerifyRole;
 
   return (
     <PageContainer breadcrumb={{}}>
@@ -242,12 +436,12 @@ const FeedbackAdmin: React.FC = () => {
           style={{ width: 140 }}
           value={mine}
           options={[
-            { value: 0, label: isAdmin ? '全部' : '我的' },
+            { value: 0, label: canViewAll ? '全部' : '我的' },
             { value: 1, label: '仅我的' },
           ]}
           onChange={setMine}
         />
-        {isAdmin && (
+        {canViewAll && (
           <Select
             style={{ width: 140 }}
             value={assignee}
@@ -259,6 +453,35 @@ const FeedbackAdmin: React.FC = () => {
           />
         )}
         <Button onClick={load}>刷新</Button>
+        {canDispatch && (
+          <Button
+            type="primary"
+            loading={dispatching}
+            disabled={!selectedIds.length}
+            onClick={onDispatchCursor}
+          >
+            打包并交 Cursor 处理
+          </Button>
+        )}
+        {canDispatch && (
+          <Button
+            loading={dispatching}
+            disabled={!selectedIds.length}
+            onClick={onDispatchWorkbuddy}
+          >
+            打包并交 WorkBuddy 分析
+          </Button>
+        )}
+        {cursorJob?.job_id && (
+          <Text type="secondary">
+            Agent 任务 {cursorJob.job_id.slice(0, 8)}…：
+            {cursorJob.status || '—'}
+            {cursorJob.error ? `（${cursorJob.error}）` : ''}
+          </Text>
+        )}
+        {cursorJob?.has_pack && (
+          <Button onClick={downloadPack}>下载反馈包</Button>
+        )}
       </Space>
       <Table
         rowKey="id"
@@ -267,6 +490,14 @@ const FeedbackAdmin: React.FC = () => {
         dataSource={rows}
         pagination={{ pageSize: 20 }}
         size="middle"
+        rowSelection={
+          canDispatch
+            ? {
+                selectedRowKeys: selectedIds,
+                onChange: (keys) => setSelectedIds(keys as string[]),
+              }
+            : undefined
+        }
       />
 
       <Drawer
@@ -372,7 +603,7 @@ const FeedbackAdmin: React.FC = () => {
                     处理中
                   </Button>
                   <Button type="primary" onClick={() => changeStatus('fixed')}>
-                    标为待确认
+                    标为待验证
                   </Button>
                   <Button onClick={() => changeStatus('ignored')}>忽略</Button>
                   <Button
@@ -409,10 +640,10 @@ const FeedbackAdmin: React.FC = () => {
                 </Button>
               )}
 
-            {(isOwner || isAdmin) && detail.status === 'fixed' && (
+            {canVerify && detail.status === 'fixed' && (
               <Space direction="vertical" style={{ width: '100%' }}>
                 <Button type="primary" onClick={() => changeStatus('resolved')}>
-                  确认已修复
+                  验证已修复
                 </Button>
                 <Input
                   placeholder="重开原因"
@@ -425,7 +656,7 @@ const FeedbackAdmin: React.FC = () => {
               </Space>
             )}
 
-            <div>
+            <div ref={commentsRef} id="feedback-comments-section">
               <Text strong>评论</Text>
               <List
                 size="small"
@@ -458,6 +689,39 @@ const FeedbackAdmin: React.FC = () => {
           </Space>
         )}
       </Drawer>
+      <Modal
+        open={!!workbuddyJob}
+        title={`WorkBuddy 分析任务 ${workbuddyJob?.job_id?.slice(0, 8) ?? ''}…`}
+        onCancel={() => setWorkbuddyJob(null)}
+        footer={null}
+        width={680}
+      >
+        <Paragraph type="secondary">
+          分析指令已复制到剪贴板（如未复制成功，请在下方手动复制）。打开
+          WorkBuddy 粘贴发送即可；WorkBuddy 分析完成后会把结论写回该任务，此处状态将变为
+          done，结果可在「Agent 任务」中查看。
+        </Paragraph>
+        <TextArea rows={8} readOnly value={workbuddyJob?.instruction} />
+        <Space style={{ marginTop: 12 }}>
+          <Button
+            type="primary"
+            onClick={async () => {
+              if (await copyText(workbuddyJob?.instruction || '')) {
+                message.success('已复制');
+              } else {
+                message.error('复制失败，请手动选择文本复制');
+              }
+            }}
+          >
+            复制分析指令
+          </Button>
+          {workbuddyJob && (
+            <Button onClick={() => pollCursorJob(workbuddyJob.job_id)}>
+              刷新任务状态
+            </Button>
+          )}
+        </Space>
+      </Modal>
     </PageContainer>
   );
 };

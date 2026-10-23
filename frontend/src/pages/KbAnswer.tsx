@@ -3,13 +3,14 @@ import { useModel } from '@umijs/max';
 import { ProChat, ProChatProvider, useProChat } from '@ant-design/pro-chat';
 import { useTheme } from 'antd-style';
 import { useMemo, useState } from 'react';
-import { Button, Space } from 'antd';
+import { Button, Space, message } from 'antd';
 import * as React from 'react';
 import { CloseOutlined, FileTextOutlined, LinkOutlined } from '@ant-design/icons';
 import { bfOpenAI } from '@/utils/bfOpenAI';
 import KbListSnlComp from '@/components/KbMgt/KbListCompSnl';
 import {getCachedKbName, setCachedKbName} from '@/components/DocUtil/kbSelectorModal';
 import SpeechToTextButton from '@/components/DocUtil/SpeechToTextButton';
+import DocPreviewModal from '@/components/DocUtil/DocPreviewModal';
 import styles from './KbAnswer.less';
 import {getBfBaseUrl} from "@/utils/bfBaseUrl";
 
@@ -25,16 +26,6 @@ export interface RelatedDoc {
   link?: string;
   score?: number;
 }
-
-const base64Encode = (str: string) => btoa(encodeURIComponent(str));
-
-const handlePreview = (docPath: string, kbName: string) => {
-  const url = `https://poc.intronlink.com/kkfv/kbfiles/${kbName}/content/${docPath}`;
-  const previewUrl = `https://poc.intronlink.com/kkfv/onlinePreview?url=${encodeURIComponent(
-    base64Encode(url),
-  )}`;
-  window.open(previewUrl);
-};
 
 const parseLegacyDocText = (text: string): RelatedDoc => {
   const headerRegex = /出处\s*\[(\d+)\]\s*\[(.*?)\]\((.*?)\)\s*\n\n/;
@@ -141,6 +132,21 @@ const KbAnswerPage: React.FC = () => {
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   /** 每轮回答正文开头 -> 该轮参考文档，供消息尾部「参考：」点击打开 */
   const [docsByAnswer, setDocsByAnswer] = useState<{ key: string; docs: RelatedDoc[] }[]>([]);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewKb, setPreviewKb] = useState('');
+  const [previewFile, setPreviewFile] = useState('');
+
+  const openPreview = (docPath: string, kbName: string) => {
+    const kb = (kbName || selectKbName || '').trim();
+    const file = (docPath || '').trim();
+    if (!kb || !file) {
+      message.warning('文档信息不完整');
+      return;
+    }
+    setPreviewKb(kb);
+    setPreviewFile(file);
+    setPreviewOpen(true);
+  };
 
   const openDocsPanel = (docs: RelatedDoc[], docNumber?: string) => {
     if (!docs?.length) return;
@@ -512,7 +518,10 @@ const KbAnswerPage: React.FC = () => {
                       )}
                       <a
                         onClick={() =>
-                          handlePreview(doc.source || doc.title, doc.kbName || selectKbName)
+                          openPreview(
+                            doc.source || doc.title,
+                            doc.kbName || selectKbName,
+                          )
                         }
                       >
                         预览
@@ -525,6 +534,12 @@ const KbAnswerPage: React.FC = () => {
           </ProCard>
         )}
       </ProCard>
+      <DocPreviewModal
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        knowledgeBaseName={previewKb}
+        fileName={previewFile}
+      />
     </PageContainer>
   );
 };

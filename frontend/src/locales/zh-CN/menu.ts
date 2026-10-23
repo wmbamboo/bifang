@@ -32,6 +32,7 @@ export default {
   'menu.admin.user-list': '用户管理',
   'menu.admin.user-profile': '个人信息',
   'menu.admin.feedback-mgt': '反馈',
+  'menu.admin.feedback-dev': '反馈开发管理',
   'menu.admin.audit-logs': '日志审计',
   'menu.login': '登录',
   'menu.register': '注册',

@@ -259,6 +259,8 @@ def init_db() -> None:
         _patch_audit_menu_and_kb_user(conn)
         _patch_user_emails_and_lizy(conn)
         _patch_rbac_scheme_c(conn)
+        _patch_feedback_roles(conn)
+        _patch_feedback_reads(conn)
 
     # 启动清理旧日志（短事务）
     try:
@@ -420,6 +422,74 @@ def _patch_user_emails_and_lizy(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "UPDATE users SET access='user' WHERE username='lizy' AND access!='user'",
+    )
+
+
+def _patch_feedback_reads(conn: sqlite3.Connection) -> None:
+    """反馈评论已读水位：按用户×反馈记录 comments_read_at。"""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feedback_reads (
+            username TEXT NOT NULL,
+            feedback_id TEXT NOT NULL,
+            comments_read_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (username, feedback_id)
+        )
+        """
+    )
+
+
+def _patch_feedback_roles(conn: sqlite3.Connection) -> None:
+    """反馈接收员 / 验证员 / 程序猿：菜单与角色种子。"""
+    now = _now()
+    specs = (
+        (
+            "feedback_receiver",
+            "反馈接收员",
+            "可打包反馈并派发 Cursor Agent，无系统管理权",
+            "feedbackMgt",
+        ),
+        (
+            "feedback_verifier",
+            "反馈验证员",
+            "可代提交人验证已修复（resolved）或重开，无系统管理权",
+            "feedbackMgt",
+        ),
+        (
+            "coder",
+            "程序猿",
+            "可查看反馈 Agent 任务包、RESULT 与前因后果（反馈开发管理）",
+            "feedbackDevMgt",
+        ),
+    )
+    for code, name, desc, menu_access in specs:
+        conn.execute(
+            """
+            INSERT INTO roles (role_code, role_name, role_desc, sys_role_flag, role_status, update_time)
+            SELECT ?, ?, ?, 0, 1, ?
+            WHERE NOT EXISTS (SELECT 1 FROM roles WHERE role_code=?)
+            """,
+            (code, name, desc, now, code),
+        )
+        conn.execute(
+            """
+            INSERT INTO role_res (auth_res, res_type, res_status, role_code)
+            SELECT ?, 'menu', '1', ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM role_res
+                WHERE auth_res=? AND res_type='menu' AND role_code=?
+            )
+            """,
+            (menu_access, code, menu_access, code),
+        )
+    # 反馈开发管理菜单（仅程序猿；不授给 admin）
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO menus
+        (id, zh_name, name, access, icon, path, "order", p_id, module_menu_flag)
+        VALUES (23, '反馈开发管理', 'feedbackDevMgt', 'feedbackDevMgt',
+                'CodeOutlined', '/admin/feedback-dev', 10, 12, '0')
+        """
     )
 
 

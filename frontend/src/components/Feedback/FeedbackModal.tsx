@@ -20,6 +20,7 @@ import { history } from '@umijs/max';
 import {
   createFeedback,
   listFeedback,
+  updateFeedback,
   uploadFeedbackImage,
   flushFeedbackOfflineQueue,
   loadFeedbackOfflineQueue,
@@ -65,19 +66,59 @@ interface Props {
   open: boolean;
   onClose: () => void;
   contextHint?: FeedbackContextInput;
+  /** 待办数量变化（如验证已修复）时刷新角标 */
+  onTodoChange?: () => void;
 }
 
-const MineRow: React.FC<{ item: FeedbackItem }> = ({ item }) => {
+const MineRow: React.FC<{
+  item: FeedbackItem;
+  onVerified?: (id: string) => void;
+}> = ({ item, onVerified }) => {
   const names = item.images || [];
   const urls = useFeedbackImages(names);
   const st = feedbackStatusLabel(item.status);
   const thumb = names.map((n) => urls[n]).find(Boolean);
+  const [verifying, setVerifying] = useState(false);
+  const openDetail = () => {
+    history.push(`/admin/feedback?id=${encodeURIComponent(item.id)}`);
+  };
+  const verifyFixed = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (verifying) return;
+    setVerifying(true);
+    try {
+      const res = await updateFeedback(item.id, { status: 'resolved' });
+      if (res?.code === 200) {
+        message.success('已验证修复');
+        onVerified?.(item.id);
+      } else {
+        message.error(res?.msg || '验证失败');
+      }
+    } catch (err: any) {
+      message.error(err?.message || '验证失败');
+    } finally {
+      setVerifying(false);
+    }
+  };
   return (
     <List.Item
       style={{ cursor: 'pointer' }}
-      onClick={() => {
-        history.push(`/admin/feedback?id=${encodeURIComponent(item.id)}`);
-      }}
+      onClick={openDetail}
+      actions={
+        item.status === 'fixed'
+          ? [
+              <Button
+                key="verify"
+                type="link"
+                size="small"
+                loading={verifying}
+                onClick={verifyFixed}
+              >
+                验证已修复
+              </Button>,
+            ]
+          : undefined
+      }
     >
       <Space align="start">
         {thumb ? (
@@ -92,7 +133,7 @@ const MineRow: React.FC<{ item: FeedbackItem }> = ({ item }) => {
         <Tag color={st.color} title={st.tip}>
           {st.text}
         </Tag>
-        <Text ellipsis style={{ maxWidth: thumb ? 220 : 280 }}>
+        <Text ellipsis style={{ maxWidth: thumb ? 180 : 240 }}>
           {item.content}
         </Text>
         <Text type="secondary" style={{ fontSize: 12 }}>
@@ -103,7 +144,26 @@ const MineRow: React.FC<{ item: FeedbackItem }> = ({ item }) => {
   );
 };
 
-const FeedbackModal: React.FC<Props> = ({ open, onClose, contextHint }) => {
+function sortMineFeedback(items: FeedbackItem[]): FeedbackItem[] {
+  const rank = (s?: string) => {
+    if (s === 'fixed') return 0;
+    if (s === 'pending') return 1;
+    if (s === 'resolving') return 2;
+    return 3;
+  };
+  return [...items].sort((a, b) => {
+    const d = rank(a.status) - rank(b.status);
+    if (d !== 0) return d;
+    return (b.created_at || '').localeCompare(a.created_at || '');
+  });
+}
+
+const FeedbackModal: React.FC<Props> = ({
+  open,
+  onClose,
+  contextHint,
+  onTodoChange,
+}) => {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
   const [images, setImages] = useState<Shot[]>([]);
@@ -121,7 +181,7 @@ const FeedbackModal: React.FC<Props> = ({ open, onClose, contextHint }) => {
     try {
       const res = await listFeedback({ mine: 1 });
       if (res?.code === 200 && Array.isArray(res.data)) {
-        setMine(res.data.slice(0, 3));
+        setMine(sortMineFeedback(res.data).slice(0, 5));
       }
     } catch {
       /* ignore */
@@ -522,7 +582,20 @@ const FeedbackModal: React.FC<Props> = ({ open, onClose, contextHint }) => {
             <List
               size="small"
               dataSource={mine}
-              renderItem={(item) => <MineRow key={item.id} item={item} />}
+              renderItem={(item) => (
+                <MineRow
+                  key={item.id}
+                  item={item}
+                  onVerified={(id) => {
+                    setMine((prev) =>
+                      prev.map((x) =>
+                        x.id === id ? { ...x, status: 'resolved' } : x,
+                      ),
+                    );
+                    onTodoChange?.();
+                  }}
+                />
+              )}
             />
           )}
         </div>

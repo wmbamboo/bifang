@@ -212,6 +212,36 @@ export async function fetchAssetBytes(params: {
   return blob.arrayBuffer();
 }
 
+export type PreviewPageItem = {
+  page: number;
+  asset_id?: string;
+  has_image?: boolean;
+  snippet?: string;
+  page_type?: string;
+  image_kind?: string;
+};
+
+/** 文档预览页枚举（页图 + extracts 文本） */
+export async function fetchPreviewPages(params: {
+  knowledge_base_name: string;
+  file_name: string;
+}) {
+  return request<
+    KBResponse<{
+      knowledge_base_name: string;
+      file_name: string;
+      stem: string;
+      pages: PreviewPageItem[];
+    }> & { success?: boolean }
+  >(`/knowledge_base/preview_pages`, {
+    method: 'GET',
+    params: {
+      knowledge_base_name: params.knowledge_base_name,
+      file_name: params.file_name,
+    },
+  });
+}
+
 /** KB 语料画像（assets/profile.json 或内置回退） */
 export async function fetchCorpusProfile(knowledge_base_name: string) {
   return request<KBResponse<Record<string, unknown>>>(

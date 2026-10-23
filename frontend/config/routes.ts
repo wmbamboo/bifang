@@ -219,6 +219,13 @@ export default [
         // 登录用户可读自己的反馈与处理结果；改状态/指派仍由页内 isAdmin 限制
       },
       {
+        path: '/admin/feedback-dev',
+        name: 'feedback-dev',
+        icon: 'CodeOutlined',
+        component: './FeedbackDev',
+        access: 'canFeedbackDev',
+      },
+      {
         path: '/admin/audit',
         name: 'audit-logs',
         icon: 'ProfileOutlined',

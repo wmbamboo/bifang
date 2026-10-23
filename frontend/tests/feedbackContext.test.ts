@@ -85,7 +85,7 @@ describe('clampModalPos', () => {
 });
 
 describe('feedbackStatusLabel', () => {
-  test('five statuses have pairwise-distinct colors; fixed is 待确认', () => {
+  test('five statuses have pairwise-distinct colors; fixed is 待验证', () => {
     const statuses = [
       'pending',
       'resolving',
@@ -95,7 +95,7 @@ describe('feedbackStatusLabel', () => {
     ] as const;
     const colors = statuses.map((s) => feedbackStatusLabel(s).color);
     expect(new Set(colors).size).toBe(5);
-    expect(feedbackStatusLabel('fixed').text).toBe('待确认');
+    expect(feedbackStatusLabel('fixed').text).toBe('待验证');
   });
 
   test('empty / undefined does not throw', () => {

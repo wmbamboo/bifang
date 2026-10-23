@@ -23,6 +23,19 @@ def derive_access(roles: Iterable[str]) -> str:
     return "admin" if "admin" in set(roles) else "user"
 
 
+def _role_set(user_or_roles) -> set[str]:
+    if isinstance(user_or_roles, dict):
+        roles = user_or_roles.get("roles")
+        if roles:
+            return set(roles)
+        access = user_or_roles.get("access") or ""
+        return {access} if access else set()
+    if isinstance(user_or_roles, (list, tuple, set)):
+        return set(user_or_roles)
+    s = str(user_or_roles or "")
+    return {s} if s else set()
+
+
 def is_admin(user_or_roles) -> bool:
     if isinstance(user_or_roles, dict):
         roles = user_or_roles.get("roles")
@@ -32,6 +45,30 @@ def is_admin(user_or_roles) -> bool:
     if isinstance(user_or_roles, (list, tuple, set)):
         return "admin" in set(user_or_roles)
     return str(user_or_roles or "") == "admin"
+
+
+def is_feedback_receiver(user_or_roles) -> bool:
+    """admin 或反馈接收员：可打包派发 Cursor。"""
+    return is_admin(user_or_roles) or "feedback_receiver" in _role_set(user_or_roles)
+
+
+def is_feedback_verifier(user_or_roles) -> bool:
+    """admin 或反馈验证员：可代验证已修复。"""
+    return is_admin(user_or_roles) or "feedback_verifier" in _role_set(user_or_roles)
+
+
+def can_view_all_feedback(user_or_roles) -> bool:
+    """可看全量反馈列表/详情（admin / 接收员 / 验证员 / 程序猿）。"""
+    roles = _role_set(user_or_roles)
+    return is_admin(user_or_roles) or bool(
+        roles
+        & {"feedback_receiver", "feedback_verifier", "coder"}
+    )
+
+
+def is_feedback_coder(user_or_roles) -> bool:
+    """程序猿：仅该角色可见反馈开发管理（不含 admin 隐式授权）。"""
+    return "coder" in _role_set(user_or_roles)
 
 
 def load_user_roles(conn: sqlite3.Connection, username: str) -> list[str]:

@@ -15,6 +15,9 @@ const Profile = () => {
     { label: '管理员', value: 'admin' },
     { label: '用户', value: 'user' },
     { label: '知识库管理员', value: 'kb_manager' },
+    { label: '反馈接收员', value: 'feedback_receiver' },
+    { label: '反馈验证员', value: 'feedback_verifier' },
+    { label: '程序猿', value: 'coder' },
   ];
 
   const fetchLoginUser = async () => {
@@ -62,10 +65,15 @@ const Profile = () => {
         const { password: _omit, ...rest } = values as API.UserType & {
           password?: string;
         };
-        await updateUser(rest as API.UserType);
-        setUser(rest as API.UserType);
+        const payload = {
+          ...rest,
+          userid: rest.userid || user?.userid,
+          username: rest.username || user?.username,
+        } as API.UserType;
+        await updateUser(payload);
+        setUser(payload);
         setIsEditing(false);
-        localStorage.setItem('userInfo', JSON.stringify(rest));
+        localStorage.setItem('userInfo', JSON.stringify(payload));
         message.success('个人信息更新成功');
       })
       .catch((error) => {
